@@ -1,0 +1,3 @@
+SUBDIRS = fs
+
+EXTRA_DIST = $(KERNEL_H)
