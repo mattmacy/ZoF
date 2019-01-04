@@ -33,6 +33,7 @@ from optparse import OptionParser
 from pwd import getpwnam
 from pwd import getpwuid
 from select import select
+from subprocess import DEVNULL
 from subprocess import PIPE
 from subprocess import Popen
 from threading import Timer
@@ -288,6 +289,10 @@ class Cmd(object):
             fail('\nRun terminated at user request.')
         finally:
             t.cancel()
+            # Clear any leftover injected badness, just in case.
+            with Popen('zinject -c all'.split(),
+                       stdout=DEVNULL, stderr=DEVNULL) as p:
+                p.wait(5)
 
         if self.reran is not False:
             self.result.done(proc, self.killed, self.reran)
