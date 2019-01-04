@@ -65,13 +65,7 @@ param_set_deadman_ziotime(const char *val, zfs_kernel_param_t *kp)
 	if (error < 0)
 		return (SET_ERROR(error));
 
-	if (spa_mode_global != SPA_MODE_UNINIT) {
-		mutex_enter(&spa_namespace_lock);
-		while ((spa = spa_next(spa)) != NULL)
-			spa->spa_deadman_ziotime =
-			    MSEC2NSEC(zfs_deadman_ziotime_ms);
-		mutex_exit(&spa_namespace_lock);
-	}
+	spa_set_deadman_ziotime(MSEC2NSEC(zfs_deadman_ziotime_ms));
 
 	return (0);
 }
@@ -86,13 +80,7 @@ param_set_deadman_synctime(const char *val, zfs_kernel_param_t *kp)
 	if (error < 0)
 		return (SET_ERROR(error));
 
-	if (spa_mode_global != SPA_MODE_UNINIT) {
-		mutex_enter(&spa_namespace_lock);
-		while ((spa = spa_next(spa)) != NULL)
-			spa->spa_deadman_synctime =
-			    MSEC2NSEC(zfs_deadman_synctime_ms);
-		mutex_exit(&spa_namespace_lock);
-	}
+	spa_set_deadman_synctime(MSEC2NSEC(zfs_deadman_synctime_ms));
 
 	return (0);
 }

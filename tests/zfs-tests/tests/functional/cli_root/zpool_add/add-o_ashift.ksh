@@ -25,7 +25,7 @@
 #
 
 . $STF_SUITE/include/libtest.shlib
-. $STF_SUITE/tests/functional/cli_root/zpool_create/zpool_create.shlib
+. $STF_SUITE/tests/functional/cli_root/zpool_add/zpool_add.shlib
 
 #
 # DESCRIPTION:
@@ -43,23 +43,23 @@ verify_runnable "global"
 function cleanup
 {
 	poolexists $TESTPOOL && destroy_pool $TESTPOOL
-	log_must rm -f $disk1 $disk2
+	rm -f $filedisk0 $filedisk1
 }
 
 log_assert "zpool add -o ashift=<n>' works with different ashift values"
 log_onexit cleanup
 
-disk1=$TEST_BASE_DIR/$FILEDISK0
-disk2=$TEST_BASE_DIR/$FILEDISK1
-log_must mkfile $SIZE $disk1
-log_must mkfile $SIZE $disk2
+disk1=$TEST_BASE_DIR/filedisk0
+disk2=$TEST_BASE_DIR/filedisk1
+log_must mkfile $SIZE $filedisk0
+log_must mkfile $SIZE $filedisk1
 
 typeset ashifts=("9" "10" "11" "12" "13" "14" "15" "16")
 for ashift in ${ashifts[@]}
 do
-	log_must zpool create $TESTPOOL $disk1
-	log_must zpool add -o ashift=$ashift $TESTPOOL $disk2
-	verify_ashift $disk2 $ashift
+	log_must zpool create $TESTPOOL $filedisk0
+	log_must zpool add -o ashift=$ashift $TESTPOOL $filedisk1
+	verify_ashift $filedisk1 $ashift
 	if [[ $? -ne 0 ]]
 	then
 		log_fail "Device was added without setting ashift value to "\
@@ -67,19 +67,19 @@ do
 	fi
 	# clean things for the next run
 	log_must zpool destroy $TESTPOOL
-	log_must zpool labelclear $disk1
-	log_must zpool labelclear $disk2
+	log_must zpool labelclear $filedisk0
+	log_must zpool labelclear $filedisk1
 done
 
 typeset badvals=("off" "on" "1" "8" "17" "1b" "ff" "-")
 for badval in ${badvals[@]}
 do
-	log_must zpool create $TESTPOOL $disk1
-	log_mustnot zpool add $TESTPOOL -o ashift="$badval" $disk2
+	log_must zpool create $TESTPOOL $filedisk0
+	log_mustnot zpool add $TESTPOOL -o ashift="$badval" $filedisk1
 	# clean things for the next run
 	log_must zpool destroy $TESTPOOL
-	log_must zpool labelclear $disk1
-	log_mustnot zpool labelclear $disk2
+	log_must zpool labelclear $filedisk0
+	log_mustnot zpool labelclear $filedisk1
 done
 
 log_pass "zpool add -o ashift=<n>' works with different ashift values"

@@ -44,8 +44,8 @@ verify_runnable "global"
 
 function cleanup
 {
-	destroy_pool $TESTPOOL
-	log_must rm -f $disk
+	poolexists $TESTPOOL && destroy_pool $TESTPOOL
+	rm -f $filedisk0
 }
 
 #
@@ -90,8 +90,7 @@ function verify_device_uberblocks # <device> <count>
 log_assert "zpool create -o ashift=<n>' works with different ashift values"
 log_onexit cleanup
 
-disk=$TEST_BASE_DIR/$FILEDISK0
-log_must mkfile $SIZE $disk
+filedisk0=$(create_blockfile $SIZE)
 
 typeset ashifts=("9" "10" "11" "12" "13" "14" "15" "16")
 # since Illumos 4958 the largest uberblock is 8K so we have at least of 16/label
@@ -100,31 +99,31 @@ typeset -i i=0;
 while [ $i -lt "${#ashifts[@]}" ]
 do
 	typeset ashift=${ashifts[$i]}
-	log_must zpool create -o ashift=$ashift $TESTPOOL $disk
+	log_must zpool create -o ashift=$ashift $TESTPOOL $filedisk0
 	typeset pprop=$(get_pool_prop ashift $TESTPOOL)
-	verify_ashift $disk $ashift
+	verify_ashift $filedisk0 $ashift
 	if [[ $? -ne 0 || "$pprop" != "$ashift" ]]
 	then
 		log_fail "Pool was created without setting ashift value to "\
 		    "$ashift (current = $pprop)"
 	fi
-	write_device_uberblocks $disk $TESTPOOL
-	verify_device_uberblocks $disk ${ubcount[$i]}
+	write_device_uberblocks $filedisk0 $TESTPOOL
+	verify_device_uberblocks $filedisk0 ${ubcount[$i]}
 	if [[ $? -ne 0 ]]
 	then
 		log_fail "Pool was created with unexpected number of uberblocks"
 	fi
 	# clean things for the next run
 	log_must zpool destroy $TESTPOOL
-	log_must zpool labelclear $disk
-	log_must eval "verify_device_uberblocks $disk 0"
+	log_must zpool labelclear $filedisk0
+	log_must eval "verify_device_uberblocks $filedisk0 0"
 	((i = i + 1))
 done
 
 typeset badvals=("off" "on" "1" "8" "17" "1b" "ff" "-")
 for badval in ${badvals[@]}
 do
-	log_mustnot zpool create -o ashift="$badval" $TESTPOOL $disk
+	log_mustnot zpool create -o ashift="$badval" $TESTPOOL $filedisk0
 done
 
 log_pass "zpool create -o ashift=<n>' works with different ashift values"
