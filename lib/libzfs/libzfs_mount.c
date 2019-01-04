@@ -123,98 +123,6 @@ zfs_share_proto_t share_all_proto[] = {
 };
 
 
-
-static boolean_t
-dir_is_empty_stat(const char *dirname)
-{
-	struct stat st;
-
-	/*
-	 * We only want to return false if the given path is a non empty
-	 * directory, all other errors are handled elsewhere.
-	 */
-	if (stat(dirname, &st) < 0 || !S_ISDIR(st.st_mode)) {
-		return (B_TRUE);
-	}
-
-	/*
-	 * An empty directory will still have two entries in it, one
-	 * entry for each of "." and "..".
-	 */
-	if (st.st_size > 2) {
-		return (B_FALSE);
-	}
-
-	return (B_TRUE);
-}
-
-static boolean_t
-dir_is_empty_readdir(const char *dirname)
-{
-	DIR *dirp;
-	struct dirent64 *dp;
-	int dirfd;
-
-	if ((dirfd = openat(AT_FDCWD, dirname,
-	    O_RDONLY | O_NDELAY | O_LARGEFILE | O_CLOEXEC, 0)) < 0) {
-		return (B_TRUE);
-	}
-
-	if ((dirp = fdopendir(dirfd)) == NULL) {
-		(void) close(dirfd);
-		return (B_TRUE);
-	}
-
-	while ((dp = readdir64(dirp)) != NULL) {
-
-		if (strcmp(dp->d_name, ".") == 0 ||
-		    strcmp(dp->d_name, "..") == 0)
-			continue;
-
-		(void) closedir(dirp);
-		return (B_FALSE);
-	}
-
-	(void) closedir(dirp);
-	return (B_TRUE);
-}
-
-/*
- * Returns true if the specified directory is empty.  If we can't open the
- * directory at all, return true so that the mount can fail with a more
- * informative error message.
- */
-static boolean_t
-dir_is_empty(const char *dirname)
-{
-	struct statfs64 st;
-
-	/*
-	 * If the statvfs call fails or the filesystem is not a ZFS
-	 * filesystem, fall back to the slow path which uses readdir.
-	 */
-	if ((statfs64(dirname, &st) != 0) ||
-	    (st.f_type != ZFS_SUPER_MAGIC)) {
-		return (dir_is_empty_readdir(dirname));
-	}
-
-	/*
-	 * At this point, we know the provided path is on a ZFS
-	 * filesystem, so we can use stat instead of readdir to
-	 * determine if the directory is empty or not. We try to avoid
-	 * using readdir because that requires opening "dirname"; this
-	 * open file descriptor can potentially end up in a child
-	 * process if there's a concurrent fork, thus preventing the
-	 * zfs_mount() from otherwise succeeding (the open file
-	 * descriptor inherited by the child process will cause the
-	 * parent's mount to fail with EBUSY). The performance
-	 * implications of replacing the open, read, and close with a
-	 * single stat is nice; but is not the main motivation for the
-	 * added complexity.
-	 */
-	return (dir_is_empty_stat(dirname));
-}
-
 /*
  * Checks to see if the mount is active.  If the filesystem is mounted, we fill
  * in 'where' with the current mountpoint, and return 1.  Otherwise, we return
@@ -476,6 +384,8 @@ zfs_mount_at(zfs_handle_t *zhp, const char *options, int flags,
 	/*
 	 * Overlay mounts are disabled by default but may be enabled
 	 * via the 'overlay' property or the 'zfs mount -O' option.
+	 * This only applies to Linux.  Other platforms always allow overlay
+	 * mounts, so this flag is not required.
 	 */
 	if (!(flags & MS_OVERLAY)) {
 		if (zfs_prop_get(zhp, ZFS_PROP_OVERLAY, overlay,
@@ -487,12 +397,14 @@ zfs_mount_at(zfs_handle_t *zhp, const char *options, int flags,
 	}
 
 	/*
-	 * Determine if the mountpoint is empty.  If so, refuse to perform the
+	 * Determine if the mount would overlay.  If so, refuse to perform the
 	 * mount.  We don't perform this check if 'remount' is
-	 * specified or if overlay option(-O) is given
+	 * specified or if overlay option(-O) is given.
+	 * The overlay check returns B_FALSE on platforms such as FreeBSD that
+	 * always allow overlay mounts.
 	 */
 	if ((flags & MS_OVERLAY) == 0 && !remount &&
-	    !dir_is_empty(mountpoint)) {
+	    zfs_mount_overlay_check(mountpoint)) {
 		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 		    "directory is not empty"));
 		return (zfs_error_fmt(hdl, EZFS_MOUNTFAILED,
