@@ -26,6 +26,10 @@
 . $STF_SUITE/include/libtest.shlib
 . $STF_SUITE/tests/functional/cli_root/zpool_initialize/zpool_initialize.kshlib
 
+if is_freebsd; then
+	log_unsupported "Known issue with split on FreeBSD"
+fi
+
 #
 # DESCRIPTION:
 # Initializing state is preserved across zpool split.

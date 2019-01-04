@@ -153,7 +153,6 @@ known = {
     'cli_user/misc/zfs_unshare_001_neg': ['SKIP', na_reason],
     'privilege/setup': ['SKIP', na_reason],
     'refreserv/refreserv_004_pos': ['FAIL', known_reason],
-    'removal/removal_with_zdb': ['SKIP', known_reason],
     'rootpool/setup': ['SKIP', na_reason],
     'rsend/rsend_008_pos': ['SKIP', '6066'],
     'vdev_zaps/vdev_zaps_007_pos': ['FAIL', known_reason],
@@ -201,10 +200,13 @@ maybe = {
     'history/history_010_pos': ['SKIP', exec_reason],
     'io/mmap': ['SKIP', fio_reason],
     'largest_pool/largest_pool_001_pos': ['FAIL', known_reason],
+    'limits/filesystem_limits': ['FAIL', '8226'],
+    'limits/snapshot_limits': ['FAIL', '8226'],
     'pyzfs/pyzfs_unittest': ['SKIP', python_deps_reason],
     'no_space/enospc_002_pos': ['FAIL', enospc_reason],
     'projectquota/setup': ['SKIP', exec_reason],
     'redundancy/redundancy_004_neg': ['FAIL', '7290'],
+    'removal/removal_with_zdb': ['SKIP', known_reason],
     'reservation/reservation_008_pos': ['FAIL', '7741'],
     'reservation/reservation_018_pos': ['FAIL', '5642'],
     'rsend/rsend_019_pos': ['FAIL', '6086'],
@@ -295,7 +297,7 @@ if __name__ == "__main__":
 
     print("\nTests with results other than PASS that are expected:")
     for test in sorted(expected):
-        issue_url = 'https://github.com/zfsonlinux/zfs/issues/'
+        issue_url = 'https://github.com/openzfs/zfs/issues/'
 
         # Include the reason why the result is expected, given the following:
         # 1. Suppress test results which set the "N/A on Linux" reason.
