@@ -879,7 +879,9 @@ function zero_partitions #<whole_disk_name>
 	typeset diskname=$1
 	typeset i
 
-	if is_linux; then
+	if is_freebsd; then
+		gpart destroy -F $diskname
+	elif is_linux; then
 		DSK=$DEV_DSKDIR/$diskname
 		DSK=$(echo $DSK | sed -e "s|//|/|g")
 		log_must parted $DSK -s -- mklabel gpt
@@ -912,14 +914,13 @@ function set_partition
 	typeset -i slicenum=$1
 	typeset start=$2
 	typeset size=$3
-	typeset disk=$4
+	typeset disk=$DEV_RDSKDIR/${4#$DEV_RDSKDIR/}
 
 	case "$(uname)" in
 	Linux)
 		if [[ -z $size || -z $disk ]]; then
 			log_fail "The size or disk name is unspecified."
 		fi
-		[[ -n $DEV_DSKDIR ]] && disk=$DEV_DSKDIR/$disk
 		typeset size_mb=${size%%[mMgG]}
 
 		size_mb=${size_mb%%[mMgG][bB]}
@@ -967,7 +968,6 @@ function set_partition
 		if [[ -z $size || -z $disk ]]; then
 			log_fail "The size or disk name is unspecified."
 		fi
-		[[ -n $DEV_DSKDIR ]] && disk=$DEV_DSKDIR/$disk
 
 		if [[ $slicenum -eq 0 ]] || ! gpart show $disk >/dev/null 2>&1; then
 			gpart destroy -F $disk >/dev/null 2>&1

@@ -44,30 +44,30 @@ verify_runnable "global"
 function cleanup
 {
 	poolexists $TESTPOOL1 && destroy_pool $TESTPOOL1
-	log_must rm -f $disk1 $disk2
+	rm -f $filedisk1 $filedisk2
 }
 
 log_assert "'zpool replace' uses the ashift pool property value as default."
 log_onexit cleanup
 
-disk1=$TEST_BASE_DIR/$FILEDISK0
-disk2=$TEST_BASE_DIR/$FILEDISK1
-log_must truncate -s $SIZE $disk1
-log_must truncate -s $SIZE $disk2
+filedisk0=$TEST_BASE_DIR/filedisk0
+filedisk1=$TEST_BASE_DIR/filedisk1
+log_must truncate -s $SIZE $filedisk0
+log_must truncate -s $SIZE $filedisk1
 
 typeset ashifts=("9" "10" "11" "12" "13" "14" "15" "16")
 for ashift in ${ashifts[@]}
 do
 	for pprop in ${ashifts[@]}
 	do
-		log_must zpool create -o ashift=$ashift $TESTPOOL1 $disk1
+		log_must zpool create -o ashift=$ashift $TESTPOOL1 $filedisk0
 		log_must zpool set ashift=$pprop $TESTPOOL1
 		# ashift_of(replacing_disk) <= ashift_of(existing_vdev)
 		if [[ $pprop -le $ashift ]]
 		then
-			log_must zpool replace $TESTPOOL1 $disk1 $disk2
+			log_must zpool replace $TESTPOOL1 $filedisk0 $filedisk1
 			wait_replacing $TESTPOOL1
-			verify_ashift $disk2 $ashift
+			verify_ashift $filedisk1 $ashift
 			if [[ $? -ne 0 ]]
 			then
 				log_fail "Device was replaced without " \
@@ -75,12 +75,13 @@ do
 			fi
 		else
 			# cannot replace if pool prop ashift > vdev ashift
-			log_mustnot zpool replace $TESTPOOL1 $disk1 $disk2
+			log_mustnot zpool replace $TESTPOOL1 \
+			    $filedisk0 $filedisk1
 			# verify we can override the pool prop value manually
 			log_must zpool replace -o ashift=$ashift $TESTPOOL1 \
-			    $disk1 $disk2
+			    $filedisk0 $filedisk1
 			wait_replacing $TESTPOOL1
-			verify_ashift $disk2 $ashift
+			verify_ashift $filedisk1 $ashift
 			if [[ $? -ne 0 ]]
 			then
 				log_fail "Device was replaced without " \
@@ -89,8 +90,8 @@ do
 		fi
 		# clean things for the next run
 		log_must zpool destroy $TESTPOOL1
-		log_must zpool labelclear $disk1
-		log_must zpool labelclear $disk2
+		log_must zpool labelclear $filedisk0
+		log_must zpool labelclear $filedisk1
 	done
 done
 
