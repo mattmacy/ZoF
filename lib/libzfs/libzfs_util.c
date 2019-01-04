@@ -881,7 +881,7 @@ libzfs_init(void)
 		return (NULL);
 	}
 
-	if ((hdl->libzfs_fd = open(ZFS_DEV, O_RDWR)) < 0) {
+	if ((hdl->libzfs_fd = open(ZFS_DEV, O_RDWR|O_EXCL)) < 0) {
 		free(hdl);
 		return (NULL);
 	}
@@ -1411,7 +1411,12 @@ zfs_nicestrtonum(libzfs_handle_t *hdl, const char *value, uint64_t *num)
 
 		fval *= pow(2, shift);
 
-		if (fval > UINT64_MAX) {
+		/*
+		 * UINT64_MAX is not exactly representable as a double.
+		 * The closest representation is UINT64_MAX + 1, so we
+		 * use a >= comparison instead of > for the bounds check.
+		 */
+		if (fval >= (double)UINT64_MAX) {
 			if (hdl)
 				zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 				    "numeric value is too large"));
