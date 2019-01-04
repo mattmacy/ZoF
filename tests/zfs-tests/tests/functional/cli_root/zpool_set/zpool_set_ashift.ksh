@@ -42,7 +42,7 @@ verify_runnable "global"
 function cleanup
 {
 	destroy_pool $TESTPOOL1
-	rm -f $disk
+	rm -f $filedisk0
 }
 
 typeset goodvals=("0" "9" "10" "11" "12" "13" "14" "15" "16")
@@ -52,9 +52,9 @@ log_onexit cleanup
 
 log_assert "zpool set can modify 'ashift' property"
 
-disk=$TEST_BASE_DIR/$FILEDISK0
-log_must mkfile $SIZE $disk
-log_must zpool create $TESTPOOL1 $disk
+filedisk0=$TEST_BASE_DIR/filedisk0
+log_must mkfile $SIZE $filedisk0
+log_must zpool create $TESTPOOL1 $filedisk0
 
 for ashift in ${goodvals[@]}
 do

@@ -26,7 +26,7 @@
 # Use is subject to license terms.
 #
 
-#
+. $STF_SUITE/include/libtest.shlib
 . $STF_SUITE/include/properties.shlib
 . $STF_SUITE/tests/functional/rsend/rsend.kshlib
 
