@@ -345,20 +345,19 @@ function set_zfs_max_missing_tvds
 	set_tunable32 MAX_MISSING_TVDS "$1"
 }
 
-#
-# Use mdb to find the last txg that was synced in an active pool.
-#
-function get_last_txg_synced
+function get_last_txg_synced_freebsd
 {
 	typeset pool=$1
 
-	if is_linux; then
-		txg=$(tail "/proc/spl/kstat/zfs/$pool/txgs" |
-		    awk '$3=="C" {print $1}' | tail -1)
-		[[ "$txg" ]] || txg=0
-		echo $txg
-		return 0
-	fi
+	zdb -u $pool | awk '$1 == "txg" { print $3 }' | sort -n | tail -1
+}
+
+#
+# Use mdb to find the last txg that was synced in an active pool.
+#
+function get_last_txg_synced_illumos
+{
+	typeset pool=$1
 
 	typeset spas
 	spas=$(mdb -k -e "::spa")
@@ -383,5 +382,25 @@ function get_last_txg_synced
 	[[ $? -ne 0 ]] && return 1
 
 	echo $txg
-	return 0
+}
+
+function get_last_txg_synced_linux
+{
+	typeset pool=$1
+
+	txg=$(tail "/proc/spl/kstat/zfs/$pool/txgs" |
+	    awk '$3=="C" {print $1}' | tail -1)
+	[[ "$txg" ]] || txg=0
+	echo $txg
+}
+
+function get_last_txg_synced
+{
+	typeset pool=$1
+
+	case $(uname) in
+	FreeBSD) get_last_txg_synced_freebsd $pool ;;
+	Linux)   get_last_txg_synced_linux   $pool ;;
+	*)       get_last_txg_synced_illumos $pool ;;
+	esac
 }

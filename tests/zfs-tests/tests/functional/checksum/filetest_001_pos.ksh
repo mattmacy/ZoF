@@ -54,9 +54,7 @@ verify_runnable "both"
 
 function cleanup
 {
-	echo cleanup
-	[[ -e $TESTDIR ]] && \
-		log_must rm -rf $TESTDIR/* > /dev/null 2>&1
+	rm -fr $TESTDIR/*
 }
 
 log_assert "Create and read back files with using different checksum algorithms"
@@ -82,7 +80,7 @@ while [[ $i -lt ${#CHECKSUM_TYPES[*]} ]]; do
 done
 
 log_must zpool export $TESTPOOL
-log_must zpool import $TESTPOOL
+log_must zpool import -d $TEST_BASE_DIR $TESTPOOL
 log_must zpool scrub $TESTPOOL
 log_must wait_scrubbed $TESTPOOL
 
