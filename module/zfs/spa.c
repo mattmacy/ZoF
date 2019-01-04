@@ -7554,6 +7554,7 @@ spa_vdev_split_mirror(spa_t *spa, char *newname, nvlist_t *config,
 	spa_history_log_internal(newspa, "split", NULL,
 	    "from pool %s", spa_name(spa));
 
+	newspa->spa_config_source = SPA_CONFIG_SRC_NONE;
 	kmem_free(vml, children * sizeof (vdev_t *));
 
 	/* if we're not going to mount the filesystems in userland, export */
