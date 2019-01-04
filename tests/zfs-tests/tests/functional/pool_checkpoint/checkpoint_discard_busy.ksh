@@ -15,6 +15,7 @@
 # Copyright (c) 2017, 2018 by Delphix. All rights reserved.
 #
 
+. $STF_SUITE/include/libtest.shlib
 . $STF_SUITE/tests/functional/pool_checkpoint/pool_checkpoint.kshlib
 
 #

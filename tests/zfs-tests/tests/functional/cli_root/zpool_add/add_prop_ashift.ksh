@@ -44,23 +44,23 @@ verify_runnable "global"
 function cleanup
 {
 	poolexists $TESTPOOL && destroy_pool $TESTPOOL
-	log_must rm -f $disk1 $disk2
+	log_must rm -f $filedisk0 $filedisk1
 }
 
 log_assert "'zpool add' uses the ashift pool property value as default."
 log_onexit cleanup
 
-disk1=$TEST_BASE_DIR/$FILEDISK0
-disk2=$TEST_BASE_DIR/$FILEDISK1
-log_must mkfile $SIZE $disk1
-log_must mkfile $SIZE $disk2
+filedisk0=$TEST_BASE_DIR/filedisk0
+filedisk1=$TEST_BASE_DIR/filedisk1
+log_must mkfile $SIZE $filedisk0
+log_must mkfile $SIZE $filedisk1
 
 typeset ashifts=("9" "10" "11" "12" "13" "14" "15" "16")
 for ashift in ${ashifts[@]}
 do
-	log_must zpool create -o ashift=$ashift $TESTPOOL $disk1
-	log_must zpool add $TESTPOOL $disk2
-	verify_ashift $disk2 $ashift
+	log_must zpool create -o ashift=$ashift $TESTPOOL $filedisk0
+	log_must zpool add $TESTPOOL $filedisk1
+	verify_ashift $filedisk1 $ashift
 	if [[ $? -ne 0 ]]
 	then
 		log_fail "Device was added without setting ashift value to "\
@@ -68,17 +68,17 @@ do
 	fi
 	# clean things for the next run
 	log_must zpool destroy $TESTPOOL
-	log_must zpool labelclear $disk1
-	log_must zpool labelclear $disk2
+	log_must zpool labelclear $filedisk0
+	log_must zpool labelclear $filedisk1
 done
 
 for ashift in ${ashifts[@]}
 do
 	for cmdval in ${ashifts[@]}
 	do
-		log_must zpool create -o ashift=$ashift $TESTPOOL $disk1
-		log_must zpool add -o ashift=$cmdval $TESTPOOL $disk2
-		verify_ashift $disk2 $cmdval
+		log_must zpool create -o ashift=$ashift $TESTPOOL $filedisk0
+		log_must zpool add -o ashift=$cmdval $TESTPOOL $filedisk1
+		verify_ashift $filedisk1 $cmdval
 		if [[ $? -ne 0 ]]
 		then
 			log_fail "Device was added without setting ashift " \
@@ -86,8 +86,8 @@ do
 		fi
 		# clean things for the next run
 		log_must zpool destroy $TESTPOOL
-		log_must zpool labelclear $disk1
-		log_must zpool labelclear $disk2
+		log_must zpool labelclear $filedisk0
+		log_must zpool labelclear $filedisk1
 	done
 done
 

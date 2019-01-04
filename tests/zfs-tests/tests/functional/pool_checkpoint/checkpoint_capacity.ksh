@@ -15,6 +15,7 @@
 # Copyright (c) 2017 by Delphix. All rights reserved.
 #
 
+. $STF_SUITE/include/libtest.shlib
 . $STF_SUITE/tests/functional/pool_checkpoint/pool_checkpoint.kshlib
 
 #
@@ -46,7 +47,7 @@
 function test_cleanup
 {
 	poolexists $NESTEDPOOL && destroy_pool $NESTEDPOOL
-	log_must set_tunable32 SPA_ASIZE_INFLATION 24
+	set_tunable32 SPA_ASIZE_INFLATION 24
 	cleanup_test_pool
 }
 

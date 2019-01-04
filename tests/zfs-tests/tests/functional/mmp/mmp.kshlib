@@ -79,10 +79,15 @@ function mmp_set_hostid
 {
 	typeset hostid=$1
 
-	zgenhostid $1
+	if is_freebsd; then
+		echo $hostid > $HOSTID_FILE
+		/etc/rc.d/hostid start
+	else
+		zgenhostid $1
 
-	if [ $(hostid) != "$hostid" ]; then
-		return 1
+		if [ $(hostid) != "$hostid" ]; then
+			return 1
+		fi
 	fi
 
 	return 0
