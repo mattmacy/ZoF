@@ -1834,36 +1834,6 @@ zfs_version_userland(char *version, int len)
 }
 
 /*
- * Fill given version buffer with zfs kernel version read from ZFS_SYSFS_DIR
- * Returns 0 on success, and -1 on error (with errno set)
- */
-int
-zfs_version_kernel(char *version, int len)
-{
-	int _errno;
-	int fd;
-	int rlen;
-
-	if ((fd = open(ZFS_SYSFS_DIR "/version", O_RDONLY)) == -1)
-		return (-1);
-
-	if ((rlen = read(fd, version, len)) == -1) {
-		version[0] = '\0';
-		_errno = errno;
-		(void) close(fd);
-		errno = _errno;
-		return (-1);
-	}
-
-	version[rlen-1] = '\0';  /* discard '\n' */
-
-	if (close(fd) == -1)
-		return (-1);
-
-	return (0);
-}
-
-/*
  * Prints both zfs userland and kernel versions
  * Returns 0 on success, and -1 on error (with errno set)
  */
