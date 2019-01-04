@@ -80,7 +80,23 @@ function block_device_wait
 		[[ $elapsed > 60 ]] && \
 		    log_note udevadm settle time too long: $elapsed
 	elif is_freebsd; then
-		sleep 3
+		if [[ ${#@} -eq 0 ]]; then
+			sleep 3
+			return
+		fi
+		for (( i = 0; i < 5; ++i )); do
+			typeset missing=false
+			for dev in "${@}"; do
+				if ! [[ -f $dev ]]; then
+					missing=true
+					break
+				fi
+			done
+			if ! $missing; then
+				break
+			fi
+			sleep ${#@}
+		done
 	fi
 }
 

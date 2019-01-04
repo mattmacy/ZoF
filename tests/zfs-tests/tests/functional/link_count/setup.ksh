@@ -31,6 +31,10 @@
 
 . $STF_SUITE/include/libtest.shlib
 
+if is_freebsd; then
+	log_skip "Not applicable on FreeBSD"
+fi
+
 DISK=${DISKS%% *}
 
 default_setup $DISK

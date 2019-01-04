@@ -125,7 +125,7 @@ trim_reason = 'DISKS must support discard (TRIM/UNMAP)'
 # in the manor required by Linux.  Any tests which are skipped for this
 # reason will be suppressed in the final analysis output.
 #
-na_reason = "N/A on Linux"
+na_reason = "Not applicable"
 
 summary = {
     'total': float(0),
@@ -153,11 +153,17 @@ known = {
     'cli_user/misc/zfs_unshare_001_neg': ['SKIP', na_reason],
     'privilege/setup': ['SKIP', na_reason],
     'refreserv/refreserv_004_pos': ['FAIL', known_reason],
-    'removal/removal_with_zdb': ['SKIP', known_reason],
     'rootpool/setup': ['SKIP', na_reason],
     'rsend/rsend_008_pos': ['SKIP', '6066'],
     'vdev_zaps/vdev_zaps_007_pos': ['FAIL', known_reason],
 }
+
+if sys.platform.startswith('freebsd'):
+    known.update({
+        'link_count/link_count_001': ['SKIP', na_reason],
+        'removal/removal_condense_export': ['FAIL', known_reason],
+        'upgrade/upgrade_userobj_001_pos': ['FAIL', known_reason],
+    })
 
 #
 # These tests may occasionally fail or be skipped.  We want there failures
@@ -201,10 +207,13 @@ maybe = {
     'history/history_010_pos': ['SKIP', exec_reason],
     'io/mmap': ['SKIP', fio_reason],
     'largest_pool/largest_pool_001_pos': ['FAIL', known_reason],
+    'limits/filesystem_limit': ['FAIL', '8226'],
+    'limits/snapshot_limit': ['FAIL', '8226'],
     'pyzfs/pyzfs_unittest': ['SKIP', python_deps_reason],
     'no_space/enospc_002_pos': ['FAIL', enospc_reason],
     'projectquota/setup': ['SKIP', exec_reason],
     'redundancy/redundancy_004_neg': ['FAIL', '7290'],
+    'removal/removal_with_zdb': ['SKIP', known_reason],
     'reservation/reservation_008_pos': ['FAIL', '7741'],
     'reservation/reservation_018_pos': ['FAIL', '5642'],
     'rsend/rsend_019_pos': ['FAIL', '6086'],
