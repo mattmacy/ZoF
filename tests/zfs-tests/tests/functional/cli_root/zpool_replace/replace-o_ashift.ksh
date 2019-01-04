@@ -42,25 +42,24 @@ verify_runnable "global"
 function cleanup
 {
 	poolexists $TESTPOOL1 && destroy_pool $TESTPOOL1
-	log_must rm -f $disk1
-	log_must rm -f $disk2
+	rm -f $filedisk0 $filedisk1
 }
 
 log_assert "zpool replace -o ashift=<n>' works with different ashift values"
 log_onexit cleanup
 
-disk1=$TEST_BASE_DIR/$FILEDISK0
-disk2=$TEST_BASE_DIR/$FILEDISK1
-log_must truncate -s $SIZE $disk1
-log_must truncate -s $SIZE $disk2
+filedisk0=$TEST_BASE_DIR/filedisk0
+filedisk1=$TEST_BASE_DIR/filedisk1
+log_must truncate -s $SIZE $filedisk0
+log_must truncate -s $SIZE $filedisk1
 
 typeset ashifts=("9" "10" "11" "12" "13" "14" "15" "16")
 for ashift in ${ashifts[@]}
 do
 	for cmdval in ${ashifts[@]}
 	do
-		log_must zpool create -o ashift=$ashift $TESTPOOL1 $disk1
-		verify_ashift $disk1 $ashift
+		log_must zpool create -o ashift=$ashift $TESTPOOL1 $filedisk0
+		verify_ashift $filedisk0 $ashift
 		if [[ $? -ne 0 ]]
 		then
 			log_fail "Pool was created without setting ashift " \
@@ -70,33 +69,33 @@ do
 		if [[ $cmdval -le $ashift ]]
 		then
 			log_must zpool replace -o ashift=$cmdval $TESTPOOL1 \
-			    $disk1 $disk2
-			verify_ashift $disk2 $ashift
+			    $filedisk0 $filedisk1
+			verify_ashift $filedisk1 $ashift
 			if [[ $? -ne 0 ]]
 			then
 				log_fail "Device was replaced without " \
 				    "setting ashift value to $ashift"
 			fi
 			wait_replacing $TESTPOOL1
+			    $filedisk0 $filedisk1
 		else
 			log_mustnot zpool replace -o ashift=$cmdval $TESTPOOL1 \
-			    $disk1 $disk2
 		fi
 		# clean things for the next run
 		log_must zpool destroy $TESTPOOL1
-		log_must zpool labelclear $disk1
-		log_must zpool labelclear $disk2
+		log_must zpool labelclear $filedisk0
+		log_must zpool labelclear $filedisk1
 	done
 done
 
 typeset badvals=("off" "on" "1" "8" "17" "1b" "ff" "-")
 for badval in ${badvals[@]}
 do
-	log_must zpool create $TESTPOOL1 $disk1
-	log_mustnot zpool replace -o ashift=$badval $TESTPOOL1 $disk1 $disk2
+	log_must zpool create $TESTPOOL1 $filedisk0
+	log_mustnot zpool replace -o ashift=$badval $TESTPOOL1 $filedisk0 $filedisk1
 	log_must zpool destroy $TESTPOOL1
-	log_must zpool labelclear $disk1
-	log_mustnot zpool labelclear $disk2
+	log_must zpool labelclear $filedisk0
+	log_mustnot zpool labelclear $filedisk1
 done
 
 log_pass "zpool replace -o ashift=<n>' works with different ashift values"

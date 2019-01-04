@@ -239,8 +239,8 @@ create_links() {
 constrain_path() {
 	. "$STF_SUITE/include/commands.cfg"
 
-	SYSTEM_DIRS="/bin /sbin /usr/bin /usr/sbin"
-	SYSTEM_DIRS+=" /usr/local/bin /usr/local/sbin"
+	SYSTEM_DIRS="/usr/local/bin /usr/local/sbin"
+	SYSTEM_DIRS+=" /usr/bin /usr/sbin /bin /sbin"
 
 	if [ "$INTREE" = "yes" ]; then
 		# Constrained path set to ./zfs/bin/
@@ -421,7 +421,7 @@ done
 
 shift $((OPTIND-1))
 
-FILES=${FILES:-"$FILEDIR/file-vdev0 $FILEDIR/file-vdev1 $FILEDIR/file-vdev2"}
+FILES=${FILES:-"$FILEDIR/file-vdev0 $FILEDIR/file-vdev1 $FILEDIR/file-vdev2 $FILEDIR/file-vdev3"}
 LOOPBACKS=${LOOPBACKS:-""}
 
 if [ ${#SINGLETEST[@]} -ne 0 ]; then

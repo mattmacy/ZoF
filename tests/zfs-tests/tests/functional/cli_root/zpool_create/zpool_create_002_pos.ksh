@@ -53,16 +53,7 @@ function cleanup
 		destroy_pool $pool
 	done
 
-	clean_blockfile "$TESTDIR0 $TESTDIR1"
-
-	for file in $FILEDISK0 $FILEDISK1 $FILEDISK2
-	do
-		if [[ -e $TEST_BASE_DIR/$file ]]; then
-			rm -f $TEST_BASE_DIR/$file
-		fi
-	done
-
-	partition_disk $SIZE $disk 6
+	rm -f $filedisk0 $filedisk1
 }
 
 log_onexit cleanup
@@ -70,57 +61,44 @@ log_onexit cleanup
 log_assert "'zpool create -f <pool> <vspec> ...' can successfully create" \
 	"a new pool in some cases."
 
-if [[ -n $DISK ]]; then
-	disk=$DISK
-else
-	disk=$DISK0
-fi
-create_pool "$TESTPOOL" "${disk}${SLICE_PREFIX}${SLICE0}"
-log_must eval "new_fs \
-	${DEV_RDSKDIR}/${disk}${SLICE_PREFIX}${SLICE1} >/dev/null 2>&1"
-create_blockfile $FILESIZE $TESTDIR0/$FILEDISK0 ${disk}${SLICE_PREFIX}${SLICE4}
-create_blockfile $FILESIZE1 $TESTDIR1/$FILEDISK1 ${disk}${SLICE_PREFIX}${SLICE5}
-log_must truncate -s $SIZE $TEST_BASE_DIR/$FILEDISK0
-log_must truncate -s $SIZE $TEST_BASE_DIR/$FILEDISK1
-log_must truncate -s $SIZE $TEST_BASE_DIR/$FILEDISK2
+create_pool $TESTPOOL $DISK0
+log_must eval "new_fs ${DEV_RDSKDIR}/${DISK1} >/dev/null 2>&1"
+typeset filedisk0=$(create_blockfile $FILESIZE)
+typeset filedisk1=$(create_blockfile $FILESIZE)
 
 unset NOINUSE_CHECK
 log_must zpool export $TESTPOOL
 log_note "'zpool create' without '-f' will fail " \
-	"while device is belong to an exported pool."
-log_mustnot zpool create "$TESTPOOL1" "${disk}${SLICE_PREFIX}${SLICE0}"
-create_pool "$TESTPOOL1" "${disk}${SLICE_PREFIX}${SLICE0}"
+	"while device belongs to an exported pool."
+log_mustnot zpool create $TESTPOOL1 $DISK0
+create_pool $TESTPOOL1 $DISK0
 log_must poolexists $TESTPOOL1
 
 log_note "'zpool create' without '-f' will fail " \
-	"while device is using by an ufs filesystem."
-log_mustnot zpool create "$TESTPOOL2" "${disk}${SLICE_PREFIX}${SLICE1}"
-create_pool "$TESTPOOL2" "${disk}${SLICE_PREFIX}${SLICE1}"
+	"while device is in use by a ufs filesystem."
+log_mustnot zpool create $TESTPOOL2 $DISK1
+create_pool $TESTPOOL2 $DISK1
 log_must poolexists $TESTPOOL2
 
 log_note "'zpool create' mirror without '-f' will fail " \
 	"while devices have different size."
-log_mustnot zpool create "$TESTPOOL3" "mirror" $TESTDIR0/$FILEDISK0 \
-	$TESTDIR1/$FILEDISK1
-create_pool "$TESTPOOL3" "mirror" $TESTDIR0/$FILEDISK0 $TESTDIR1/$FILEDISK1
+log_mustnot zpool create $TESTPOOL3 mirror $filedisk0 $filedisk1
+create_pool $TESTPOOL3 mirror $filedisk0 $filedisk1
 log_must poolexists $TESTPOOL3
 
 log_note "'zpool create' mirror without '-f' will fail " \
 	"while devices are of different types."
-log_mustnot zpool create "$TESTPOOL4" "mirror" $TEST_BASE_DIR/$FILEDISK0 \
-	${disk}${SLICE_PREFIX}${SLICE3}
-create_pool "$TESTPOOL4" "mirror" \
-	$TEST_BASE_DIR/$FILEDISK0 ${disk}${SLICE_PREFIX}${SLICE3}
+log_mustnot zpool create $TESTPOOL4 mirror $filedisk0 $DISK2
+create_pool $TESTPOOL4 mirror $filedisk0 $DISK2
 log_must poolexists $TESTPOOL4
 
 log_note "'zpool create' without '-f' will fail " \
-	"while device is part of potentially active pool."
-create_pool "$TESTPOOL5"  "mirror" $TEST_BASE_DIR/$FILEDISK1 \
-	$TEST_BASE_DIR/$FILEDISK2
-log_must zpool offline $TESTPOOL5 $TEST_BASE_DIR/$FILEDISK2
+	"while a device is part of a potentially active pool."
+create_pool $TESTPOOL5 mirror $filedisk0 $filedisk1
+log_must zpool offline $TESTPOOL5 $filedisk1
 log_must zpool export $TESTPOOL5
-log_mustnot zpool create "$TESTPOOL6" $TEST_BASE_DIR/$FILEDISK2
-create_pool $TESTPOOL6 $TEST_BASE_DIR/$FILEDISK2
+log_mustnot zpool create $TESTPOOL6 $filedisk1
+create_pool $TESTPOOL6 $filedisk1
 log_must poolexists $TESTPOOL6
 
 log_pass "'zpool create -f <pool> <vspec> ...' success."

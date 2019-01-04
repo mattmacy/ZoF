@@ -33,4 +33,7 @@
 
 verify_runnable "global"
 
+[[ $(echo $DISKS | awk '{ print NF }') -lt 4 ]] &&
+    log_unsupported "At least 4 disks are required for testing"
+
 log_pass
