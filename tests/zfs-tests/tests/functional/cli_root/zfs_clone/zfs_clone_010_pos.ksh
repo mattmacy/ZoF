@@ -224,8 +224,8 @@ else
 fi
 log_must zfs create $fs
 log_must zfs snapshot $fs@snap
-while((i <= $(( ZFS_MAXPROPLEN/200+1 )))); do
-	log_must zfs clone $fs@snap $fs/$TESTCLONE$(python -c 'print "x" * 200').$i
+while ((i <= $(( ZFS_MAXPROPLEN/200+1 )))); do
+	log_must zfs clone $fs@snap $fs/$TESTCLONE$(python -c 'print("x" * 200)').$i
 	((i=i+1))
 	((j=j+200))
 done
