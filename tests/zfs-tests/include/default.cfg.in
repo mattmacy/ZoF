@@ -195,6 +195,7 @@ elif is_freebsd; then
 	ZVOL_RDEVDIR="/dev/zvol"
 	DEV_DSKDIR="/dev"
 	DEV_RDSKDIR="/dev"
+	DEV_MPATHDIR="/dev/multipath"
 
 	NEWFS_DEFAULT_FS="ufs"
 else
