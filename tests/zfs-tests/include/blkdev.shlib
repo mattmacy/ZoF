@@ -118,9 +118,16 @@ function is_loop_device #disk
 }
 
 #
+# Linux:
 # Check if the given device is a multipath device and if there is a sybolic
 # link to a device mapper and to a disk
 # Currently no support for dm devices alone without multipath
+#
+# FreeBSD:
+# Check if the given device is a gmultipath device.
+#
+# Others:
+# No multipath detection.
 #
 function is_mpath_device #disk
 {
@@ -136,6 +143,10 @@ function is_mpath_device #disk
 		else
 			return $?
 		fi
+	elif is_freebsd; then
+		test -b $DEV_MPATHDIR/$disk
+	else
+		false
 	fi
 }
 
