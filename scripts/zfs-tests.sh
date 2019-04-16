@@ -258,7 +258,7 @@ constrain_path() {
 	else
 		# Constrained path set to /var/tmp/constrained_path.*
 		SYSTEMDIR=${SYSTEMDIR:-/var/tmp/constrained_path.XXXX}
-		STF_PATH=$(/bin/mktemp -d "$SYSTEMDIR")
+		STF_PATH=$(mktemp -d "$SYSTEMDIR")
 		STF_PATH_REMOVE="yes"
 		STF_MISSING_BIN=""
 
@@ -494,7 +494,7 @@ if [ "$UNAME" = "FreeBSD" ] ; then
 	[ -e "/usr/local/bin/ksh93" ] || fail \
 		"Missing /usr/local/bin/ksh93 - Please install ksh93"
 	if [ ! -e "/bin/ksh" ] ; then
-		ln -s /usr/local/bin/ksh93 /bin/ksh
+		sudo ln -s /usr/local/bin/ksh93 /bin/ksh
 	fi
 else
 	[ -e "$STF_PATH/ksh" ] || fail "This test suite requires ksh."
