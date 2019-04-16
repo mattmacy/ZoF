@@ -84,7 +84,7 @@ class Output(object):
     """
     def __init__(self, stream):
         self.stream = stream
-        self._buf = ''
+        self._buf = b''
         self.lines = []
 
     def fileno(self):
@@ -109,16 +109,16 @@ class Output(object):
         buf = os.read(fd, 4096)
         if not buf:
             return None
-        if '\n' not in buf:
+        if b'\n' not in buf:
             self._buf += buf
             return []
 
         buf = self._buf + buf
-        tmp, rest = buf.rsplit('\n', 1)
+        tmp, rest = buf.rsplit(b'\n', 1)
         self._buf = rest
         now = datetime.now()
-        rows = tmp.split('\n')
-        self.lines += [(now, r) for r in rows]
+        rows = tmp.splitlines()
+        self.lines.extend((now, r.decode('utf-8', 'ignore')) for r in rows)
 
 
 class Cmd(object):
@@ -286,16 +286,13 @@ class Cmd(object):
 
         if len(self.result.stdout):
             with open(os.path.join(self.outputdir, 'stdout'), 'w') as out:
-                for _, line in self.result.stdout:
-                    os.write(out.fileno(), '%s\n' % line)
+                out.writelines('%s\n' % line for _, line in self.result.stdout)
         if len(self.result.stderr):
             with open(os.path.join(self.outputdir, 'stderr'), 'w') as err:
-                for _, line in self.result.stderr:
-                    os.write(err.fileno(), '%s\n' % line)
-        if len(self.result.stdout) and len(self.result.stderr):
+                err.writelines('%s\n' % line for _, line in self.result.stderr)
+        if len(self.result.stdout) or len(self.result.stderr):
             with open(os.path.join(self.outputdir, 'merged'), 'w') as merged:
-                for _, line in lines:
-                    os.write(merged.fileno(), '%s\n' % line)
+                merged.writelines('%s\n' % line for _, line in lines)
 
 
 class Test(Cmd):
