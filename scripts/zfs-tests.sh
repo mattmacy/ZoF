@@ -46,16 +46,18 @@ TAGS=""
 ITERATIONS=1
 ZFS_DBGMSG="$STF_SUITE/callbacks/zfs_dbgmsg.ksh"
 ZFS_DMESG="$STF_SUITE/callbacks/zfs_dmesg.ksh"
-ZFS_MMP="$STF_SUITE/callbacks/zfs_mmp.ksh"
-TESTFAIL_CALLBACKS=${TESTFAIL_CALLBACKS:-"$ZFS_DBGMSG:$ZFS_DMESG:$ZFS_MMP"}
-LOSETUP=${LOSETUP:-/sbin/losetup}
-DMSETUP=${DMSETUP:-/sbin/dmsetup}
 UNAME=$(uname -s)
 
 # Override some defaults if on FreeBSD
 if [ "$UNAME" = "FreeBSD" ] ; then
+	TESTFAIL_CALLBACKS=${TESTFAIL_CALLBACKS:-"$ZFS_DBGMSG:$ZFS_DMESG"}
 	LOSETUP=/sbin/mdconfig
 	DMSETUP=/sbin/gpart
+else
+	ZFS_MMP="$STF_SUITE/callbacks/zfs_mmp.ksh"
+	TESTFAIL_CALLBACKS=${TESTFAIL_CALLBACKS:-"$ZFS_DBGMSG:$ZFS_DMESG:$ZFS_MMP"}
+	LOSETUP=${LOSETUP:-/sbin/losetup}
+	DMSETUP=${DMSETUP:-/sbin/dmsetup}
 fi
 
 #
