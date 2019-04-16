@@ -71,9 +71,8 @@ TESTSNAP1="$DATASET@snap1"
 TESTSNAP2="$DATASET@snap2"
 FILEDIFF="$TESTDIR/zfs-diff.txt"
 if [ is_freebsd ];then
-	COMBINED=$(stat -f "%Z" /dev/null)
-	MAJOR=$(cut -d ',' -f1)
-	MINOR=$(cut -d ',' -f2)
+	MAJOR=$(stat -f %Hr /dev/null)
+	MINOR=$(stat -f %Lr /dev/null)
 else
 	MAJOR=$(stat -c %t /dev/null)
 	MINOR=$(stat -c %T /dev/null)
