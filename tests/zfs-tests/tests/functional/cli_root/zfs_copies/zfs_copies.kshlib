@@ -95,28 +95,23 @@ function do_vol_test
 	typeset mntp=$3
 
 	vol=$TESTPOOL/$TESTVOL1
-	if is_freebsd; then
-		vol_b_path=/dev/zvol/$TESTPOOL/$TESTVOL1
-		vol_r_path=/dev/zvol/$TESTPOOL/$TESTVOL1
-	else
-		vol_b_path=$ZVOL_DEVDIR/$TESTPOOL/$TESTVOL1
-		vol_r_path=$ZVOL_RDEVDIR/$TESTPOOL/$TESTVOL1
-	fi
+	vol_b_path=$ZVOL_DEVDIR/$TESTPOOL/$TESTVOL1
+	vol_r_path=$ZVOL_RDEVDIR/$TESTPOOL/$TESTVOL1
 
 	log_must zfs create -V $VOLSIZE -o copies=$copy $vol
 	log_must zfs set refreservation=none $vol
 	block_device_wait
 
 	if [[ $type == "ufs" ]]; then
-		if [ is_freebsd ];then
-			log_must echo y | /sbin/newfs $vol_r_path >/dev/null 2>&1
+		if is_freebsd;then
+			log_must newfs $vol_r_path >/dev/null 2>&1
 		else
-			log_must echo y | newfs $vol_r_path >/dev/null 2>&1
+			log_skip "ufs test not yet implemented for linux"
 		fi
 		log_must mount -F ufs -o rw $vol_b_path $mntp
 	elif [[ $type == "ext2" ]]; then
-		if [ is_freebsd ];then
-			log_must echo y | /sbin/newfs $vol_r_path >/dev/null 2>&1
+		if is_freebsd;then
+			log_skip "ext2 test not yet implemented for freebsd"
 		else
 			log_must echo y | newfs $vol_r_path >/dev/null 2>&1
 		fi
