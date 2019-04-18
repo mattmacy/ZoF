@@ -28,19 +28,6 @@
 
 . ${STF_TOOLS}/include/stf.shlib
 
-if [ "$(uname -o)" = "FreeBSD" ]; then
-
-function print
-{
-	if [ "$1" = "-u2" ] ; then
-		echo $@ | cut -d ' ' -f 2-
-	else
-		echo $@
-	fi
-}
-
-fi
-
 # Output an assertion
 #
 # $@ - assertion text
