@@ -43,7 +43,7 @@ log_assert "Verify we see '(repairing)' while scrubbing a bad vdev."
 function cleanup
 {
 	log_must zinject -c all
-	if [ is_freebsd ];then
+	if is_freebsd ; then
 		log_must set_tunable64 vfs.zfs.zfs_scan_vdev_limit $ZFS_SCAN_VDEV_LIMIT_DEFAULT
 	else
 		log_must set_tunable64 zfs_scan_vdev_limit $ZFS_SCAN_VDEV_LIMIT_DEFAULT
@@ -58,7 +58,7 @@ log_must zinject -d $DISK1 -e io -T read -f 100 $TESTPOOL
 
 # Make the scrub slow
 log_must zinject -d $DISK1 -D10:1 $TESTPOOL
-if [ is_freebsd ];then
+if is_freebsd ; then
 	log_must set_tunable64 vfs.zfs.zfs_scan_vdev_limit $ZFS_SCAN_VDEV_LIMIT_SLOW
 else
 	log_must set_tunable64 zfs_scan_vdev_limit $ZFS_SCAN_VDEV_LIMIT_SLOW
