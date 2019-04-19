@@ -281,18 +281,25 @@ class Cmd(object):
         lines = sorted(self.result.stdout + self.result.stderr,
                        key=lambda x: x[0])
 
+        # Make sure we can write the odd characters some of the tests spit out.
+        def encode(s):
+            return s.encode(encoding='utf-8', errors='namereplace')
+
         for dt, line in lines:
-            logger.debug('%s %s' % (dt.strftime("%H:%M:%S.%f ")[:11], line))
+            timestamp = dt.strftime("%H:%M:%S.%f ")[:11]
+            message = encode(line)
+            logger.debug(u'%s %s' % (timestamp, message))
+
+        def writelog(name, lines):
+            with open(os.path.join(self.outputdir, name), 'w') as f:
+                f.writelines(u'%s\n' % encode(line) for _, line in lines)
 
         if len(self.result.stdout):
-            with open(os.path.join(self.outputdir, 'stdout'), 'w') as out:
-                out.writelines('%s\n' % line for _, line in self.result.stdout)
+            writelog('stdout', self.result.stdout)
         if len(self.result.stderr):
-            with open(os.path.join(self.outputdir, 'stderr'), 'w') as err:
-                err.writelines('%s\n' % line for _, line in self.result.stderr)
+            writelog('stderr', self.result.stderr)
         if len(self.result.stdout) or len(self.result.stderr):
-            with open(os.path.join(self.outputdir, 'merged'), 'w') as merged:
-                merged.writelines('%s\n' % line for _, line in lines)
+            writelog('merged', lines)
 
 
 class Test(Cmd):
