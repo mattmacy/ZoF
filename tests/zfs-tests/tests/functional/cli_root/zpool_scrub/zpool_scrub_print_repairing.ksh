@@ -40,10 +40,6 @@ verify_runnable "global"
 
 log_assert "Verify we see '(repairing)' while scrubbing a bad vdev."
 
-if is_freebsd ; then
-	log_skip "Use of zinject delay causes the pool to hang on FreeBSD."
-fi
-
 function cleanup
 {
 	log_must zinject -c all
