@@ -72,10 +72,10 @@ write_record(struct diffarg *da)
 
 	td = curthread;
 	aiov.iov_base = (caddr_t)&da->da_ddr;
-	aiov.iov_len = sizeof((caddr_t)&da->da_ddr);
+	aiov.iov_len = sizeof(da->da_ddr);
 	auio.uio_iov = &aiov;
 	auio.uio_iovcnt = 1;
-	auio.uio_resid = sizeof((caddr_t)&da->da_ddr);
+	auio.uio_resid = sizeof(da->da_ddr);
 	auio.uio_segflg = UIO_SYSSPACE;
 	auio.uio_rw = UIO_WRITE;
 	auio.uio_offset = (off_t)-1;
