@@ -111,7 +111,11 @@ verify_object_class "$MNTPOINT/cdev" "C"
 
 # 2. | (Named pipe)
 log_must zfs snapshot "$TESTSNAP1"
-log_must mknod "$MNTPOINT/fifo" p
+if is_freebsd; then
+    log_must mkfifo "$MNTPOINT/fifo"
+else
+    log_must mknod "$MNTPOINT/fifo" p
+fi
 log_must zfs snapshot "$TESTSNAP2"
 verify_object_class "$MNTPOINT/fifo" "|"
 
