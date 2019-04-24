@@ -80,7 +80,7 @@ typeset -i i=1
 while [[ $i -lt ${#CHECKSUM_TYPES[*]} ]]; do
 	type=${CHECKSUM_TYPES[i]}
 	# edonr not supported on FreeBSD
-	if [ is_freebsd -a "$type" = "edonr" ] ; then
+	if is_freebsd && [[ "$type" == "edonr" ]] ; then
 		(( i = i + 1 ))
 		continue
 	fi
@@ -106,7 +106,7 @@ typeset -i j=1
 while [[ $j -lt ${#CHECKSUM_TYPES[*]} ]]; do
 	type=${CHECKSUM_TYPES[$j]}
 	# edonr not supported on FreeBSD
-	if [ is_freebsd -a "$type" = "edonr" ] ; then
+	if is_freebsd && [[ "$type" == "edonr" ]] ; then
 		(( j = j + 1 ))
 		continue
 	fi

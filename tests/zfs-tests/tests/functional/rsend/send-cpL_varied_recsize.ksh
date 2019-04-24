@@ -72,7 +72,7 @@ function check_recsize
 	[[ -f $file ]] || log_fail "file '$file' doesn't exist"
 
 	typeset read_recsize=$(get_prop recsize $recv_ds)
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		typeset read_file_bs=$(stat -f "%k" $file)
 	else
 		typeset read_file_bs=$(stat $file | sed -n \

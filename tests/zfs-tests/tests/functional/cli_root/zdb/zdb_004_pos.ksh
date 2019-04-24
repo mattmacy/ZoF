@@ -31,7 +31,7 @@
 # 7. Verify labels 0 and 1 have unique Uberblocks, but 2 and 3 have none
 #
 
-if [ is_freebsd ] ; then
+if is_freebsd ; then
 	# FreeBSD won't allow writing to an in-use device without this set
 	log_must /sbin/sysctl kern.geom.debugflags=16
 	DEV_RDSKDIR="/dev"
@@ -51,7 +51,7 @@ function cleanup
 verify_runnable "global"
 verify_disk_count "$DISKS" 2
 set -A DISK $DISKS
-if [ is_freebsd ] ; then
+if is_freebsd ; then
 	WHOLE_DISK=/dev/${DISK[0]}
 else
 	WHOLE_DISK=${DISK[0]}

@@ -41,7 +41,7 @@ verify_runnable "both"
 
 function cleanup
 {
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		log_must set_tunable32 vfs.zfs.zfs_scan_suspend_progress 0
 	else
 		log_must set_tunable32 zfs_scan_suspend_progress 0
@@ -73,7 +73,7 @@ function zpool_split #disk_to_be_offline/online
 	log_must sync
 
 	# temporarily prevent resilvering progress, so it will not finish too early
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		log_must set_tunable32 vfs.zfs.zfs_scan_suspend_progress 1
 	else
 		log_must set_tunable32 zfs_scan_suspend_progress 1
@@ -92,7 +92,7 @@ function zpool_split #disk_to_be_offline/online
 
 	log_mustnot zpool split $TESTPOOL $TESTPOOL2
 
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		log_must set_tunable32 vfs.zfs.zfs_scan_suspend_progress 0
 	else
 		log_must set_tunable32 zfs_scan_suspend_progress 0

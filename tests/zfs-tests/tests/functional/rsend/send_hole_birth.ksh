@@ -53,7 +53,7 @@ function cleanup
 {
 	cleanup_pool $sendpool
 	cleanup_pool $recvpool
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		set_tunable64 vfs.zfs.send_holes_without_birth_time 1
 	else
 		set_tunable64 send_holes_without_birth_time 1
@@ -76,7 +76,7 @@ function send_and_verify
 # to be re-enabled for this test case to verify correctness.  Once we're
 # comfortable that all hole_birth bugs has been resolved this behavior may
 # be re-enabled by default.
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_must set_tunable64 vfs.zfs.send_holes_without_birth_time 0
 else
 	log_must set_tunable64 send_holes_without_birth_time 0

@@ -89,7 +89,7 @@ test_pool ()
 }
 
 test_pool $TESTPOOL
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_must truncate -s 1G $vdev
 else
 	log_must truncate --size=1G $vdev

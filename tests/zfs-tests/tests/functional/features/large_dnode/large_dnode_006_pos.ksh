@@ -42,7 +42,7 @@ TEST_FS=$TESTPOOL/large_dnode
 
 verify_runnable "both"
 
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_unsupported "xattr not supported on FreeBSD"
 fi
 

@@ -51,7 +51,7 @@ log_onexit cleanup
 
 log_assert "ENOSPC is returned on pools with large physical block size"
 
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_must zpool create -o ashift=13 $TESTPOOL1 $DISK_LARGE
 else
 	log_must zpool create $TESTPOOL1 -o ashift=13 $DISK_LARGE

@@ -43,7 +43,7 @@
 #       3. Try to chattr with unprivileged user
 #
 
-if [ is_freebsd ] ; then
+if is_freebsd ; then
 	log_unsupported "User flags not enabled on FreeBSD"
 fi
 

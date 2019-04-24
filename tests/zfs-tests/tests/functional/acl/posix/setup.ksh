@@ -32,7 +32,7 @@
 . $STF_SUITE/include/libtest.shlib
 . $STF_SUITE/tests/functional/acl/acl_common.kshlib
 
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_unsupported "ACL tests not fully implemented on FreeBSD"
 else
 	log_must getfacl --version

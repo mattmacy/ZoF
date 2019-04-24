@@ -73,7 +73,7 @@ for arch in "i386" "sparc"; do
 	cat $orig_cmds_f | grep -v "^$" > $orig_cmds_f1
 
 	log_must cp $tst_dir/${arch}.migratedpool.DAT.Z $import_dir
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		log_must uncompress -f $import_dir/${arch}.migratedpool.DAT.Z
 	else
 		log_must uncompress $import_dir/${arch}.migratedpool.DAT.Z

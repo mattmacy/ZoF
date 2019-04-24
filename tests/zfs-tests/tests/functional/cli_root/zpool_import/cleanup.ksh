@@ -38,7 +38,7 @@ if ! $(is_physical_device $ZFS_DISK1) ; then
 	log_unsupported "Only partitionable physical disks can be used"
 fi
 
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_must set_tunable32 vfs.zfs.zfs_scan_suspend_progress 0
 else
 	log_must set_tunable32 zfs_scan_suspend_progress 0

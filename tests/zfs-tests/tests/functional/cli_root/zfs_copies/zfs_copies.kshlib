@@ -103,14 +103,14 @@ function do_vol_test
 	block_device_wait
 
 	if [[ $type == "ufs" ]]; then
-		if is_freebsd;then
+		if is_freebsd; then
 			log_must newfs $vol_r_path >/dev/null 2>&1
 		else
 			log_skip "ufs test not yet implemented for linux"
 		fi
 		log_must mount -F ufs -o rw $vol_b_path $mntp
 	elif [[ $type == "ext2" ]]; then
-		if is_freebsd;then
+		if is_freebsd; then
 			log_skip "ext2 test not yet implemented for freebsd"
 		else
 			log_must echo y | newfs $vol_r_path >/dev/null 2>&1

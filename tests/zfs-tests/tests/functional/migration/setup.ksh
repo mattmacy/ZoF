@@ -57,7 +57,7 @@ log_must zfs set mountpoint=$TESTDIR $TESTPOOL/$TESTFS
 rm -rf $NONZFS_TESTDIR  || log_unresolved Could not remove $NONZFS_TESTDIR
 mkdir -p $NONZFS_TESTDIR || log_unresolved Could not create $NONZFS_TESTDIR
 
-if [ is_freebsd ];then
+if is_freebsd; then
 	echo "y" | /sbin/newfs ${DEV_DSKDIR}/$NONZFS_DISK
 else
 	echo "y" | newfs -v ${DEV_DSKDIR}/$NONZFS_DISK

@@ -36,7 +36,7 @@
 #	   introduced) if we want to.
 #
 
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_unsupported "Not functional on FreeBSD"
 fi
 

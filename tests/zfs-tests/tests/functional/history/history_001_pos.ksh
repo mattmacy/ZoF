@@ -114,7 +114,7 @@ run_and_verify -p "$MPOOL" "zpool split $MPOOL ${MPOOL}_split"
 import_dir=$TEST_BASE_DIR/import_dir.$$
 log_must mkdir $import_dir
 log_must cp $STF_SUITE/tests/functional/history/zfs-pool-v4.dat.Z $import_dir
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_must uncompress -f $import_dir/zfs-pool-v4.dat.Z
 else
 	log_must uncompress $import_dir/zfs-pool-v4.dat.Z

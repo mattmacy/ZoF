@@ -26,7 +26,7 @@ default_setup_noexit "$DISKS"
 
 function cleanup
 {
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		set_tunable64 vfs.zfs.condense_min_mapping_bytes 131072
 	else
 		set_tunable64 zfs_condense_min_mapping_bytes 131072
@@ -36,7 +36,7 @@ function cleanup
 
 log_onexit cleanup
 
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_must set_tunable64 vfs.zfs.condense_min_mapping_bytes 1
 else
 	log_must set_tunable64 zfs_condense_min_mapping_bytes 1

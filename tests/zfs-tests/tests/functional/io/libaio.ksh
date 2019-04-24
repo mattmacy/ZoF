@@ -39,7 +39,7 @@
 
 verify_runnable "global"
 
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_unsupported "libaio not supported on FreeBSD"
 fi
 

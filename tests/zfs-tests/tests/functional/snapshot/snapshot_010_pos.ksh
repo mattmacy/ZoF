@@ -92,7 +92,7 @@ for snap in $snapctr $snapctrvol $snapctrclone $snapctrfs; do
 		log_fail "The snapshot $snap is not destroyed correctly."
 done
 
-for snap in $snappool $snapfs $snapvol $ctrfs@$TESTSNAP1;do
+for snap in $snappool $snapfs $snapvol $ctrfs@$TESTSNAP1; do
 	! snapexists $snap && \
 		log_fail "The snapshot $snap should be not destroyed."
 done

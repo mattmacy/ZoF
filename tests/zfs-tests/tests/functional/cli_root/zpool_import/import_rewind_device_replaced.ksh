@@ -63,7 +63,7 @@ function custom_cleanup
 	[[ -n ZFS_TXG_TIMEOUT ]] &&
 	    log_must set_zfs_txg_timeout $ZFS_TXG_TIMEOUT
 	log_must rm -rf $BACKUP_DEVICE_DIR
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		log_must set_tunable32 vfs.zfs.zfs_scan_suspend_progress 0
 	else
 		log_must set_tunable32 zfs_scan_suspend_progress 0
@@ -106,7 +106,7 @@ function test_replace_vdev
 	log_must zpool import -d $DEVICE_DIR $TESTPOOL1
 
 	# Ensure resilvering doesn't complete.
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		log_must set_tunable32 vfs.zfs.zfs_scan_suspend_progress 1
 	else
 		log_must set_tunable32 zfs_scan_suspend_progress 1
@@ -116,7 +116,7 @@ function test_replace_vdev
 	# Confirm pool is still replacing
 	log_must pool_is_replacing $TESTPOOL1
 	log_must zpool export $TESTPOOL1
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		log_must set_tunable32 vfs.zfs.zfs_scan_suspend_progress 0
 	else
 		log_must set_tunable32 zfs_scan_suspend_progress 0

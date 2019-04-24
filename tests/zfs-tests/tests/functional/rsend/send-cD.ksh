@@ -60,7 +60,7 @@ log_must zfs snapshot $sendfs@snap1
 
 # The stream sizes should match, since the second stream contains no new blocks
 log_must eval "zfs send -D -c $sendfs@snap1 >$stream1"
-if [ is_freebsd ];then
+if is_freebsd; then
 	typeset size0=$(stat -f "%z" $stream0)
 	typeset size1=$(stat -f "%z" $stream1)
 else
@@ -76,7 +76,7 @@ log_must eval "zfs recv -d $recvfs <$inc"
 cmp_ds_cont $sendfs $recvfs
 
 # The size of the incremental should be the same as the initial send.
-if [ is_freebsd ];then
+if is_freebsd; then
 	typeset size2=$(stat -f "%z" $inc)
 else
 	typeset size2=$(stat -c %s $inc)

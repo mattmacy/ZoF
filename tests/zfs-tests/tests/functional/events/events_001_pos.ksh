@@ -51,7 +51,7 @@ function cleanup
 	log_must zed_stop
 }
 
-if [ is_freebsd ]; then
+if is_freebsd; then
 	log_unsupported "Events not supported on FreeBSD"
 fi
 

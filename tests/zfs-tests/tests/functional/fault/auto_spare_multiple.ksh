@@ -54,7 +54,7 @@ log_assert "ZED should be able to handle multiple faulted devices"
 log_onexit cleanup
 
 # Events not supported on FreeBSD
-if [ ! is_freebsd ];then
+if ! is_freebsd; then
 	# Clear events from previous runs
 	zed_events_drain
 fi
