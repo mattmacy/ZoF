@@ -84,7 +84,7 @@ do
 		continue;
 	fi
 
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		filetime="$(stat -f "%c" $file)"
 	else
 		filetime="$(stat -c '%Z' $file)"

@@ -50,7 +50,7 @@ fi
 
 typeset -i i=0
 while [[ $i -lt ${#args[*]} ]]; do
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		log_must eval "python /usr/local/bin/arc_summary ${args[i]} > /dev/null"
 	else
 		log_must eval "arc_summary ${args[i]} > /dev/null"
@@ -58,7 +58,7 @@ while [[ $i -lt ${#args[*]} ]]; do
         ((i = i + 1))
 done
 
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_must eval "python /usr/local/bin/arc_summary | head > /dev/null"
 	log_must eval "python /usr/local/bin/arc_summary | head -1 > /dev/null"
 else

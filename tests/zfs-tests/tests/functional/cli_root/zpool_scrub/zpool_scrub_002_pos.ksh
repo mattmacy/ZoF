@@ -50,7 +50,7 @@ verify_runnable "global"
 
 function cleanup
 {
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		log_must set_tunable32 vfs.zfs.zfs_scan_suspend_progress 0
 	else
 		log_must set_tunable32 zfs_scan_suspend_progress 0
@@ -67,7 +67,7 @@ mntpnt=$(get_prop mountpoint $TESTPOOL/$TESTFS)
 log_must file_write -b 1048576 -c 1024 -o create -d 0 -f $mntpnt/biggerfile
 log_must sync
 
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_must set_tunable32 vfs.zfs.zfs_scan_suspend_progress 1
 else
 	log_must set_tunable32 zfs_scan_suspend_progress 1

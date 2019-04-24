@@ -34,7 +34,7 @@ log_assert "arcstat generates output and doesn't return an error code"
 
 typeset -i i=0
 while [[ $i -lt ${#args[*]} ]]; do
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		log_must eval "python /usr/local/bin/arcstat ${args[i]} > /dev/null"
 	else
 		log_must eval "arcstat ${args[i]} > /dev/null"

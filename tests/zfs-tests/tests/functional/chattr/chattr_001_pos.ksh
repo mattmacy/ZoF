@@ -48,7 +48,7 @@ set -A files writable immutable append
 function cleanup
 {
 	for i in ${files[*]}; do
-		if [ is_freebsd ] ; then
+		if is_freebsd ; then
 			log_must /bin/chflags noschg $TESTDIR/$i
 			log_must rm -f $TESTDIR/$i
 		else
@@ -60,7 +60,7 @@ function cleanup
 
 log_onexit cleanup
 
-if [ is_freebsd ] ; then
+if is_freebsd ; then
 	log_assert "Check whether chflags works as expected"
 else
 	log_assert "Check whether chattr works as expected"
@@ -70,7 +70,7 @@ log_must touch $TESTDIR/writable
 log_must touch $TESTDIR/immutable
 log_must touch $TESTDIR/append
 
-if [ is_freebsd ] ; then
+if is_freebsd ; then
 	log_must /bin/chflags noschg $TESTDIR/writable
 	log_must /bin/chflags schg $TESTDIR/immutable
 	log_must /bin/chflags sappnd $TESTDIR/append
@@ -87,7 +87,7 @@ log_mustnot eval "echo test >> $TESTDIR/immutable"
 log_mustnot eval "echo test > $TESTDIR/append"
 log_must eval "echo test >> $TESTDIR/append"
 
-if [ is_freebsd ] ; then
+if is_freebsd ; then
 	log_pass "chflags works as expected"
 else
 	log_pass "chattr works as expected"

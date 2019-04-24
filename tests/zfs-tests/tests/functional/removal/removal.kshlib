@@ -62,7 +62,7 @@ function attempt_during_removal # pool disk callback [args]
 	typeset callback=$3
 
 	shift 3
-	if [ is_freebsd ]; then
+	if is_freebsd; then
 		set_tunable32 vfs.zfs.removal_suspend_progress 1
 	else
 		set_tunable32 zfs_removal_suspend_progress 1
@@ -85,7 +85,7 @@ function attempt_during_removal # pool disk callback [args]
 	#
 	log_must is_pool_removing $pool
 
-	if [ is_freebsd ]; then
+	if is_freebsd; then
 		set_tunable32 vfs.zfs.removal_suspend_progress 0
 	else
 		set_tunable32 zfs_removal_suspend_progress 0
@@ -107,7 +107,7 @@ function random_write # file write_size
 {
 	typeset file=$1
 	typeset block_size=$2
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		typeset file_size=$(stat -f "%z" $file 2>/dev/null)
 	else
 		typeset file_size=$(stat -c%s $file 2>/dev/null)

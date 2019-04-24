@@ -39,7 +39,7 @@
 #
 function create_dev_file
 {
-	if [ is_freebsd ]; then
+	if is_freebsd; then
 		create_dev_file_freebsd "$1" "$2"
 		return $?
 	fi

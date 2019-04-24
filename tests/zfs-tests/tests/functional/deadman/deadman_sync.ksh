@@ -46,7 +46,7 @@ function cleanup
 	log_must zinject -c all
 	default_cleanup_noexit
 
-	if [ ! is_freebsd ]; then
+	if ! is_freebsd; then
 		log_must set_tunable64 zfs_deadman_synctime_ms $SYNCTIME_DEFAULT
 		log_must set_tunable64 zfs_deadman_checktime_ms $CHECKTIME_DEFAULT
 		log_must set_tunable64 zfs_deadman_failmode $FAILMODE_DEFAULT
@@ -57,14 +57,14 @@ function cleanup
 	fi
 }
 
-if [ is_freebsd ]; then
+if is_freebsd; then
 	log_unsupported "Events not supported in FreeBSD"
 fi
 
 log_assert "Verify spa deadman detects a hung txg"
 log_onexit cleanup
 
-if [ ! is_freebsd ]; then
+if ! is_freebsd; then
 	log_must set_tunable64 zfs_deadman_synctime_ms 5000
 	log_must set_tunable64 zfs_deadman_checktime_ms 1000
 	log_must set_tunable64 zfs_deadman_failmode "wait"

@@ -49,7 +49,7 @@ verify_runnable "both"
 function cleanup
 {
 	datasetexists $TEST_FS && log_must zfs destroy $TEST_FS
-	if [ ! is_freebsd]; then
+	if ! is_freebsd; then
 		log_must set_tunable64 zfs_async_block_max_blocks 100000
 	else
 		log_must set_tunable64 vfs.zfs.free_max_blocks 100000
@@ -68,7 +68,7 @@ log_must dd bs=1024k count=128 if=/dev/zero of=/$TEST_FS/file
 # Decrease the max blocks to free each txg, so that freeing takes
 # long enough that we can observe it.
 #
-if [ ! is_freebsd]; then
+if ! is_freebsd; then
 	log_must set_tunable64 zfs_async_block_max_blocks 100
 else
 	log_must set_tunable64 vfs.zfs.free_max_blocks 100
@@ -96,7 +96,7 @@ done
 # per txg.
 #
 sleep 10
-if [ ! is_freebsd]; then
+if ! is_freebsd; then
 	log_must set_tunable64 zfs_async_block_max_blocks 100000
 else
 	log_must set_tunable64 vfs.zfs.free_max_blocks 100000

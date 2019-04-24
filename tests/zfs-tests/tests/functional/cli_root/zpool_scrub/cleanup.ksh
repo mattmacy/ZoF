@@ -30,7 +30,7 @@
 
 verify_runnable "global"
 
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_must set_tunable32 vfs.zfs.zfs_scan_suspend_progress 0
 else
 	log_must set_tunable32 zfs_scan_suspend_progress 0

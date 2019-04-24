@@ -27,7 +27,7 @@
 
 . $STF_SUITE/include/libtest.shlib
 
-if is_freebsd;then
+if is_freebsd; then
 	log_unsupported "dbufstat.py relies on procfs, which is not supported on FreeBSD"
 fi
 
@@ -37,7 +37,7 @@ log_assert "dbufstat generates output and doesn't return an error code"
 
 typeset -i i=0
 while [[ $i -lt ${#args[*]} ]]; do
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		log_must eval "python /usr/local/bin/dbufstat ${args[i]} > /dev/null"
 	else
 		log_must eval "dbufstat.py ${args[i]} > /dev/null"
@@ -46,7 +46,7 @@ while [[ $i -lt ${#args[*]} ]]; do
 done
 
 # A simple test of dbufstat.py filter functionality
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_must eval "python /usr/local/bin/dbufstat -F object=10,dbc=1,pool=$TESTPOOL > /dev/null"
 else
 	log_must eval "dbufstat.py -F object=10,dbc=1,pool=$TESTPOOL > /dev/null"

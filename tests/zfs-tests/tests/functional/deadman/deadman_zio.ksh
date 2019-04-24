@@ -48,7 +48,7 @@ function cleanup
 {
 	log_must zinject -c all
 	default_cleanup_noexit
-	if [ ! is_freebsd ]; then
+	if ! is_freebsd; then
 		log_must set_tunable64 zfs_deadman_ziotime_ms $ZIOTIME_DEFAULT
 		log_must set_tunable64 zfs_deadman_checktime_ms $CHECKTIME_DEFAULT
 		log_must set_tunable64 zfs_deadman_failmode $FAILMODE_DEFAULT
@@ -59,14 +59,14 @@ function cleanup
 	fi
 }
 
-if [ is_freebsd ]; then
+if is_freebsd; then
 	log_unsupported "Events not supported on FreeBSD"
 fi
 
 log_assert "Verify zio deadman detects a hung zio"
 log_onexit cleanup
 
-if [ ! is_freebsd ]; then
+if ! is_freebsd; then
 	# 1. Reduce the zfs_deadman_ziotime_ms to 5s.
 	log_must set_tunable64 zfs_deadman_ziotime_ms 5000
 	# 2. Reduce the zfs_deadman_checktime_ms to 1s.

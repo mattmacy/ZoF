@@ -40,7 +40,7 @@ function get_estimated_size
 {
 	typeset cmd=$1
 	typeset ds=${cmd##* }
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		typeset tmpfile=$(mktemp -t $BACKDIR)
 	else
 		typeset tmpfile=$(mktemp -p $BACKDIR)

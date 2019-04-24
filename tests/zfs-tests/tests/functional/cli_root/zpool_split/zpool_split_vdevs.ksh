@@ -125,7 +125,7 @@ do
 	add_config="$(awk '{$1= "";print $0}' <<< $config)"
 	log_must zpool create $TESTPOOL $(pool_config $create_config)
 	for vdev in $add_config; do
-		if [ is_freebsd ];then
+		if is_freebsd; then
 			log_must zpool add -f $TESTPOOL $(pool_config $vdev)
 		else
 			log_must zpool add $TESTPOOL -f $(pool_config $vdev)
@@ -144,7 +144,7 @@ do
 	add_config="$(awk '{$1= "";print $0}' <<< $config)"
 	log_must zpool create $TESTPOOL $(pool_config $create_config)
 	for vdev in $add_config; do
-		if [ is_freebsd ];then
+		if is_freebsd; then
 			log_must zpool add -f $TESTPOOL $(pool_config $vdev)
 		else
 			log_must zpool add $TESTPOOL -f $(pool_config $vdev)

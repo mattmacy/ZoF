@@ -47,7 +47,7 @@ verify_runnable "global"
 
 function cleanup
 {
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		log_must set_tunable32 vfs.zfs.zfs_scan_suspend_progress 0
 	else
 		log_must set_tunable32 zfs_scan_suspend_progress 0
@@ -58,7 +58,7 @@ log_onexit cleanup
 
 log_assert "Scrub command fails when there is already a scrub in progress"
 
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_must set_tunable32 vfs.zfs.zfs_scan_suspend_progress 1
 else
 	log_must set_tunable32 zfs_scan_suspend_progress 1

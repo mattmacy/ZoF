@@ -46,7 +46,7 @@
 
 function cleanup
 {
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		log_must set_tunable32 vfs.zfs.zfs_scan_suspend_progress 0
 	else
 		log_must set_tunable32 zfs_scan_suspend_progress 0
@@ -63,7 +63,7 @@ log_assert "Resilver prevent scrub from starting until the resilver completes"
 mntpnt=$(get_prop mountpoint $TESTPOOL/$TESTFS)
 
 # Temporarily prevent scan progress so our test doesn't race
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_must set_tunable32 vfs.zfs.zfs_scan_suspend_progress 1
 else
 	log_must set_tunable32 zfs_scan_suspend_progress 1
@@ -80,7 +80,7 @@ done
 log_must is_pool_resilvering $TESTPOOL
 log_mustnot zpool scrub $TESTPOOL
 
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_must set_tunable32 vfs.zfs.zfs_scan_suspend_progress 0
 else
 	log_must set_tunable32 zfs_scan_suspend_progress 0

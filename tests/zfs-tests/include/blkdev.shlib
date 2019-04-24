@@ -217,7 +217,7 @@ function get_device_dir #device
 	typeset device=$1
 
 	if ! $(is_physical_device $device) ; then
-		if [[ is_freebsd ]] ; then
+		if is_freebsd ; then
 			echo "/dev"
 			return 0
 		fi

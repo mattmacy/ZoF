@@ -87,7 +87,7 @@ while [[ $i -lt ${#props[*]} ]]
 do
 	prop_name=${props[$i]}
 	prop_val=${prop_vals[$i]}
-	if [ is_freebsd ] && [ "$prop_name" = "aclmode" ];then
+	if is_freebsd && [[ "$prop_name" == "aclmode" ]]; then
 		i=$(( $i + 1 ))
 		continue
 	fi

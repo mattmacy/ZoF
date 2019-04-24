@@ -57,7 +57,7 @@ log_assert "ZED should replace a device using the configured ashift property"
 log_onexit cleanup
 
 # Events not supported on FreeBSD
-if [ ! is_freebsd ];then
+if ! is_freebsd; then
 	# Clear events from previous runs
 	zed_events_drain
 fi

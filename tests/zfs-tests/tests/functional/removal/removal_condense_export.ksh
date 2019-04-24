@@ -27,7 +27,7 @@ fi
 
 function reset
 {
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		log_must set_tunable64 vfs.zfs.condense_indirect_commit_entry_delay_ms 0
 		log_must set_tunable64 vfs.zfs.condense_min_mapping_bytes 131072
 	else
@@ -39,7 +39,7 @@ function reset
 
 default_setup_noexit "$DISKS" "true"
 log_onexit reset
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_must set_tunable64 vfs.zfs.condense_indirect_commit_entry_delay_ms 1000
 	log_must set_tunable64 vfs.zfs.condense_min_mapping_bytes 1
 else

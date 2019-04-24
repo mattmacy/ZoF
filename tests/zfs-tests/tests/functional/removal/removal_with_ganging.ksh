@@ -23,7 +23,7 @@
 
 function cleanup
 {
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		log_must set_tunable64 vfs.zfs.metaslab.metaslab_force_ganging $((2**17 + 1))
 	else
 		log_must set_tunable64 metaslab_force_ganging $((2**17 + 1))
@@ -33,7 +33,7 @@ function cleanup
 }
 
 default_setup_noexit "$DISKS"
-if [ is_freebsd ];then
+if is_freebsd; then
 	log_must set_tunable64 vfs.zfs.metaslab.metaslab_force_ganging $((2**14))
 else
 	log_must set_tunable64 metaslab_force_ganging $((2**14))

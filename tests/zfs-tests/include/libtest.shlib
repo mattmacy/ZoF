@@ -2437,7 +2437,7 @@ function del_group_freebsd #<group_name>
 #
 function add_user #<group_name> <user_name> <basedir>
 {
-	if [ is_freebsd ] ; then
+	if is_freebsd ; then
 		add_user_freebsd "$1" "$2" "$3"
 		return $?
 	fi
@@ -2474,7 +2474,7 @@ function add_user #<group_name> <user_name> <basedir>
 #
 function del_user #<logname> <basedir>
 {
-	if [ is_freebsd ] ; then
+	if is_freebsd ; then
 		del_user_freebsd "$1" "$2"
 		return $?
 	fi
@@ -2502,7 +2502,7 @@ function del_user #<logname> <basedir>
 #
 function add_group #<group_name>
 {
-	if [ is_freebsd ] ; then
+	if is_freebsd ; then
 		add_group_freebsd "$1"
 		return $?
 	fi
@@ -2546,7 +2546,7 @@ function add_group #<group_name>
 #
 function del_group #<group_name>
 {
-	if [ is_freebsd ] ; then
+	if is_freebsd ; then
 		del_group_freebsd "$1"
 		return $?
 	fi
@@ -3152,7 +3152,7 @@ function user_run
 	shift
 
 	log_note "user:$user $@"
-	if [ is_freebsd ]; then
+	if is_freebsd; then
 		eval "su \$user -c \"$@\"" > $TEST_BASE_DIR/out 2>$TEST_BASE_DIR/err
 		return $?
 	else
@@ -3284,7 +3284,7 @@ function get_objnum
 	typeset objnum
 
 	[[ -e $pathname ]] || log_fail "No such file or directory: $pathname"
-	if [ is_freebsd ];then
+	if is_freebsd; then
 		objnum=$(stat -f "%i" $pathname)
 	else
 		objnum=$(stat -c %i $pathname)
