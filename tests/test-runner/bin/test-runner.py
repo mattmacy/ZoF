@@ -25,14 +25,12 @@ except ImportError:
 import os
 import logging
 from datetime import datetime
+from itertools import repeat
 from optparse import OptionParser
-from pwd import getpwnam
-from pwd import getpwuid
+from pwd import getpwnam, getpwuid
 from select import select
-from subprocess import PIPE
-from subprocess import Popen
-from sys import argv
-from sys import maxsize
+from subprocess import PIPE, Popen
+from sys import argv, maxsize
 from threading import Timer
 from time import time
 
@@ -94,7 +92,7 @@ class Output(object):
         """
         Read from the file descriptor. If 'drain' set, read until EOF.
         """
-        while self._read() is not None:
+        while self._read():
             if not drain:
                 break
 
@@ -108,17 +106,13 @@ class Output(object):
         fd = self.fileno()
         buf = os.read(fd, 4096)
         if not buf:
-            return None
-        if b'\n' not in buf:
-            self._buf += buf
-            return []
-
-        buf = self._buf + buf
-        tmp, rest = buf.rsplit(b'\n', 1)
-        self._buf = rest
+            return False
+        lines = (self._buf + buf).splitlines(True) # keepends=True
+        self._buf = b'' if lines[-1].endswith(b'\n') else lines.pop()
         now = datetime.now()
-        rows = tmp.splitlines()
-        self.lines.extend((now, r.decode('utf-8', 'ignore')) for r in rows)
+        nows = repeat(now)
+        self.lines.extend(zip(nows, lines))
+        return True
 
 
 class Cmd(object):
@@ -281,18 +275,14 @@ class Cmd(object):
         lines = sorted(self.result.stdout + self.result.stderr,
                        key=lambda x: x[0])
 
-        # Make sure we can write the odd characters some of the tests spit out.
-        def encode(s):
-            return s.encode(encoding='utf-8', errors='namereplace')
-
         for dt, line in lines:
             timestamp = dt.strftime("%H:%M:%S.%f ")[:11]
-            message = encode(line)
-            logger.debug(u'%s %s' % (timestamp, message))
+            message = line.decode(errors='replace').rstrip('\n')
+            logger.debug('%s %s' % (timestamp, message))
 
         def writelog(name, lines):
-            with open(os.path.join(self.outputdir, name), 'w') as f:
-                f.writelines(u'%s\n' % encode(line) for _, line in lines)
+            with open(os.path.join(self.outputdir, name), 'wb') as f:
+                f.writelines(line for _, line in lines)
 
         if len(self.result.stdout):
             writelog('stdout', self.result.stdout)
