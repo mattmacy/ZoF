@@ -80,25 +80,20 @@ function checkmount # dataset option
 {
 	typeset dataset="$1"
 	typeset option="$2"
+	typeset options=""
 
-	#Unable to check options on FreeBSD since procfs is not supported
 	if is_freebsd; then
-		msg=$(mount | awk -v ds="$dataset" '$1 == ds { print $1 }')
-		if [[ $msg == $dataset ]]; then
-			log_note "Dataset $dataset is mounted"
-		else
-			log_fail "Dataset $dataset is not mounted"
-		fi
+		options=$(mount -p | awk -v ds="$dataset" '$1 == ds { print $4 }')
 	else
-		options="$(awk -v ds="$dataset" '$1 == ds { print $4 }' /proc/mounts)"
-		if [[ "$options" == '' ]]; then
-			log_fail "Dataset $dataset is not mounted"
-		elif [[ ! -z "${options##*$option*}" ]]; then
-			log_fail "Dataset $dataset is not mounted with expected "\
-			    "option $option ($options)"
-		else
-			log_note "Dataset $dataset is mounted with option $option"
-		fi
+		options=$(awk -v ds="$dataset" '$1 == ds { print $4 }' /proc/mounts)
+	fi
+	if [[ "$options" == '' ]]; then
+		log_fail "Dataset $dataset is not mounted"
+	elif [[ ! -z "${options##*$option*}" ]]; then
+		log_fail "Dataset $dataset is not mounted with expected "\
+		    "option $option ($options)"
+	else
+		log_note "Dataset $dataset is mounted with option $option"
 	fi
 }
 
