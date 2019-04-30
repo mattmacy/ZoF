@@ -37,19 +37,11 @@ log_assert "dbufstat generates output and doesn't return an error code"
 
 typeset -i i=0
 while [[ $i -lt ${#args[*]} ]]; do
-	if is_freebsd; then
-		log_must eval "python /usr/local/bin/dbufstat ${args[i]} > /dev/null"
-	else
-		log_must eval "dbufstat.py ${args[i]} > /dev/null"
-	fi
+	log_must eval "dbufstat.py ${args[i]} > /dev/null"
         ((i = i + 1))
 done
 
 # A simple test of dbufstat.py filter functionality
-if is_freebsd; then
-	log_must eval "python /usr/local/bin/dbufstat -F object=10,dbc=1,pool=$TESTPOOL > /dev/null"
-else
-	log_must eval "dbufstat.py -F object=10,dbc=1,pool=$TESTPOOL > /dev/null"
-fi
+log_must eval "dbufstat.py -F object=10,dbc=1,pool=$TESTPOOL > /dev/null"
 
 log_pass "dbufstat generates output and doesn't return an error code"
