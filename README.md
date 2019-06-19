@@ -14,7 +14,7 @@ to bring FreeBSD support into the ZoL repo.
   * [ZoL Wiki](https://github.com/zfsonlinux/zfs/wiki)
   * [ZoL Mailing lists](https://github.com/zfsonlinux/zfs/wiki/Mailing-Lists)
   * [OpenZFS site](http://open-zfs.org/)
-  * [HEAD Snapshots].(http://pkg.trueos.org/iso/freebsd-pkgbase/)
+  * [HEAD Snapshots](http://pkg.trueos.org/iso/freebsd-pkgbase/)
 
 # Installation
 
