@@ -34,7 +34,7 @@
 #elif defined(__amd64__)
 #include <sys/simd_x86.h>
 #else
-#define kfpu_allowed() (0)
+#define	kfpu_allowed() (0)
 #endif
 
 extern boolean_t raidz_will_scalar_work(void);

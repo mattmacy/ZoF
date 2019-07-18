@@ -145,7 +145,7 @@
 #elif defined(__amd64__)
 #include <sys/simd_x86.h>
 #else
-#define kfpu_allowed() (0)
+#define	kfpu_allowed() (0)
 #endif
 
 #define	FLETCHER_MIN_SIMD_SIZE	64
