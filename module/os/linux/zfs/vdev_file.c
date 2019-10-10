@@ -75,7 +75,7 @@ vdev_file_open_mode(spa_mode_t spa_mode)
 
 static int
 vdev_file_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
-    uint64_t *ashift)
+    uint64_t *ashift, uint64_t *pshift)
 {
 	vdev_file_t *vf;
 	zfs_file_t *fp;
