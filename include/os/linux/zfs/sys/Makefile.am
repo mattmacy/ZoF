@@ -4,7 +4,7 @@ KERNEL_H = \
 	$(top_srcdir)/include/os/linux/zfs/sys/trace_acl.h \
 	$(top_srcdir)/include/os/linux/zfs/sys/trace_arc.h \
 	$(top_srcdir)/include/os/linux/zfs/sys/trace_common.h \
-	$(top_srcdir)/include/os/linux/zfs/sys/trace_defs.h \
+	$(top_srcdir)/include/os/linux/zfs/sys/trace_zfs.h \
 	$(top_srcdir)/include/os/linux/zfs/sys/trace_dbgmsg.h \
 	$(top_srcdir)/include/os/linux/zfs/sys/trace_dbuf.h \
 	$(top_srcdir)/include/os/linux/zfs/sys/trace_dmu.h \
@@ -20,6 +20,7 @@ KERNEL_H = \
 	$(top_srcdir)/include/os/linux/zfs/sys/zfs_dir.h \
 	$(top_srcdir)/include/os/linux/zfs/sys/zfs_vfsops.h \
 	$(top_srcdir)/include/os/linux/zfs/sys/zfs_vnops.h \
+	$(top_srcdir)/include/os/linux/zfs/sys/zfs_znode_impl.h \
 	$(top_srcdir)/include/os/linux/zfs/sys/zpl.h
 
 if CONFIG_KERNEL

@@ -67,7 +67,7 @@
 #if defined(__linux__)
 #include <linux/dcache_compat.h>
 #include <linux/utsname_compat.h>
-#include <linux/mod_compat.h>
+#include <sys/mod.h>
 #include <sys/sysmacros.h>
 
 #elif defined(__FreeBSD__)
@@ -192,6 +192,9 @@ extern int spa_import_rootpool(const char *name);
 #include <sys/resource.h>
 #include <sys/byteorder.h>
 #include <sys/list.h>
+#ifdef __linux__
+#include <sys/mod.h>
+#endif
 #include <sys/uio.h>
 #include <sys/zfs_debug.h>
 #include <sys/kstat.h>
@@ -201,7 +204,7 @@ extern int spa_import_rootpool(const char *name);
 #include <sys/sunddi.h>
 #include <sys/debug.h>
 #include <sys/utsname.h>
-#include <sys/trace_defs.h>
+#include <sys/trace_zfs.h>
 
 
 #ifdef __FreeBSD__
@@ -217,11 +220,7 @@ extern int spa_import_rootpool(const char *name);
 #define	noinline	__attribute__((noinline))
 #define	likely(x)	__builtin_expect((x), 1)
 #define	unlikely(x)	__builtin_expect((x), 0)
-#ifdef ZFS_DEBUG
-#define __debug
-#else
-#define	__debug	__attribute__((__unused__))
-#endif /* ZFS_DEBUG */
+
 /*
  * Debugging
  */
@@ -302,11 +301,6 @@ typedef struct zfs_kernel_param {
 #define	ZFS_MODULE_PARAM(scope_prefix, name_prefix, name, type, perm, desc)
 #define	ZFS_MODULE_PARAM_CALL(scope_prefix, name_prefix, name, setfunc, \
 	getfunc, perm, desc)
-
-/*
- * Exported symbols
- */
-#define	EXPORT_SYMBOL(x)
 
 /*
  * Threads.
@@ -499,6 +493,7 @@ void procfs_list_add(procfs_list_t *procfs_list, void *p);
 #define	KMC_NODEBUG		UMC_NODEBUG
 #define	KMC_KMEM		0x0
 #define	KMC_VMEM		0x0
+#define	KMC_KVMEM		0x0
 #define	kmem_alloc(_s, _f)	umem_alloc(_s, _f)
 #define	kmem_zalloc(_s, _f)	umem_zalloc(_s, _f)
 #define	kmem_free(_b, _s)	umem_free(_b, _s)
@@ -665,6 +660,7 @@ typedef struct vsecattr {
 	size_t		vsa_aclentsz;	/* ACE size in bytes of vsa_aclentp */
 } vsecattr_t;
 
+#define	AT_TYPE		0x00001
 #define	AT_MODE		0x00002
 #define	AT_UID		0x00004
 #define	AT_GID		0x00008
@@ -693,9 +689,7 @@ extern int fop_getattr(vnode_t *vp, vattr_t *vap);
 
 #define	VOP_FSYNC(vp, f, cr, ct)	fsync((vp)->v_fd)
 
-#if defined(HAVE_FILE_FALLOCATE) && \
-	defined(FALLOC_FL_PUNCH_HOLE) && \
-	defined(FALLOC_FL_KEEP_SIZE)
+#if defined(FALLOC_FL_PUNCH_HOLE) && defined(FALLOC_FL_KEEP_SIZE)
 #define	VOP_SPACE(vp, cmd, flck, fl, off, cr, ct) \
 	fallocate((vp)->v_fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, \
 	    (flck)->l_start, (flck)->l_len)
@@ -893,7 +887,6 @@ extern void spl_fstrans_unmark(fstrans_cookie_t);
 extern int __spl_pf_fstrans_check(void);
 extern int kmem_cache_reap_active(void);
 
-#define	ZFS_EXPORTS_PATH	"/etc/zfs/exports"
 #define	____cacheline_aligned
 
 #endif /* _KERNEL */
