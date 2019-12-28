@@ -767,7 +767,8 @@ vdev_geom_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
 {
 	struct g_provider *pp;
 	struct g_consumer *cp;
-	int error, has_trim, rate;
+	int error, has_trim;
+	uint16_t rate;
 
 	/*
 	 * Set the TLS to indicate downstack that we
