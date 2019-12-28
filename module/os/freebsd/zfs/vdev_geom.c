@@ -921,7 +921,11 @@ skip_open:
 	vd->vdev_nowritecache = B_FALSE;
 
 	/* Inform the ZIO pipeline that we are non-rotational */
-	vd->vdev_nonrot = (g_getattr("GEOM::rotation_rate", cp, &rate) == 0);
+        error = g_getattr("GEOM::rotation_rate", cp, &rate);
+        if (error == 0 && rate == 1)
+                vd->vdev_nonrot = B_TRUE;
+        else
+                vd->vdev_nonrot = B_FALSE;
 
 	/* Set when device reports it supports TRIM. */
 	error = g_getattr("GEOM::candelete", cp, &has_trim);
