@@ -1361,7 +1361,7 @@ dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 #endif
 #ifdef __FreeBSD__
 			err = vn_io_fault_uiomove((char *)db->db_data + bufoff,
-		        tocpy, uio);
+			    tocpy, uio);
 #else
 			err = uiomove((char *)db->db_data + bufoff, tocpy,
 			    UIO_READ, uio);
