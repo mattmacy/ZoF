@@ -359,7 +359,7 @@ function on_off_disk # disk state{online,offline} host
 			scan_scsi_hosts $host
 			block_device_wait
 			if is_mpath_device $disk; then
-				dm_name="$(readlink -f $DEV_DSKDIR/$disk \
+				dm_name="$(readlink $DEV_DSKDIR/$disk \
 				    | nawk -F / '{print $2}')"
 				slave="$(ls /sys/block/$dm_name/slaves \
 				    | nawk '{print $1}')"
