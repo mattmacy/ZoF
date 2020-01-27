@@ -921,7 +921,6 @@ function set_partition
 		if [[ -z $size || -z $disk ]]; then
 			log_fail "The size or disk name is unspecified."
 		fi
-		[[ -n $DEV_DSKDIR ]] && disk=$DEV_DSKDIR/$disk
 		typeset size_mb=${size%%[mMgG]}
 
 		size_mb=${size_mb%%[mMgG][bB]}
@@ -969,7 +968,6 @@ function set_partition
 		if [[ -z $size || -z $disk ]]; then
 			log_fail "The size or disk name is unspecified."
 		fi
-		[[ -n $DEV_DSKDIR ]] && disk=$DEV_DSKDIR/$disk
 
 		if [[ $slicenum -eq 0 ]] || ! gpart show $disk >/dev/null 2>&1; then
 			gpart destroy -F $disk >/dev/null 2>&1
