@@ -60,7 +60,7 @@ function create_blockfile
 {
 	typeset size=$1
 	typeset file=$(mktemp)
-        truncate -s $size $file
+	truncate -s $size $file
 	echo $file
 }
 
