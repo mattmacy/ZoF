@@ -79,15 +79,12 @@ log_onexit cleanup
 set -A vdevs "" "mirror" "raidz" "raidz1" "raidz2"
 
 typeset -i i=0
-
 while (( i < ${#vdevs[*]} )); do
+	typeset spare="spare $sdisks"
 
-	for num in 0 1 2 3 ; do
-		eval typeset disk=\${FS_DISK$num}
-		zero_partitions $disk
-	done
-
-	create_pool $TESTPOOL1 ${vdevs[i]} $vdisks spare $sdisks
+	# If this is for raidz2, use 3 disks for the pool.
+	[[ ${vdevs[i]} = "raidz2" ]] && spare="$sdisks"
+	create_pool $TESTPOOL1 ${vdevs[i]} $vdisks $spare
 	log_must zpool export $TESTPOOL1
 	verify_assertion "$vdisks $sdisks"
 

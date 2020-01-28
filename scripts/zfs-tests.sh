@@ -424,7 +424,7 @@ done
 
 shift $((OPTIND-1))
 
-FILES=${FILES:-"$(echo "$FILEDIR"/file-vdev{0..3})"}
+FILES=${FILES:-"$FILEDIR/file-vdev0 $FILEDIR/file-vdev1 $FILEDIR/file-vdev2"}
 LOOPBACKS=${LOOPBACKS:-""}
 
 if [ ${#SINGLETEST[@]} -ne 0 ]; then

@@ -82,12 +82,11 @@ typeset -i i=0
 
 unset NOINUSE_CHECK
 while (( i < ${#vdevs[*]} )); do
-	for num in 0 1 2 3 ; do
-		eval typeset disk=\${FS_DISK$num}
-		zero_partitions $disk
-	done
+	typeset spare="spare $sdisks"
 
-	create_pool $TESTPOOL1 ${vdevs[i]} $vdisks spare $sdisks
+	# If this is for raidz2, use 3 disks for the pool.
+	[[ ${vdevs[i]} = "raidz2" ]] && spare="$sdisks"
+	create_pool $TESTPOOL1 ${vdevs[i]} $vdisks $spare
 	verify_assertion "$rawtargets"
 	destroy_pool $TESTPOOL1
 

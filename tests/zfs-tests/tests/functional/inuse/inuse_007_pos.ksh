@@ -85,13 +85,11 @@ typeset -i i=0
 PREVDUMPDEV=`dumpadm | grep "Dump device" | awk '{print $3}'`
 
 while (( i < ${#vdevs[*]} )); do
+	typeset spare="spare $sdisks"
 
-	for num in 0 1 2 3 ; do
-		eval typeset disk=\${FS_DISK$num}
-		zero_partitions $disk
-	done
-
-	create_pool $TESTPOOL1 ${vdevs[i]} $vdisks spare $sdisks
+	# If this is for raidz2, use 3 disks for the pool.
+	[[ ${vdevs[i]} = "raidz2" ]] && spare="$sdisks"
+	create_pool $TESTPOOL1 ${vdevs[i]} $vdisks $spare
 	log_must zpool export $TESTPOOL1
 	verify_assertion "$disktargets"
 	log_must zpool import $TESTPOOL1
