@@ -217,10 +217,10 @@ function cmp_ds_prop
 {
 	typeset dtst1=$1
 	typeset dtst2=$2
-	typeset -A props="type" "origin" "volblocksize" "acltype" "dnodesize" \
+	typeset -a props=("type" "origin" "volblocksize" "acltype" "dnodesize" \
 	    "atime" "canmount" "checksum" "compression" "copies" "devices" \
 	    "exec" "quota" "readonly" "recordsize" "reservation" "setuid" \
-	    "snapdir" "version" "volsize" "xattr" "mountpoint";
+	    "snapdir" "version" "volsize" "xattr" "mountpoint");
 	if is_freebsd; then
 		props+=("jailed")
 	else
