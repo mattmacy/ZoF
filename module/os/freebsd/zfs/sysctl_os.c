@@ -1,6 +1,5 @@
-
 /*
- * Copyright (c) 2020 iX Systems, Inc.
+ * Copyright (c) 2020 iXsystems, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -439,16 +438,52 @@ sysctl_vfs_zfs_debug_flags(SYSCTL_HANDLER_ARGS)
 }
 
 SYSCTL_PROC(_vfs_zfs, OID_AUTO, debugflags,
-    CTLTYPE_UINT | CTLFLAG_MPSAFE | CTLFLAG_RWTUN, 0, sizeof (int),
+    CTLTYPE_UINT | CTLFLAG_MPSAFE | CTLFLAG_RWTUN, NULL, 0,
     sysctl_vfs_zfs_debug_flags, "IU", "Debug flags for ZFS testing.");
 
-extern uint64_t zfs_deadman_ziotime_ms;
-SYSCTL_UQUAD(_vfs_zfs, OID_AUTO, deadman_ziotime_ms, CTLFLAG_RWTUN,
-    &zfs_deadman_ziotime_ms, 0,
-    "Time until an individual I/O is considered to be \"hung\" in milliseconds");
+static int
+zfs_deadman_synctime_ms_sysctl(SYSCTL_HANDLER_ARGS)
+{
+	unsigned long val;
+	int err;
 
-extern char *zfs_deadman_failmode;
-extern int param_set_deadman_failmode_common(const char *val);
+	val = zfs_deadman_synctime_ms;
+	err = sysctl_handle_long(oidp, &val, 0, req);
+	if (err != 0 || req->newptr == NULL)
+		return (err);
+	zfs_deadman_synctime_ms = val;
+
+	spa_set_deadman_synctime(MSEC2NSEC(zfs_deadman_synctime_ms));
+
+	return (0);
+}
+
+SYSCTL_PROC(_vfs_zfs, OID_AUTO, deadman_synctime_ms,
+    CTLTYPE_ULONG | CTLFLAG_MPSAFE | CTLFLAG_RW, NULL, 0,
+    zfs_deadman_synctime_ms_sysctl, "LU",
+    "Pool sync expiration time in milliseconds");
+
+static int
+zfs_deadman_ziotime_ms_sysctl(SYSCTL_HANDLER_ARGS)
+{
+	unsigned long val;
+	int err;
+
+	val = zfs_deadman_ziotime_ms;
+	err = sysctl_handle_long(oidp, &val, 0, req);
+	if (err != 0 || req->newptr == NULL)
+		return (err);
+	zfs_deadman_ziotime_ms = val;
+
+	spa_set_deadman_ziotime(MSEC2NSEC(zfs_deadman_synctime_ms));
+
+	return (0);
+}
+
+SYSCTL_PROC(_vfs_zfs, OID_AUTO, deadman_ziotime_ms,
+    CTLTYPE_ULONG | CTLFLAG_MPSAFE | CTLFLAG_RW, NULL, 0,
+    zfs_deadman_ziotime_ms_sysctl, "LU",
+    "IO expiration time in milliseconds");
 
 static int 
 zfs_deadman_failmode_sysctl(SYSCTL_HANDLER_ARGS)
@@ -474,9 +509,11 @@ zfs_deadman_failmode_sysctl(SYSCTL_HANDLER_ARGS)
 	return (-param_set_deadman_failmode_common(buf));
 }
 
-SYSCTL_PROC(_vfs_zfs, OID_AUTO, deadman_failmode, CTLTYPE_STRING|CTLFLAG_RWTUN,
-    0, 0, &zfs_deadman_failmode_sysctl, "A",
+SYSCTL_PROC(_vfs_zfs, OID_AUTO, deadman_failmode, CTLTYPE_STRING | CTLFLAG_RW,
+    NULL, 0, zfs_deadman_failmode_sysctl, "A",
     "Behavior when a \"hung\" I/O value is detected as wait, continue, or panic");
+
+
 /* spacemap.c */
 extern int space_map_ibs;
 SYSCTL_INT(_vfs_zfs, OID_AUTO, space_map_ibs, CTLFLAG_RWTUN,
