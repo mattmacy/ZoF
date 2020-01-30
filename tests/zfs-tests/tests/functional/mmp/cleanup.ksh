@@ -23,6 +23,12 @@
 
 verify_runnable "global"
 
+log_must mv ${HOSTID_FILE}.bak $HOSTID_FILE
+if is_freebsd; then
+	log_must /etc/rc.d/hostid start
+else
+	log_must zgenhostid "$(<$HOSTID_FILE)"
+fi
 log_must set_tunable64 MULTIHOST_HISTORY $MMP_HISTORY_OFF
 
 log_pass "mmp cleanup passed"
