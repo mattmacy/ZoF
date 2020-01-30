@@ -91,6 +91,9 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/arc_impl.h>
 #include <sys/dsl_pool.h>
+
+#include <../zfs_config.h>
+
 /* BEGIN CSTYLED */
 SYSCTL_DECL(_vfs_zfs);
 SYSCTL_NODE(_vfs_zfs, OID_AUTO, zio, CTLFLAG_RW, 0, "ZFS ZIO");
@@ -118,6 +121,9 @@ SYSCTL_NODE(_vfs_zfs_livelist, OID_AUTO, condense, CTLFLAG_RW, 0, "condense knob
 SYSCTL_NODE(_vfs_zfs, OID_AUTO, recv, CTLFLAG_RW, 0, "receive knobs");
 SYSCTL_NODE(_vfs_zfs, OID_AUTO, send, CTLFLAG_RW, 0, "send knobs");
 
+SYSCTL_DECL(_vfs_zfs_version);
+SYSCTL_CONST_STRING(_vfs_zfs_version, OID_AUTO, module, CTLFLAG_RD,
+    (ZFS_META_VERSION "-" ZFS_META_RELEASE), "OpenZFS module version");
 
 extern arc_state_t ARC_anon;
 extern arc_state_t ARC_mru;

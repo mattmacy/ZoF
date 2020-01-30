@@ -42,21 +42,6 @@ libzfs_set_pipe_max(int infd)
 	/* FreeBSD automatically resizes */
 }
 
-/*
- * Get zfs_ioctl_version
- */
-int
-get_zfs_ioctl_version(void)
-{
-	size_t ver_size;
-	int ver = ZFS_IOCVER_NONE;
-
-	ver_size = sizeof (ver);
-	sysctlbyname("vfs.zfs.version.ioctl", &ver, &ver_size, NULL, 0);
-
-	return (ver);
-}
-
 static int
 execvPe(const char *name, const char *path, char * const *argv,
     char * const *envp)
@@ -205,6 +190,21 @@ get_zfs_spa_version(void)
 }
 #endif
 
+/*
+ * Get zfs_ioctl_version
+ */
+int
+get_zfs_ioctl_version(void)
+{
+	size_t ver_size;
+	int ver = ZFS_IOCVER_NONE;
+
+	ver_size = sizeof (ver);
+	sysctlbyname("vfs.zfs.version.ioctl", &ver, &ver_size, NULL, 0);
+
+	return (ver);
+}
+
 const char *
 libzfs_error_init(int error)
 {
@@ -307,4 +307,17 @@ zfs_jail(zfs_handle_t *zhp, int jailid, int attach)
 		zfs_standard_error(hdl, errno, errbuf);
 
 	return (ret);
+}
+
+/*
+ * Fill given version buffer with zfs kernel version.
+ * Returns 0 on success, and -1 on error (with errno set)
+ */
+int
+zfs_version_kernel(char *version, int len)
+{
+	size_t l = len;
+
+	return (sysctlbyname("vfs.zfs.version.module",
+	    version, &l, NULL, 0));
 }
