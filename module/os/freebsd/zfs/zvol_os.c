@@ -1194,7 +1194,7 @@ zvol_free(zvol_state_t *zv)
  * Create a minor node (plus a whole lot more) for the specified volume.
  */
 static int
-zvol_create_minor(const char *name)
+zvol_create_minor_impl(const char *name)
 {
 	zvol_state_t *zv;
 	objset_t *os;
@@ -1395,7 +1395,7 @@ zvol_set_capacity_impl(zvol_state_t *zv, uint64_t capacity)
 const static zvol_platform_ops_t zvol_freebsd_ops = {
 	.zv_free = zvol_free,
 	.zv_rename_minor = zvol_rename_minor,
-	.zv_create_minor = zvol_create_minor,
+	.zv_create_minor = zvol_create_minor_impl,
 	.zv_update_volsize = zvol_update_volsize,
 	.zv_clear_private = zvol_clear_private,
 	.zv_is_zvol = zvol_is_zvol_impl,
