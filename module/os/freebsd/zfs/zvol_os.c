@@ -287,6 +287,7 @@ zvol_geom_open(struct g_provider *pp, int flag, int count)
 	if (drop_suspend)
 		rw_exit(&zv->zv_suspend_lock);
 	return (0);
+
 out_open_count:
 	if (zv->zv_open_count == 0)
 		zvol_last_close(zv);
@@ -898,10 +899,14 @@ zvol_cdev_open(struct cdev *dev, int flags, int fmt, struct thread *td)
 			zil_async_to_sync(zv->zv_zilog, ZVOL_OBJ);
 	}
 
+	mutex_exit(&zv->zv_state_lock);
+	if (drop_suspend)
+		rw_exit(&zv->zv_suspend_lock);
+	return (0);
+
 out_opened:
 	if (zv->zv_open_count == 0)
 		zvol_last_close(zv);
-
 out_locked:
 	mutex_exit(&zv->zv_state_lock);
 	if (drop_suspend)
