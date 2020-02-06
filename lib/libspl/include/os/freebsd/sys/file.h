@@ -29,7 +29,6 @@
 
 #include_next <sys/file.h>
 
-#include <sys/user.h>
 #define	FCREAT	O_CREAT
 #define	FTRUNC	O_TRUNC
 #define	FSYNC	O_SYNC

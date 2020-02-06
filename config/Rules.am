@@ -49,8 +49,6 @@ AM_CPPFLAGS += -DTEXT_DOMAIN=\"zfs-linux-user\"
 endif
 if BUILD_FREEBSD
 AM_CPPFLAGS += -DTEXT_DOMAIN=\"zfs-freebsd-user\"
-# FIXME: are the rest of these needed?
-AM_CPPFLAGS += -D_SYS_VMEM_H_ -D_SYS_PROC_H_ -DVM_H -D_SYS_USER_H_
 AM_CPPFLAGS += -DZFS_DEBUG
 endif
 
