@@ -16,6 +16,7 @@
 /vnode_if*
 /bus_if.h
 /device_if.h
+/opt_global.h
 
 /export_syms
 /machine
