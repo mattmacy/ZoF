@@ -459,8 +459,11 @@ AC_DEFUN([ZFS_AC_DEFAULT_PACKAGE], [
 	AC_MSG_RESULT([$DEFAULT_PACKAGE])
 	AC_SUBST(DEFAULT_PACKAGE)
 
-	DEFAULT_INIT_DIR=$sysconfdir/init.d
 	AC_MSG_CHECKING([default init directory])
+	case "$VENDOR" in
+		freebsd)    DEFAULT_INIT_DIR=$sysconfdir/rc.d  ;;
+		*)          DEFAULT_INIT_DIR=$sysconfdir/init.d;;
+	esac
 	AC_MSG_RESULT([$DEFAULT_INIT_DIR])
 	AC_SUBST(DEFAULT_INIT_DIR)
 
