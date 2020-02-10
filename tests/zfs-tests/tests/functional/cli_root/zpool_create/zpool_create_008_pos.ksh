@@ -90,8 +90,8 @@ destroy_pool $TESTPOOL
 create_pool $TESTPOOL $DISK0 $DISK1
 log_must zpool export $TESTPOOL
 exported_pool=true
-log_mustnot zpool create $TESTPOOL1 $DISK3 spare $DISK1
-create_pool $TESTPOOL1 $DISK3 spare $DISK1
+log_mustnot zpool create $TESTPOOL1 $DISK1 spare $DISK2
+create_pool $TESTPOOL1 $DISK1 spare $DISK2
 force_pool=true
 destroy_pool $TESTPOOL1
 
