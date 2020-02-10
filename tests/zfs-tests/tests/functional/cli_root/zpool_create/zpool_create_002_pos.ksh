@@ -47,10 +47,8 @@ verify_runnable "global"
 
 function cleanup
 {
-	for pool in $TESTPOOL $TESTPOOL1 $TESTPOOL2 $TESTPOOL3 $TESTPOOL4 \
-		$TESTPOOL5 $TESTPOOL6
-	do
-		destroy_pool $pool
+	for pool in $TESTPOOL $TESTPOOL1; do
+		pool_exists $pool && destroy_pool $pool
 	done
 
 	rm -f $filedisk0 $filedisk1
@@ -67,12 +65,8 @@ log_assert "'zpool create -f <pool> <vspec> ...' can successfully create" \
 
 create_pool $TESTPOOL $DISK0
 log_must eval "new_fs ${DEV_RDSKDIR}/${DISK1} >/dev/null 2>&1"
-if is_freebsd; then
-	log_must mkdir -p $TESTDIR
-	log_must mount ${DEV_DSKDIR}/${DISK1} $TESTDIR
-fi
 typeset filedisk0=$(create_blockfile $FILESIZE)
-typeset filedisk1=$(create_blockfile $FILESIZE)
+typeset filedisk1=$(create_blockfile $FILESIZE1)
 
 unset NOINUSE_CHECK
 log_must zpool export $TESTPOOL
@@ -82,31 +76,53 @@ log_mustnot zpool create $TESTPOOL1 $DISK0
 create_pool $TESTPOOL1 $DISK0
 log_must poolexists $TESTPOOL1
 
+log_must destroy_pool $TESTPOOL1
+
 log_note "'zpool create' without '-f' will fail " \
 	"while device is in use by a ufs filesystem."
-log_mustnot zpool create $TESTPOOL2 $DISK1
-create_pool $TESTPOOL2 $DISK1
-log_must poolexists $TESTPOOL2
+if is_freebsd; then
+	# fs must be mounted for create to fail on FreeBSD
+	log_must mkdir -p $TESTDIR
+	log_must mount ${DEV_DSKDIR}/${DISK1} $TESTDIR
+fi
+log_mustnot zpool create $TESTPOOL $DISK1
+if is_freebsd; then
+	# fs must not be mounted to create pool even with -f
+	log_must umount -f $TESTDIR
+	log_must rm -rf $TESTDIR
+fi
+create_pool $TESTPOOL $DISK1
+log_must poolexists $TESTPOOL
+
+log_must destroy_pool $TESTPOOL
 
 log_note "'zpool create' mirror without '-f' will fail " \
 	"while devices have different size."
-log_mustnot zpool create $TESTPOOL3 mirror $filedisk0 $filedisk1
-create_pool $TESTPOOL3 mirror $filedisk0 $filedisk1
-log_must poolexists $TESTPOOL3
+log_mustnot zpool create $TESTPOOL mirror $filedisk0 $filedisk1
+create_pool $TESTPOOL mirror $filedisk0 $filedisk1
+log_must poolexists $TESTPOOL
 
-log_note "'zpool create' mirror without '-f' will fail " \
-	"while devices are of different types."
-log_mustnot zpool create $TESTPOOL4 mirror $filedisk0 $DISK2
-create_pool $TESTPOOL4 mirror $filedisk0 $DISK2
-log_must poolexists $TESTPOOL4
+log_must destroy_pool $TESTPOOL
+
+if ! is_freebsd; then
+	log_note "'zpool create' mirror without '-f' will fail " \
+		"while devices are of different types."
+	log_mustnot zpool create $TESTPOOL mirror $filedisk0 $DISK0
+	create_pool $TESTPOOL mirror $filedisk0 $DISK0
+	log_must poolexists $TESTPOOL
+
+	log_must destroy_pool $TESTPOOL
+fi
 
 log_note "'zpool create' without '-f' will fail " \
 	"while a device is part of a potentially active pool."
-create_pool $TESTPOOL5 mirror $filedisk0 $filedisk1
-log_must zpool offline $TESTPOOL5 $filedisk1
-log_must zpool export $TESTPOOL5
-log_mustnot zpool create $TESTPOOL6 $filedisk1
-create_pool $TESTPOOL6 $filedisk1
-log_must poolexists $TESTPOOL6
+create_pool $TESTPOOL mirror $DISK0 $DISK1
+log_must zpool offline $TESTPOOL $DISK0
+log_must zpool export $TESTPOOL
+log_mustnot zpool create $TESTPOOL1 $DISK0
+create_pool $TESTPOOL1 $DISK0
+log_must poolexists $TESTPOOL1
+
+log_must destroy_pool $TESTPOOL1
 
 log_pass "'zpool create -f <pool> <vspec> ...' success."
