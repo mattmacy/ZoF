@@ -54,6 +54,10 @@ function cleanup
 	done
 
 	rm -f $filedisk0 $filedisk1
+	if is_freebsd; then
+		umount -f $TESTDIR
+		rm -rf $TESTDIR
+	fi
 }
 
 log_onexit cleanup
@@ -63,6 +67,10 @@ log_assert "'zpool create -f <pool> <vspec> ...' can successfully create" \
 
 create_pool $TESTPOOL $DISK0
 log_must eval "new_fs ${DEV_RDSKDIR}/${DISK1} >/dev/null 2>&1"
+if is_freebsd; then
+	log_must mkdir -p $TESTDIR
+	log_must mount ${DEV_DSKDIR}/${DISK1} $TESTDIR
+fi
 typeset filedisk0=$(create_blockfile $FILESIZE)
 typeset filedisk1=$(create_blockfile $FILESIZE)
 
