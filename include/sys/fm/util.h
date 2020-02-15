@@ -75,8 +75,6 @@ typedef struct erpt_dump {
 
 typedef void zevent_cb_t(nvlist_t *, nvlist_t *);
 
-extern int zfs_zevent_len_max;
-
 typedef struct zevent_s {
 	nvlist_t	*ev_nvl;	/* protected by the zevent_lock */
 	nvlist_t	*ev_detector;	/* " */
