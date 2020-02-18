@@ -50,8 +50,6 @@ extern int zfs_create(znode_t *dzp, char *name, vattr_t *vap, int excl,
     int mode, znode_t **zpp, cred_t *cr, int flag, vsecattr_t *vsecp);
 extern int zfs_setsecattr(znode_t *zp, vsecattr_t *vsecp, int flag,
     cred_t *cr);
-ssize_t zpl_write_common(vnode_t *vp, char *buf, size_t len, loff_t *ppos,
-    uio_seg_t segment, int flags, cred_t *cr);
 extern int zfs_write_simple(znode_t *zp, const void *data, size_t len,
     loff_t pos, size_t *resid);
 
