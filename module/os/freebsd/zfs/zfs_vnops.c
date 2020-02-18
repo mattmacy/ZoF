@@ -1233,54 +1233,6 @@ zfs_write_simple(znode_t *zp, const void *data, size_t len,
 	return (error);
 }
 
-static ssize_t
-zpl_write_common_iovec(vnode_t *ip, struct iovec *iovp, size_t count,
-    unsigned long nr_segs, loff_t *ppos, uio_seg_t segment, int flags,
-    cred_t *cr, size_t skip)
-{
-	ssize_t wrote;
-	uio_t uio = { 0 };
-	int error;
-	fstrans_cookie_t cookie;
-
-#ifdef notyet
-	if (flags & O_APPEND)
-		*ppos = i_size_read(ip);
-#endif
-	uio.uio_iov = iovp;
-	uio.uio_iovcnt = nr_segs;
-	uio.uio_loffset = *ppos;
-	uio.uio_segflg = segment;
-	// uio.uio_limit = MAXOFFSET_T;
-	uio.uio_resid = count;
-	uio.uio_rw = UIO_WRITE;
-	// uio.uio_skip = skip;
-
-	cookie = spl_fstrans_mark();
-	error = -zfs_write(ip, &uio, flags, cr);
-	spl_fstrans_unmark(cookie);
-	if (error < 0)
-		return (error);
-
-	wrote = count - uio.uio_resid;
-	*ppos += wrote;
-
-	return (wrote);
-}
-
-inline ssize_t
-zpl_write_common(vnode_t *ip, char *buf, size_t len, loff_t *ppos,
-    uio_seg_t segment, int flags, cred_t *cr)
-{
-	struct iovec iov;
-
-	iov.iov_base = (void *)buf;
-	iov.iov_len = len;
-
-	return (zpl_write_common_iovec(ip, &iov, len, 1, ppos, segment,
-	    flags, cr, 0));
-}
-
 void
 zfs_get_done(zgd_t *zgd, int error)
 {
