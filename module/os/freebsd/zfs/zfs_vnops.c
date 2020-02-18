@@ -887,11 +887,10 @@ zfs_write(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cr)
 	    &zp->z_pflags, 8);
 
 	/*
-	 * In a case vp->v_vfsp != zp->z_zfsvfs->z_vfs (e.g. snapshots) our
-	 * callers might not be able to detect properly that we are read-only,
+	 * Callers might not be able to detect properly that we are read-only,
 	 * so check it explicitly here.
 	 */
-	if (zfsvfs->z_vfs->vfs_flag & VFS_RDONLY) {
+	if (zfs_is_readonly(zfsvfs)) {
 		ZFS_EXIT(zfsvfs);
 		return (SET_ERROR(EROFS));
 	}
