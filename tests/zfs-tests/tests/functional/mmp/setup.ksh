@@ -24,7 +24,7 @@
 verify_runnable "global"
 
 if [ -e $HOSTID_FILE ]; then
-	log_must mv $HOSTID_FILE ${HOSTID_FILE}.bak
+	log_unsupported "System has existing $HOSTID_FILE file"
 fi
 
 log_must set_tunable64 MULTIHOST_HISTORY $MMP_HISTORY
