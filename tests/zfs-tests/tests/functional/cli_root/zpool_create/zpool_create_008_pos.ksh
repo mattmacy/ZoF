@@ -61,14 +61,6 @@ function cleanup
 	if poolexists $TESTPOOL1 ; then
                 destroy_pool $TESTPOOL1
 	fi
-
-	if is_linux; then
-		#
-		# recover it back to EFI label
-		#
-		create_pool $TESTPOOL $DISK0
-		destroy_pool $TESTPOOL
-	fi
 }
 
 log_assert "'zpool create' have to use '-f' scenarios"

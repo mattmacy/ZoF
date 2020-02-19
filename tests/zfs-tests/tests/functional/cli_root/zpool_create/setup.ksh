@@ -34,8 +34,4 @@
 
 verify_runnable "global"
 
-for disk in $DISKSARRAY; do
-	cleanup_devices $disk
-done
-
 log_pass
