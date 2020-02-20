@@ -4516,53 +4516,6 @@ zfs_link(znode_t *tdzp, znode_t *szp, char *name, cred_t *cr,
 	ZFS_EXIT(zfsvfs);
 	return (error);
 }
-/*
- * convoff - converts the given data (start, whence) to the
- * given whence.
- */
-int
-convoff(vnode_t *ip, flock64_t *lckdat, int  whence, offset_t offset)
-{
-	vattr_t vap;
-	int error;
-
-	if ((lckdat->l_whence == SEEK_END) || (whence == SEEK_END)) {
-		if ((error = zfs_getattr(ip, &vap, 0, CRED())))
-			return (error);
-	}
-
-	switch (lckdat->l_whence) {
-	case SEEK_CUR:
-		lckdat->l_start += offset;
-		break;
-	case SEEK_END:
-		lckdat->l_start += vap.va_size;
-		/* FALLTHRU */
-	case SEEK_SET:
-		break;
-	default:
-		return (SET_ERROR(EINVAL));
-	}
-
-	if (lckdat->l_start < 0)
-		return (SET_ERROR(EINVAL));
-
-	switch (whence) {
-	case SEEK_CUR:
-		lckdat->l_start -= offset;
-		break;
-	case SEEK_END:
-		lckdat->l_start -= vap.va_size;
-		/* FALLTHRU */
-	case SEEK_SET:
-		break;
-	default:
-		return (SET_ERROR(EINVAL));
-	}
-
-	lckdat->l_whence = (short)whence;
-	return (0);
-}
 
 /*
  * Free or allocate space in a file.  Currently, this function only
@@ -4606,11 +4559,6 @@ zfs_space(znode_t *zp, int cmd, flock64_t *bfp, int flag,
 	if (zfs_is_readonly(zfsvfs)) {
 		ZFS_EXIT(zfsvfs);
 		return (SET_ERROR(EROFS));
-	}
-
-	if ((error = convoff(ZTOV(zp), bfp, SEEK_SET, offset))) {
-		ZFS_EXIT(zfsvfs);
-		return (error);
 	}
 
 	if (bfp->l_len < 0) {
