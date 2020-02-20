@@ -56,8 +56,7 @@ sa_fini(sa_handle_t handle)
 int
 sa_parse_legacy_options(sa_group_t group, char *options, char *proto)
 {
-
-	return (SA_INVALID_PROTOCOL);
+	return (SA_OK);
 }
 
 
