@@ -997,7 +997,8 @@ zvol_cdev_ioctl(struct cdev *dev, ulong_t cmd, caddr_t data,
 		*(off_t *)data = zv->zv_volsize;
 		break;
 	case DIOCGFLUSH:
-		zil_commit(zv->zv_zilog, ZVOL_OBJ);
+		if (zv->zv_zilog != NULL)
+			zil_commit(zv->zv_zilog, ZVOL_OBJ);
 		break;
 	case DIOCGDELETE:
 		if (!zvol_unmap_enabled)
@@ -1013,7 +1014,17 @@ zvol_cdev_ioctl(struct cdev *dev, ulong_t cmd, caddr_t data,
 			error = EINVAL;
 			break;
 		}
-
+		rw_enter(&zv->zv_suspend_lock, RW_READER);
+		if (zv->zv_zilog == NULL) {
+			rw_exit(&zv->zv_suspend_lock);
+			rw_enter(&zv->zv_suspend_lock, RW_WRITER);
+			if (zv->zv_zilog == NULL) {
+				zv->zv_zilog = zil_open(zv->zv_objset,
+				    zvol_get_data);
+				zv->zv_flags |= ZVOL_WRITTEN_TO;
+			}
+			rw_downgrade(&zv->zv_suspend_lock);
+		}
 		lr = zfs_rangelock_enter(&zv->zv_rangelock, offset, length,
 		    RL_WRITER);
 		dmu_tx_t *tx = dmu_tx_create(zv->zv_objset);
@@ -1031,6 +1042,7 @@ zvol_cdev_ioctl(struct cdev *dev, ulong_t cmd, caddr_t data,
 		zfs_rangelock_exit(lr);
 		if (sync)
 			zil_commit(zv->zv_zilog, ZVOL_OBJ);
+		rw_exit(&zv->zv_suspend_lock);
 		break;
 	case DIOCGSTRIPESIZE:
 		*(off_t *)data = zv->zv_volblocksize;
