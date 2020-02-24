@@ -89,7 +89,7 @@ while (( $i < ${#args[*]} )); do
 			continue
 		fi
 	fi
-	log_mustnot zpool create -O ${args[i]} -f $TESTPOOL $DISKS
+	log_mustnot zpool create -O $arg -f $TESTPOOL $DISKS
 	((i = i + 1))
 done
 
