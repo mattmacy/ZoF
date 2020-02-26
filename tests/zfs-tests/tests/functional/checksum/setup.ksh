@@ -33,5 +33,4 @@
 
 verify_runnable "global"
 
-truncate -s 1G $TEST_BASE_DIR/disk0 $TEST_BASE_DIR/disk1
-default_mirror_setup $TEST_BASE_DIR/disk0 $TEST_BASE_DIR/disk1
+default_mirror_setup $DISKS

@@ -80,7 +80,7 @@ while [[ $i -lt ${#CHECKSUM_TYPES[*]} ]]; do
 done
 
 log_must zpool export $TESTPOOL
-log_must zpool import -d $TEST_BASE_DIR $TESTPOOL
+log_must zpool import $TESTPOOL
 log_must zpool scrub $TESTPOOL
 log_must wait_scrubbed $TESTPOOL
 

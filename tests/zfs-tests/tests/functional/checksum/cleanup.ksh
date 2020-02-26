@@ -36,4 +36,3 @@
 verify_runnable "global"
 
 default_cleanup
-rm -f $TEST_BASE_DIR/disk0 $TEST_BASE_DIR/disk1
