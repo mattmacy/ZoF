@@ -95,6 +95,9 @@ zfs_file_write_impl(zfs_file_t *fp, const void *buf, size_t count, loff_t *offp,
 	auio.uio_td = td;
 	auio.uio_offset = *offp;
 
+	if ((fp->f_flag & FWRITE) == 0)
+		return (SET_ERROR(EBADF));
+
 	if (fp->f_type == DTYPE_VNODE)
 		bwillwrite();
 
@@ -148,6 +151,9 @@ zfs_file_read_impl(zfs_file_t *fp, void *buf, size_t count, loff_t *offp,
 	auio.uio_rw = UIO_READ;
 	auio.uio_td = td;
 	auio.uio_offset = *offp;
+
+	if ((fp->f_flag & FREAD) == 0)
+		return (SET_ERROR(EBADF));
 
 	rc = fo_read(fp, &auio, td->td_ucred, FOF_OFFSET, td);
 	if (rc)
