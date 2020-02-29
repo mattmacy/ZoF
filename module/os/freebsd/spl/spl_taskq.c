@@ -37,9 +37,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/queue.h>
 #include <sys/taskqueue.h>
 #include <sys/taskq.h>
+#include <sys/zfs_context.h>
 
 #include <vm/uma.h>
 
+static uint_t taskq_tsd;
 static uma_zone_t taskq_zone;
 
 taskq_t *system_taskq = NULL;
@@ -53,6 +55,7 @@ static void
 system_taskq_init(void *arg)
 {
 
+	tsd_create(&taskq_tsd, NULL);
 	taskq_zone = uma_zcreate("taskq_zone", sizeof (taskq_ent_t),
 	    NULL, NULL, NULL, NULL, 0, 0);
 	system_taskq = taskq_create("system_taskq", mp_ncpus, minclsyspri,
@@ -69,9 +72,18 @@ system_taskq_fini(void *arg)
 
 	taskq_destroy(system_taskq);
 	uma_zdestroy(taskq_zone);
+	tsd_destroy(&taskq_tsd);
 }
 SYSUNINIT(system_taskq_fini, SI_SUB_CONFIGURE, SI_ORDER_ANY, system_taskq_fini,
     NULL);
+
+static void
+taskq_tsd_set(void *context)
+{
+	taskq_t *tq = context;
+
+	tsd_set(taskq_tsd, tq);
+}
 
 static taskq_t *
 taskq_create_with_init(const char *name, int nthreads, pri_t pri,
@@ -85,6 +97,10 @@ taskq_create_with_init(const char *name, int nthreads, pri_t pri,
 	tq = kmem_alloc(sizeof (*tq), KM_SLEEP);
 	tq->tq_queue = taskqueue_create(name, M_WAITOK,
 	    taskqueue_thread_enqueue, &tq->tq_queue);
+	taskqueue_set_callback(tq->tq_queue, TASKQUEUE_CALLBACK_TYPE_INIT,
+	    taskq_tsd_set, tq);
+	taskqueue_set_callback(tq->tq_queue, TASKQUEUE_CALLBACK_TYPE_SHUTDOWN,
+	    taskq_tsd_set, NULL);
 	(void) taskqueue_start_threads(&tq->tq_queue, nthreads, pri,
 	    "%s", name);
 
