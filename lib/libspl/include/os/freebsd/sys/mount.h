@@ -98,11 +98,8 @@
  * compatibility, MS_OVERLAY is defined to explicitly have the user
  * provide a flag (-O) to mount over a non empty directory.
  */
-#ifdef __FreeBSD__
-#define	MS_OVERLAY	0x0
-#else
 #define	MS_OVERLAY	0x00000004
-#endif
+
 /*
  * MS_CRYPT indicates that encryption keys should be loaded if they are not
  * already available. This is not defined in glibc, but it is never seen by

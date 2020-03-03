@@ -489,7 +489,7 @@ zfs_mount_at(zfs_handle_t *zhp, const char *options, int flags,
 	/*
 	 * Determine if the mountpoint is empty.  If so, refuse to perform the
 	 * mount.  We don't perform this check if 'remount' is
-	 * specified or if overlay option(-O) is given
+	 * specified or if overlay option (-O) is given
 	 */
 	if ((flags & MS_OVERLAY) == 0 && !remount &&
 	    !dir_is_empty(mountpoint)) {
