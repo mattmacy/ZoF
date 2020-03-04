@@ -151,7 +151,7 @@ taskq_cancel_id(taskq_t *tq, taskqid_t id)
 {
 	uint32_t pend;
 	int rc;
-	struct taskq_ent *ent = (void*)id;
+	taskq_ent_t *ent = (void*)id;
 
 	if (ent == NULL)
 		return (0);
@@ -179,7 +179,7 @@ taskqid_t
 taskq_dispatch_delay(taskq_t *tq, task_func_t func, void *arg,
     uint_t flags, clock_t expire_time)
 {
-	struct taskq_ent *task;
+	taskq_ent_t *task;
 	clock_t timo;
 	int mflag;
 
@@ -267,19 +267,19 @@ taskq_dispatch_ent(taskq_t *tq, task_func_t func, void *arg, uint32_t flags,
 void
 taskq_wait(taskq_t *tq)
 {
-	taskqueue_drain_all(tq->tq_queue);
+	taskqueue_quiesce(tq->tq_queue);
 }
 
 void
 taskq_wait_id(taskq_t *tq, taskqid_t id)
 {
-	taskq_wait(tq);
+	taskq_wait_outstanding(tq, id);
 }
 
 void
 taskq_wait_outstanding(taskq_t *tq, taskqid_t id __unused)
 {
-	taskq_wait(tq);
+	taskqueue_drain_all(tq->tq_queue);
 }
 
 int
