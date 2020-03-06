@@ -55,6 +55,13 @@ kstat_t *dbuf_ksp;
 
 typedef struct dbuf_stats {
 	/*
+	 * Statistics about partial buffer writes
+	 */
+	kstat_named_t buf_will_fill;
+	kstat_named_t buf_will_dirty;
+	kstat_named_t buf_will_dirty_cached;
+
+	/*
 	 * Various statistics about the size of the dbuf cache.
 	 */
 	kstat_named_t cache_count;
@@ -110,6 +117,9 @@ typedef struct dbuf_stats {
 } dbuf_stats_t;
 
 dbuf_stats_t dbuf_stats = {
+	{ "buf_will_fill",			KSTAT_DATA_UINT64 },
+	{ "buf_will_dirty",			KSTAT_DATA_UINT64 },
+	{ "buf_will_dirty_cached",		KSTAT_DATA_UINT64 },
 	{ "cache_count",			KSTAT_DATA_UINT64 },
 	{ "cache_size_bytes",			KSTAT_DATA_UINT64 },
 	{ "cache_size_bytes_max",		KSTAT_DATA_UINT64 },
@@ -2363,6 +2373,7 @@ dmu_buf_will_dirty_impl(dmu_buf_t *db_fake, int flags, dmu_tx_t *tx)
 	ASSERT(tx->tx_txg != 0);
 	ASSERT(!zfs_refcount_is_zero(&db->db_holds));
 
+	DBUF_STAT_BUMP(buf_will_dirty);
 	/*
 	 * Quick check for dirtiness.  For already dirty blocks, this
 	 * reduces runtime of this function by >90%, and overall performance
@@ -2373,6 +2384,8 @@ dmu_buf_will_dirty_impl(dmu_buf_t *db_fake, int flags, dmu_tx_t *tx)
 
 	if (db->db_state == DB_CACHED) {
 		dbuf_dirty_record_t *dr = dbuf_find_dirty_eq(db, tx->tx_txg);
+
+		DBUF_STAT_BUMP(buf_will_dirty_cached);
 		/*
 		 * It's possible that it is already dirty but not cached,
 		 * because there are some calls to dbuf_dirty() that don't
@@ -2436,7 +2449,7 @@ dmu_buf_will_fill(dmu_buf_t *db_fake, dmu_tx_t *tx)
 
 	ASSERT(db->db.db_object != DMU_META_DNODE_OBJECT ||
 	    dmu_tx_private_ok(tx));
-
+	DBUF_STAT_BUMP(buf_will_fill);
 	dbuf_noread(db);
 	(void) dbuf_dirty(db, tx);
 }
