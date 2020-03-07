@@ -187,11 +187,12 @@ taskq_cancel_id(taskq_t *tq, taskqid_t tid)
 	if (ent->tqent_type == TIMEOUT_TASK) {
 		rc = taskqueue_cancel_timeout(tq->tq_queue,
 		    &ent->tqent_timeout_task, &pend);
-		uma_zfree(taskq_zone, ent);
 	} else
 		rc = taskqueue_cancel(tq->tq_queue, &ent->tqent_task, &pend);
 	if (rc == EBUSY)
 		taskq_wait_id(tq, tid);
+	else
+		uma_zfree(taskq_zone, ent);
 	return (rc);
 }
 
@@ -201,9 +202,7 @@ taskq_run(void *arg, int pending __unused)
 	taskq_ent_t *task = arg;
 
 	task->tqent_func(task->tqent_arg);
-
-	if (task->tqent_type == NORMAL_TASK)
-		uma_zfree(taskq_zone, task);
+	uma_zfree(taskq_zone, task);
 }
 
 taskqid_t
