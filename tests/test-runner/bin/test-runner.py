@@ -308,7 +308,7 @@ User: %s
         self.result.runtime = '%02d:%02d' % (m, s)
         self.result.result = 'SKIP'
 
-    def log(self, options, *, suppress_console=False):
+    def log(self, options, suppress_console=False):
         """
         This function is responsible for writing all output. This includes
         the console output, the logfile of all results (with timestamped
