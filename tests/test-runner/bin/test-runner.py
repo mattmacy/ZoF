@@ -428,7 +428,7 @@ Tags: %s
         """
         Create Cmd instances for the pre/post/failsafe scripts. If the pre
         script doesn't pass, skip this Test. Run the post script regardless.
-        If the Test is run, also run the failsafe script.
+        If the Test is killed, also run the failsafe script.
         """
         odir = os.path.join(self.outputdir, os.path.basename(self.pre))
         pretest = Cmd(self.pre, identifier=self.identifier, outputdir=odir,
@@ -452,7 +452,7 @@ Tags: %s
 
         if cont:
             test.run(options.dryrun)
-            if len(failsafe.pathname):
+            if test.result.result == 'KILLED' and len(failsafe.pathname):
                 failsafe.run(options.dryrun)
                 failsafe.log(options, suppress_console=True)
         else:
@@ -546,7 +546,7 @@ Tags: %s
         """
         Create Cmd instances for the pre/post/failsafe scripts. If the pre
         script doesn't pass, skip all the tests in this TestGroup. Run the
-        post script regardless. Run the failsafe script after each test runs.
+        post script regardless. Run the failsafe script when a test is killed.
         """
         # tags assigned to this test group also include the test names
         if options.tags and not set(self.tags).intersection(set(options.tags)):
@@ -575,7 +575,7 @@ Tags: %s
                            user=self.failsafe_user, identifier=self.identifier)
             if cont:
                 test.run(options.dryrun)
-                if len(failsafe.pathname):
+                if test.result.result == 'KILLED' and len(failsafe.pathname):
                     failsafe.run(options.dryrun)
                     failsafe.log(options, suppress_console=True)
             else:
