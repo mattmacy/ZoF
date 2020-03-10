@@ -3190,7 +3190,7 @@ dbuf_dirty_record_create_bonus(dbuf_dirty_state_t *dds)
 	if (last_txg_is_frontend) {
 		dnode_t *dn = DB_DNODE(db);
 		int max_bonuslen = DN_SLOTS_TO_BONUSLEN(dn->dn_num_slots);
-		newest->dt.dl.dr_data = zio_buf_alloc(max_bonuslen);
+		newest->dt.dl.dr_data = kmem_alloc(max_bonuslen, KM_SLEEP);
 		arc_space_consume(max_bonuslen, ARC_SPACE_BONUS);
 		bcopy(db->db.db_data, newest->dt.dl.dr_data, max_bonuslen);
 	}
