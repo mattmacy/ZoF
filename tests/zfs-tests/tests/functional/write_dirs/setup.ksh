@@ -33,4 +33,6 @@
 
 verify_runnable "global"
 
-default_setup "$DISKS"
+DISK=${DISKS%% *}
+
+default_setup $DISK
