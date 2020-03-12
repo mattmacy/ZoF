@@ -49,7 +49,6 @@ AM_CPPFLAGS += -DTEXT_DOMAIN=\"zfs-linux-user\"
 endif
 if BUILD_FREEBSD
 AM_CPPFLAGS += -DTEXT_DOMAIN=\"zfs-freebsd-user\"
-AM_CPPFLAGS += -DZFS_DEBUG
 endif
 
 AM_LDFLAGS  = $(DEBUG_LDFLAGS)
