@@ -1,4 +1,3 @@
-
 /*
  * CDDL HEADER START
  *

@@ -1,4 +1,3 @@
-
 /*
  * Copyright (c) 2020 iX Systems, Inc.
  * All rights reserved.

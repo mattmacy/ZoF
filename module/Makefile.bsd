@@ -1,4 +1,3 @@
-
 .if !defined(WITH_CTF)
 WITH_CTF=1
 .endif
