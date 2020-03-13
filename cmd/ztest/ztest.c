@@ -650,7 +650,7 @@ nicenumtoull(const char *buf)
 		fval *= pow(2, str2shift(end));
 		/*
 		 * UINT64_MAX is not exactly representable as a double.
-		 * * The closest representation is UINT64_MAX + 1, so we
+		 * The closest representation is UINT64_MAX + 1, so we
 		 * use a >= comparison instead of > for the bounds check.
 		 */
 		if (fval >= (double)UINT64_MAX) {
