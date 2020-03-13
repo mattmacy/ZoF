@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020 iX Systems, Inc.
+ * Copyright (c) 2020 iXsystems, Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without

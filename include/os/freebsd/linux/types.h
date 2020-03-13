@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2010 Isilon Systems, Inc.
- * Copyright (c) 2010 iX Systems, Inc.
+ * Copyright (c) 2010 iXsystems, Inc.
  * Copyright (c) 2010 Panasas, Inc.
  * Copyright (c) 2013-2017 Mellanox Technologies, Ltd.
  * All rights reserved.
