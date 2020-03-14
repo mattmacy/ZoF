@@ -101,9 +101,11 @@
 #define	ZVOL_DUMPSIZE		"dumpsize"
 
 #ifdef ZVOL_LOCK_DEBUG
-#define	ZVOL_RW_READER RW_WRITER
+#define	ZVOL_RW_READER		RW_WRITER
+#define	ZVOL_RW_READ_HELD	RW_WRITE_HELD
 #else
-#define	ZVOL_RW_READER RW_READER
+#define	ZVOL_RW_READER		RW_READER
+#define	ZVOL_RW_READ_HELD	RW_READ_HELD
 #endif
 
 enum zvol_geom_state {
@@ -223,14 +225,18 @@ zvol_geom_open(struct g_provider *pp, int flag, int count)
 		return (SET_ERROR(EOPNOTSUPP));
 	}
 
+	ASSERT(!RW_LOCK_HELD(&zvol_state_lock));
+	rw_enter(&zvol_state_lock, ZVOL_RW_READER);
 	zv = pp->private;
 	if (zv == NULL) {
 		rw_exit(&zvol_state_lock);
 		return (SET_ERROR(ENXIO));
 	}
 
-	rw_enter(&zvol_state_lock, ZVOL_RW_READER);
+	ASSERT(!MUTEX_HELD(&zv->zv_state_lock));
 	mutex_enter(&zv->zv_state_lock);
+
+	ASSERT(zv->zv_zso->zso_volmode == ZFS_VOLMODE_GEOM);
 
 	/*
 	 * make sure zvol is not suspended during first open
@@ -252,7 +258,11 @@ zvol_geom_open(struct g_provider *pp, int flag, int count)
 		drop_suspend = B_FALSE;
 	}
 	rw_exit(&zvol_state_lock);
+
+	ASSERT(MUTEX_HELD(&zv->zv_state_lock));
+
 	if (zv->zv_open_count == 0) {
+		ASSERT(ZVOL_RW_READ_HELD(&zv->zv_suspend_lock));
 		err = zvol_first_open(zv, !(flag & FWRITE));
 		if (err)
 			goto out_mutex;
@@ -305,7 +315,6 @@ static int
 zvol_geom_close(struct g_provider *pp, int flag, int count)
 {
 	zvol_state_t *zv;
-	int error = 0;
 	boolean_t drop_suspend = B_TRUE;
 
 	ASSERT(!RW_LOCK_HELD(&zvol_state_lock));
@@ -323,11 +332,14 @@ zvol_geom_close(struct g_provider *pp, int flag, int count)
 		zv->zv_flags &= ~ZVOL_EXCL;
 	}
 
+	ASSERT(zv->zv_zso->zso_volmode == ZFS_VOLMODE_GEOM);
+
 	/*
 	 * If the open count is zero, this is a spurious close.
 	 * That indicates a bug in the kernel / DDI framework.
 	 */
 	ASSERT(zv->zv_open_count > 0);
+
 	/*
 	 * make sure zvol is not suspended during last close
 	 * (hold zv_suspend_lock) and respect proper lock acquisition
@@ -356,14 +368,16 @@ zvol_geom_close(struct g_provider *pp, int flag, int count)
 	 */
 	zv->zv_open_count -= count;
 
-	if (zv->zv_open_count == 0)
+	if (zv->zv_open_count == 0) {
+		ASSERT(ZVOL_RW_READ_HELD(&zv->zv_suspend_lock));
 		zvol_last_close(zv);
+	}
 
 	mutex_exit(&zv->zv_state_lock);
 
 	if (drop_suspend)
 		rw_exit(&zv->zv_suspend_lock);
-	return (error);
+	return (0);
 }
 
 static void
@@ -821,15 +835,24 @@ zvol_cdev_write(struct cdev *dev, struct uio *uio, int ioflag)
 static int
 zvol_cdev_open(struct cdev *dev, int flags, int fmt, struct thread *td)
 {
-	zvol_state_t *zv = dev->si_drv2;
-	struct zvol_state_dev *zsd = &zv->zv_zso->zso_dev;
+	zvol_state_t *zv;
+	struct zvol_state_dev *zsd;
 	int err = 0;
 	boolean_t drop_suspend = B_TRUE;
 
+	ASSERT(!RW_LOCK_HELD(&zvol_state_lock));
+	rw_enter(&zvol_state_lock, ZVOL_RW_READER);
+	zv = dev->si_drv2;
+	if (zv == NULL) {
+		rw_exit(&zvol_state_lock);
+		return (SET_ERROR(ENXIO));
+	}
+
+	ASSERT(!MUTEX_HELD(&zv->zv_state_lock));
+	mutex_enter(&zv->zv_state_lock);
+
 	ASSERT(zv->zv_zso->zso_volmode == ZFS_VOLMODE_DEV);
 
-	rw_enter(&zvol_state_lock, ZVOL_RW_READER);
-	mutex_enter(&zv->zv_state_lock);
 	/*
 	 * make sure zvol is not suspended during first open
 	 * (hold zv_suspend_lock) and respect proper lock acquisition
@@ -849,15 +872,17 @@ zvol_cdev_open(struct cdev *dev, int flags, int fmt, struct thread *td)
 	} else {
 		drop_suspend = B_FALSE;
 	}
-
 	rw_exit(&zvol_state_lock);
-	if (zv->zv_open_count == 0)
-		err = zvol_first_open(zv, !(flags & FWRITE));
 
-	if (err) {
-		goto out_locked;
-		return (err);
+	ASSERT(MUTEX_HELD(&zv->zv_state_lock));
+
+	if (zv->zv_open_count == 0) {
+		ASSERT(ZVOL_RW_READ_HELD(&zv->zv_suspend_lock));
+		err = zvol_first_open(zv, !(flags & FWRITE));
+		if (err)
+			goto out_locked;
 	}
+
 	if ((flags & FWRITE) && (zv->zv_flags & ZVOL_RDONLY)) {
 		err = EROFS;
 		goto out_opened;
@@ -878,6 +903,7 @@ zvol_cdev_open(struct cdev *dev, int flags, int fmt, struct thread *td)
 
 	zv->zv_open_count++;
 	if (flags & (FSYNC | FDSYNC)) {
+		zsd = &zv->zv_zso->zso_dev;
 		zsd->zsd_sync_cnt++;
 		if (zsd->zsd_sync_cnt == 1)
 			zil_async_to_sync(zv->zv_zilog, ZVOL_OBJ);
@@ -901,18 +927,25 @@ out_locked:
 static int
 zvol_cdev_close(struct cdev *dev, int flags, int fmt, struct thread *td)
 {
-	zvol_state_t *zv = dev->si_drv2;
-	struct zvol_state_dev *zsd = &zv->zv_zso->zso_dev;
+	zvol_state_t *zv;
+	struct zvol_state_dev *zsd;
 	boolean_t drop_suspend = B_TRUE;
 
-	ASSERT(zv->zv_zso->zso_volmode == ZFS_VOLMODE_DEV);
-
 	rw_enter(&zvol_state_lock, ZVOL_RW_READER);
+	zv = dev->si_drv2;
+	if (zv == NULL) {
+		rw_exit(&zvol_state_lock);
+		return (SET_ERROR(ENXIO));
+	}
+
+	ASSERT(!MUTEX_HELD(&zv->zv_state_lock));
 	mutex_enter(&zv->zv_state_lock);
 	if (zv->zv_flags & ZVOL_EXCL) {
 		ASSERT(zv->zv_open_count == 1);
 		zv->zv_flags &= ~ZVOL_EXCL;
 	}
+
+	ASSERT(zv->zv_zso->zso_volmode == ZFS_VOLMODE_DEV);
 
 	/*
 	 * If the open count is zero, this is a spurious close.
@@ -939,20 +972,27 @@ zvol_cdev_close(struct cdev *dev, int flags, int fmt, struct thread *td)
 		drop_suspend = B_FALSE;
 	}
 	rw_exit(&zvol_state_lock);
+
+	ASSERT(MUTEX_HELD(&zv->zv_state_lock));
+
 	/*
 	 * You may get multiple opens, but only one close.
 	 */
 	zv->zv_open_count--;
-	if (flags & (FSYNC | FDSYNC))
+	if (flags & (FSYNC | FDSYNC)) {
+		zsd = &zv->zv_zso->zso_dev;
 		zsd->zsd_sync_cnt--;
+	}
 
-	if (zv->zv_open_count == 0)
+	if (zv->zv_open_count == 0) {
+		ASSERT(ZVOL_RW_READ_HELD(&zv->zv_suspend_lock));
 		zvol_last_close(zv);
+	}
+
 	mutex_exit(&zv->zv_state_lock);
 
 	if (drop_suspend)
 		rw_exit(&zv->zv_suspend_lock);
-
 	return (0);
 }
 
@@ -1078,7 +1118,7 @@ zvol_cdev_ioctl(struct cdev *dev, ulong_t cmd, caddr_t data,
 static void
 zvol_ensure_zilog(zvol_state_t *zv)
 {
-	ASSERT(RW_LOCK_HELD(&zv->zv_suspend_lock));
+	ASSERT(ZVOL_RW_READ_HELD(&zv->zv_suspend_lock));
 
 	/*
 	 * Open a ZIL if this is the first time we have written to this
