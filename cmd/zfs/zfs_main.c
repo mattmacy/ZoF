@@ -4409,7 +4409,13 @@ zfs_do_send(int argc, char **argv)
 		char frombuf[ZFS_MAX_DATASET_NAME_LEN];
 
 		if (redactbook != NULL) {
-			if (strchr(argv[0], '@') == NULL) {
+			char bookname[ZFS_MAX_DATASET_NAME_LEN];
+			nvlist_t *redact_snaps;
+			zfs_handle_t *book_zhp;
+			char *snapname = argv[0];
+			char *at = strchr(snapname, '@');
+			int dsnamelen;
+			if (at == NULL) {
 				(void) fprintf(stderr, gettext("Error: Cannot "
 				    "do a redacted send to a filesystem.\n"));
 				return (1);
@@ -4420,6 +4426,26 @@ zfs_do_send(int argc, char **argv)
 				    "not contain '#'\n"));
 				return (1);
 			}
+			dsnamelen = at - snapname;
+			if (snprintf(bookname, sizeof (bookname), "%.*s#%s",
+			    dsnamelen, snapname, redactbook)
+			    >= sizeof (bookname)) {
+				(void) fprintf(stderr, gettext("Error: "
+				    "invalid bookmark name.\n"));
+				return (1);
+			}
+			book_zhp = zfs_open(g_zfs, bookname, ZFS_TYPE_BOOKMARK);
+			if (book_zhp == NULL)
+				return (1);
+			if (nvlist_lookup_nvlist(book_zhp->zfs_props,
+			    zfs_prop_to_name(ZFS_PROP_REDACT_SNAPS),
+			    &redact_snaps) != 0 || redact_snaps == NULL) {
+				zfs_close(book_zhp);
+				(void) fprintf(stderr, gettext("Error: "
+				    "not a redaction bookmark.\n"));
+				return (1);
+			}
+			zfs_close(book_zhp);
 		}
 
 		zhp = zfs_open(g_zfs, argv[0], ZFS_TYPE_DATASET);
