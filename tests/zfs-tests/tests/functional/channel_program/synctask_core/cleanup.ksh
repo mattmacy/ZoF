@@ -18,3 +18,5 @@
 
 default_cleanup_noexit
 destroy_pool testpool2
+
+log_pass

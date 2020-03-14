@@ -33,3 +33,5 @@
 
 default_cleanup_noexit
 rm -f $TEST_BASE_DIR/disk0
+
+log_pass
