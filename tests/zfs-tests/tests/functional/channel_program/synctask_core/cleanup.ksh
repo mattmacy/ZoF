@@ -16,5 +16,5 @@
 
 . $STF_SUITE/include/libtest.shlib
 
-default_cleanup
+default_cleanup_noexit
 destroy_pool testpool2
