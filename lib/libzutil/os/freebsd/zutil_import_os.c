@@ -90,6 +90,7 @@ update_vdev_config_dev_strs(nvlist_t *nv)
  */
 static const char * const blacklist_devs[] = {
 	"nfslock",
+	"sequencer",
 	"zfs",
 };
 #define	BLACKLIST_DIR		"/dev/"
@@ -112,7 +113,9 @@ zpool_open_func(void *arg)
 	if (strncmp(rn->rn_name, BLACKLIST_DIR, BLACKLIST_DIR_LEN) == 0) {
 		char *name = rn->rn_name + BLACKLIST_DIR_LEN;
 		for (i = 0; i < nitems(blacklist_devs); ++i) {
-			if (strcmp(name, blacklist_devs[i]) == 0) {
+			const char *badname = blacklist_devs[i];
+			size_t len = strlen(badname);
+			if (strncmp(name, badname, len) == 0) {
 				return;
 			}
 		}
