@@ -264,9 +264,7 @@ vdev_file_io_start(zio_t *zio)
 		int mode = 0;
 
 		ASSERT3U(zio->io_size, !=, 0);
-#ifdef __linux__
-		mode = FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE;
-#endif
+
 		/* XXX FreeBSD has no fallocate routine in file ops */
 		zio->io_error = zfs_file_fallocate(vf->vf_file,
 		    mode, zio->io_offset, zio->io_size);

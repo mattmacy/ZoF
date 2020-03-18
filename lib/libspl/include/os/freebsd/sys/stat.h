@@ -30,8 +30,6 @@
 
 #include <sys/mount.h> /* for BLKGETSIZE64 */
 
-#ifdef __FreeBSD__
-
 #define	stat64	stat
 
 #define	MAXOFFSET_T	OFF_MAX
@@ -52,9 +50,6 @@ fstat64(int fd, struct stat *sb)
 	return (ret);
 }
 #endif
-#endif
-
-
 
 /*
  * Emulate Solaris' behavior of returning the block device size in fstat64().

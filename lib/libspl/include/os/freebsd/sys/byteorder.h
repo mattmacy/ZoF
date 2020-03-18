@@ -40,7 +40,6 @@
 #ifndef _SYS_BYTEORDER_H
 #define	_SYS_BYTEORDER_H
 
-#ifdef __FreeBSD__
 /*
  * XXX FIXME
  * on FreeBSD _BIG_ENDIAN is defined on all architectures so we have
@@ -125,8 +124,6 @@ __bswap32_var(__uint32_t _x)
 #define	__htons(x)	__bswap16(x)
 #define	__ntohl(x)	__bswap32(x)
 #define	__ntohs(x)	__bswap16(x)
-
-#endif
 
 #include <sys/isa_defs.h>
 #include <sys/int_types.h>

@@ -219,12 +219,8 @@ zio_crypt_key_destroy_early(zio_crypt_key_t *key)
 	rw_destroy(&key->zk_salt_lock);
 
 	/* free crypto templates */
-#ifdef __FreeBSD__
 	bzero(&key->zk_session, sizeof (key->zk_session));
-#else
-	crypto_destroy_ctx_template(key->zk_current_tmpl);
-	crypto_destroy_ctx_template(key->zk_hmac_tmpl);
-#endif
+
 	/* zero out sensitive data */
 	bzero(key, sizeof (zio_crypt_key_t));
 }
@@ -248,12 +244,10 @@ zio_crypt_key_init(uint64_t crypt, zio_crypt_key_t *key)
 	ASSERT(key != NULL);
 	ASSERT3U(crypt, <, ZIO_CRYPT_FUNCTIONS);
 
-#ifdef __FreeBSD__
 	ci = &zio_crypt_table[crypt];
 	if (ci->ci_crypt_type != ZC_TYPE_GCM &&
 	    ci->ci_crypt_type != ZC_TYPE_CCM)
 		return (ENOTSUP);
-#endif
 
 	keydata_len = zio_crypt_table[crypt].ci_keylen;
 	bzero(key, sizeof (zio_crypt_key_t));
@@ -292,7 +286,6 @@ zio_crypt_key_init(uint64_t crypt, zio_crypt_key_t *key)
 	key->zk_hmac_key.ck_data = &key->zk_hmac_key;
 	key->zk_hmac_key.ck_length = CRYPTO_BYTES2BITS(SHA512_HMAC_KEYLEN);
 
-#ifdef __FreeBSD__
 	ci = &zio_crypt_table[crypt];
 	if (ci->ci_crypt_type != ZC_TYPE_GCM &&
 	    ci->ci_crypt_type != ZC_TYPE_CCM)
@@ -302,23 +295,6 @@ zio_crypt_key_init(uint64_t crypt, zio_crypt_key_t *key)
 	    &key->zk_current_key);
 	if (ret)
 		goto error;
-#else
-	/*
-	 * Initialize the crypto templates. It's ok if this fails because
-	 * this is just an optimization.
-	 */
-	mech.cm_type = crypto_mech2id(zio_crypt_table[crypt].ci_mechname);
-	ret = crypto_create_ctx_template(&mech, &key->zk_current_key,
-	    &key->zk_current_tmpl, KM_SLEEP);
-	if (ret != CRYPTO_SUCCESS)
-		key->zk_current_tmpl = NULL;
-
-	mech.cm_type = crypto_mech2id(SUN_CKM_SHA512_HMAC);
-	ret = crypto_create_ctx_template(&mech, &key->zk_hmac_key,
-	    &key->zk_hmac_tmpl, KM_SLEEP);
-	if (ret != CRYPTO_SUCCESS)
-		key->zk_hmac_tmpl = NULL;
-#endif
 
 	key->zk_crypt = crypt;
 	key->zk_version = ZIO_CRYPT_KEY_CURRENT_VERSION;
@@ -361,20 +337,11 @@ zio_crypt_key_change_salt(zio_crypt_key_t *key)
 	bcopy(salt, key->zk_salt, ZIO_DATA_SALT_LEN);
 	key->zk_salt_count = 0;
 
-#ifdef __FreeBSD__
 	freebsd_crypt_freesession(&key->zk_session);
 	ret = freebsd_crypt_newsession(&key->zk_session,
 	    &zio_crypt_table[key->zk_crypt], &key->zk_current_key);
 	if (ret != 0)
 		goto out_unlock;
-#else
-	/* destroy the old context template and create the new one */
-	crypto_destroy_ctx_template(key->zk_current_tmpl);
-	ret = crypto_create_ctx_template(&mech, &key->zk_current_key,
-	    &key->zk_current_tmpl, KM_SLEEP);
-	if (ret != CRYPTO_SUCCESS)
-		key->zk_current_tmpl = NULL;
-#endif
 
 	rw_exit(&key->zk_salt_lock);
 
@@ -423,7 +390,6 @@ int failed_decrypt_size;
  * ciphertext + room for a MAC. datalen should be the length of the
  * plaintext / ciphertext alone.
  */
-#ifdef __FreeBSD__
 /*
  * The implemenation for FreeBSD's OpenCrypto.
  *
@@ -463,114 +429,6 @@ zio_do_crypt_uio_opencrypto(boolean_t encrypt, freebsd_crypt_session_t *sess,
 
 	return (ret);
 }
-#else
-/* ARGSUSED */
-static int
-zio_do_crypt_uio(boolean_t encrypt, uint64_t crypt, crypto_key_t *key,
-    crypto_ctx_template_t tmpl, uint8_t *ivbuf, uint_t datalen,
-    uio_t *puio, uio_t *cuio, uint8_t *authbuf, uint_t auth_len)
-{
-	int ret;
-	crypto_data_t plaindata, cipherdata;
-	CK_AES_CCM_PARAMS ccmp;
-	CK_AES_GCM_PARAMS gcmp;
-	crypto_mechanism_t mech;
-	zio_crypt_info_t crypt_info;
-	uint_t plain_full_len, maclen;
-
-	ASSERT3U(crypt, <, ZIO_CRYPT_FUNCTIONS);
-	ASSERT3U(key->ck_format, ==, CRYPTO_KEY_RAW);
-
-	/* lookup the encryption info */
-	crypt_info = zio_crypt_table[crypt];
-
-	/* the mac will always be the last iovec_t in the cipher uio */
-	maclen = cuio->uio_iov[cuio->uio_iovcnt - 1].iov_len;
-
-	ASSERT(maclen <= ZIO_DATA_MAC_LEN);
-
-	/* setup encryption mechanism (same as crypt) */
-	mech.cm_type = crypto_mech2id(crypt_info.ci_mechname);
-
-	/*
-	 * Strangely, the ICP requires that plain_full_len must include
-	 * the MAC length when decrypting, even though the UIO does not
-	 * need to have the extra space allocated.
-	 */
-	if (encrypt) {
-		plain_full_len = datalen;
-	} else {
-		plain_full_len = datalen + maclen;
-	}
-
-	/*
-	 * setup encryption params (currently only AES CCM and AES GCM
-	 * are supported)
-	 */
-	if (crypt_info.ci_crypt_type == ZC_TYPE_CCM) {
-		ccmp.ulNonceSize = ZIO_DATA_IV_LEN;
-		ccmp.ulAuthDataSize = auth_len;
-		ccmp.authData = authbuf;
-		ccmp.ulMACSize = maclen;
-		ccmp.nonce = ivbuf;
-		ccmp.ulDataSize = plain_full_len;
-
-		mech.cm_param = (char *)(&ccmp);
-		mech.cm_param_len = sizeof (CK_AES_CCM_PARAMS);
-	} else {
-		gcmp.ulIvLen = ZIO_DATA_IV_LEN;
-		gcmp.ulIvBits = CRYPTO_BYTES2BITS(ZIO_DATA_IV_LEN);
-		gcmp.ulAADLen = auth_len;
-		gcmp.pAAD = authbuf;
-		gcmp.ulTagBits = CRYPTO_BYTES2BITS(maclen);
-		gcmp.pIv = ivbuf;
-
-		mech.cm_param = (char *)(&gcmp);
-		mech.cm_param_len = sizeof (CK_AES_GCM_PARAMS);
-	}
-
-	/* populate the cipher and plain data structs. */
-	plaindata.cd_format = CRYPTO_DATA_UIO;
-	plaindata.cd_offset = 0;
-	plaindata.cd_uio = puio;
-	plaindata.cd_miscdata = NULL;
-	plaindata.cd_length = plain_full_len;
-
-	cipherdata.cd_format = CRYPTO_DATA_UIO;
-	cipherdata.cd_offset = 0;
-	cipherdata.cd_uio = cuio;
-	cipherdata.cd_miscdata = NULL;
-	cipherdata.cd_length = datalen + maclen;
-
-	/* perform the actual encryption */
-	if (encrypt) {
-		ret = crypto_encrypt(&mech, &plaindata, key, tmpl, &cipherdata,
-		    NULL);
-		if (ret != CRYPTO_SUCCESS) {
-			ret = SET_ERROR(EIO);
-			goto error;
-		}
-	} else {
-		if (zio_decrypt_fail_fraction != 0 &&
-		    spa_get_random(zio_decrypt_fail_fraction) == 0) {
-			ret = CRYPTO_INVALID_MAC;
-		} else {
-			ret = crypto_decrypt(&mech, &cipherdata,
-			    key, tmpl, &plaindata, NULL);
-		}
-		if (ret != CRYPTO_SUCCESS) {
-			ASSERT3U(ret, ==, CRYPTO_INVALID_MAC);
-			ret = SET_ERROR(ECKSUM);
-			goto error;
-		}
-	}
-
-	return (0);
-
-error:
-	return (ret);
-}
-#endif
 
 int
 zio_crypt_key_wrap(crypto_key_t *cwkey, zio_crypt_key_t *key, uint8_t *iv,
@@ -578,7 +436,6 @@ zio_crypt_key_wrap(crypto_key_t *cwkey, zio_crypt_key_t *key, uint8_t *iv,
 {
 	int ret;
 	uint64_t aad[3];
-#ifdef __FreeBSD__
 	/*
 	 * With OpenCrypto in FreeBSD, the same buffer is used for
 	 * input and output.  Also, the AAD (for AES-GMC at least)
@@ -586,10 +443,6 @@ zio_crypt_key_wrap(crypto_key_t *cwkey, zio_crypt_key_t *key, uint8_t *iv,
 	 */
 	uio_t cuio;
 	iovec_t iovecs[4];
-#else
-	uio_t puio, cuio;
-	iovec_t plain_iovecs[2], cipher_iovecs[3];
-#endif
 	uint64_t crypt = key->zk_crypt;
 	uint_t enc_len, keydata_len, aad_len;
 
@@ -603,7 +456,6 @@ zio_crypt_key_wrap(crypto_key_t *cwkey, zio_crypt_key_t *key, uint8_t *iv,
 	if (ret != 0)
 		goto error;
 
-#ifdef __FreeBSD__
 	/*
 	 * Since we only support one buffer, we need to copy
 	 * the plain text (source) to the cipher buffer (dest).
@@ -618,20 +470,6 @@ zio_crypt_key_wrap(crypto_key_t *cwkey, zio_crypt_key_t *key, uint8_t *iv,
 	iovecs[2].iov_len = SHA512_HMAC_KEYLEN;
 	iovecs[3].iov_base = mac;
 	iovecs[3].iov_len = WRAPPING_MAC_LEN;
-#else
-	/* initialize uio_ts */
-	plain_iovecs[0].iov_base = (char *)key->zk_master_keydata;
-	plain_iovecs[0].iov_len = keydata_len;
-	plain_iovecs[1].iov_base = (char *)key->zk_hmac_keydata;
-	plain_iovecs[1].iov_len = SHA512_HMAC_KEYLEN;
-
-	cipher_iovecs[0].iov_base = (char *)keydata_out;
-	cipher_iovecs[0].iov_len = keydata_len;
-	cipher_iovecs[1].iov_base = (char *)hmac_keydata_out;
-	cipher_iovecs[1].iov_len = SHA512_HMAC_KEYLEN;
-	cipher_iovecs[2].iov_base = (char *)mac;
-	cipher_iovecs[2].iov_len = WRAPPING_MAC_LEN;
-#endif
 
 	/*
 	 * Although we don't support writing to the old format, we do
@@ -649,32 +487,17 @@ zio_crypt_key_wrap(crypto_key_t *cwkey, zio_crypt_key_t *key, uint8_t *iv,
 		aad[2] = LE_64(key->zk_version);
 	}
 
-#ifdef __FreeBSD__
 	iovecs[0].iov_base = aad;
 	iovecs[0].iov_len = aad_len;
-#endif
 	enc_len = zio_crypt_table[crypt].ci_keylen + SHA512_HMAC_KEYLEN;
 
-#ifdef __FreeBSD__
 	cuio.uio_iov = iovecs;
 	cuio.uio_iovcnt = 4;
 	cuio.uio_segflg = UIO_SYSSPACE;
-#else
-	puio.uio_iov = plain_iovecs;
-	puio.uio_iovcnt = 2;
-	puio.uio_segflg = UIO_SYSSPACE;
-	cuio.uio_iov = cipher_iovecs;
-	cuio.uio_iovcnt = 3;
-	cuio.uio_segflg = UIO_SYSSPACE;
-#endif
+
 	/* encrypt the keys and store the resulting ciphertext and mac */
-#ifdef __FreeBSD__
 	ret = zio_do_crypt_uio_opencrypto(B_TRUE, NULL, crypt, cwkey,
 	    iv, enc_len, &cuio, aad_len);
-#else
-	ret = zio_do_crypt_uio(B_TRUE, crypt, cwkey, NULL, iv, enc_len,
-	    &puio, &cuio, (uint8_t *)aad, aad_len);
-#endif
 	if (ret != 0)
 		goto error;
 
@@ -691,7 +514,6 @@ zio_crypt_key_unwrap(crypto_key_t *cwkey, uint64_t crypt, uint64_t version,
 {
 	int ret;
 	uint64_t aad[3];
-#ifdef __FreeBSD__
 	/*
 	 * With OpenCrypto in FreeBSD, the same buffer is used for
 	 * input and output.  Also, the AAD (for AES-GMC at least)
@@ -700,11 +522,6 @@ zio_crypt_key_unwrap(crypto_key_t *cwkey, uint64_t crypt, uint64_t version,
 	uio_t cuio;
 	iovec_t iovecs[4];
 	void *src, *dst;
-#else
-	uio_t puio, cuio;
-	crypto_mechanism_t mech;
-	iovec_t plain_iovecs[2], cipher_iovecs[3];
-#endif
 	uint_t enc_len, keydata_len, aad_len;
 
 	ASSERT3U(crypt, <, ZIO_CRYPT_FUNCTIONS);
@@ -713,7 +530,6 @@ zio_crypt_key_unwrap(crypto_key_t *cwkey, uint64_t crypt, uint64_t version,
 	keydata_len = zio_crypt_table[crypt].ci_keylen;
 	rw_init(&key->zk_salt_lock, NULL, RW_DEFAULT, NULL);
 
-#ifdef __FreeBSD__
 	/*
 	 * Since we only support one buffer, we need to copy
 	 * the encrypted buffer (source) to the plain buffer
@@ -736,21 +552,6 @@ zio_crypt_key_unwrap(crypto_key_t *cwkey, uint64_t crypt, uint64_t version,
 	iovecs[3].iov_base = mac;
 	iovecs[3].iov_len = WRAPPING_MAC_LEN;
 
-#else
-	/* initialize uio_ts */
-	plain_iovecs[0].iov_base = (char *)key->zk_master_keydata;
-	plain_iovecs[0].iov_len = keydata_len;
-	plain_iovecs[1].iov_base = (char *)key->zk_hmac_keydata;
-	plain_iovecs[1].iov_len = SHA512_HMAC_KEYLEN;
-
-	cipher_iovecs[0].iov_base = (char *)keydata;
-	cipher_iovecs[0].iov_len = keydata_len;
-	cipher_iovecs[1].iov_base = (char *)hmac_keydata;
-	cipher_iovecs[1].iov_len = SHA512_HMAC_KEYLEN;
-	cipher_iovecs[2].iov_base = (char *)mac;
-	cipher_iovecs[2].iov_len = WRAPPING_MAC_LEN;
-#endif
-
 	if (version == 0) {
 		aad_len = sizeof (uint64_t);
 		aad[0] = LE_64(guid);
@@ -763,31 +564,17 @@ zio_crypt_key_unwrap(crypto_key_t *cwkey, uint64_t crypt, uint64_t version,
 	}
 
 	enc_len = keydata_len + SHA512_HMAC_KEYLEN;
-#ifdef __FreeBSD__
 	iovecs[0].iov_base = aad;
 	iovecs[0].iov_len = aad_len;
 
 	cuio.uio_iov = iovecs;
 	cuio.uio_iovcnt = 4;
 	cuio.uio_segflg = UIO_SYSSPACE;
-#else
-	puio.uio_iov = plain_iovecs;
-	puio.uio_segflg = UIO_SYSSPACE;
-	puio.uio_iovcnt = 2;
-	cuio.uio_iov = cipher_iovecs;
-	cuio.uio_iovcnt = 3;
-	cuio.uio_segflg = UIO_SYSSPACE;
-#endif
 
 	/* decrypt the keys and store the result in the output buffers */
-#ifdef __FreeBSD__
 	ret = zio_do_crypt_uio_opencrypto(B_FALSE, NULL, crypt, cwkey,
 	    iv, enc_len, &cuio, aad_len);
 
-#else
-	ret = zio_do_crypt_uio(B_FALSE, crypt, cwkey, NULL, iv, enc_len,
-	    &puio, &cuio, (uint8_t *)aad, aad_len);
-#endif
 	if (ret != 0)
 		goto error;
 
@@ -812,28 +599,10 @@ zio_crypt_key_unwrap(crypto_key_t *cwkey, uint64_t crypt, uint64_t version,
 	key->zk_hmac_key.ck_data = key->zk_hmac_keydata;
 	key->zk_hmac_key.ck_length = CRYPTO_BYTES2BITS(SHA512_HMAC_KEYLEN);
 
-#ifdef __FreeBSD__
 	ret = freebsd_crypt_newsession(&key->zk_session,
 	    &zio_crypt_table[crypt], &key->zk_current_key);
 	if (ret != 0)
 		goto error;
-#else
-	/*
-	 * Initialize the crypto templates. It's ok if this fails because
-	 * this is just an optimization.
-	 */
-	mech.cm_type = crypto_mech2id(zio_crypt_table[crypt].ci_mechname);
-	ret = crypto_create_ctx_template(&mech, &key->zk_current_key,
-	    &key->zk_current_tmpl, KM_SLEEP);
-	if (ret != CRYPTO_SUCCESS)
-		key->zk_current_tmpl = NULL;
-
-	mech.cm_type = crypto_mech2id(SUN_CKM_SHA512_HMAC);
-	ret = crypto_create_ctx_template(&mech, &key->zk_hmac_key,
-	    &key->zk_hmac_tmpl, KM_SLEEP);
-	if (ret != CRYPTO_SUCCESS)
-		key->zk_hmac_tmpl = NULL;
-#endif
 
 	key->zk_crypt = crypt;
 	key->zk_version = version;
@@ -868,55 +637,16 @@ int
 zio_crypt_do_hmac(zio_crypt_key_t *key, uint8_t *data, uint_t datalen,
     uint8_t *digestbuf, uint_t digestlen)
 {
-	int ret;
-#ifndef __FreeBSD__
-	crypto_mechanism_t mech;
-	crypto_data_t in_data, digest_data;
-#endif
 	uint8_t raw_digestbuf[SHA512_DIGEST_LENGTH];
 
 	ASSERT3U(digestlen, <=, SHA512_DIGEST_LENGTH);
 
-#ifdef __FreeBSD__
 	crypto_mac(&key->zk_hmac_key, data, datalen,
 	    raw_digestbuf, SHA512_DIGEST_LENGTH);
-#else
-	/* initialize sha512-hmac mechanism and crypto data */
-	mech.cm_type = crypto_mech2id(SUN_CKM_SHA512_HMAC);
-	mech.cm_param = NULL;
-	mech.cm_param_len = 0;
-
-	/* initialize the crypto data */
-	in_data.cd_format = CRYPTO_DATA_RAW;
-	in_data.cd_offset = 0;
-	in_data.cd_length = datalen;
-	in_data.cd_raw.iov_base = (char *)data;
-	in_data.cd_raw.iov_len = in_data.cd_length;
-
-	digest_data.cd_format = CRYPTO_DATA_RAW;
-	digest_data.cd_offset = 0;
-	digest_data.cd_length = SHA512_DIGEST_LENGTH;
-	digest_data.cd_raw.iov_base = (char *)raw_digestbuf;
-	digest_data.cd_raw.iov_len = digest_data.cd_length;
-
-	/* generate the hmac */
-	ret = crypto_mac(&mech, &in_data, &key->zk_hmac_key, key->zk_hmac_tmpl,
-	    &digest_data, NULL);
-	if (ret != CRYPTO_SUCCESS) {
-		ret = SET_ERROR(EIO);
-		goto error;
-	}
-#endif
 
 	bcopy(raw_digestbuf, digestbuf, digestlen);
 
 	return (0);
-
-#ifndef __FreeBSD__
-error:
-#endif
-	bzero(digestbuf, digestlen);
-	return (ret);
 }
 
 int
@@ -1199,35 +929,13 @@ static int
 zio_crypt_bp_do_hmac_updates(crypto_context_t ctx, uint64_t version,
     boolean_t should_bswap, blkptr_t *bp)
 {
-	int ret;
 	uint_t bab_len;
 	blkptr_auth_buf_t bab;
-#ifndef __FreeBSD__
-	crypto_data_t cd;
-#endif
 
 	zio_crypt_bp_auth_init(version, should_bswap, bp, &bab, &bab_len);
-#ifdef __FreeBSD__
 	crypto_mac_update(ctx, &bab, bab_len);
-#else
-	cd.cd_format = CRYPTO_DATA_RAW;
-	cd.cd_offset = 0;
-	cd.cd_length = bab_len;
-	cd.cd_raw.iov_base = (char *)&bab;
-	cd.cd_raw.iov_len = cd.cd_length;
 
-	ret = crypto_mac_update(ctx, &cd, NULL);
-	if (ret != CRYPTO_SUCCESS) {
-		ret = SET_ERROR(EIO);
-		goto error;
-	}
-#endif
 	return (0);
-
-#ifndef __FreeBSD__
-error:
-#endif
-	return (ret);
 }
 
 static void
@@ -1261,15 +969,7 @@ zio_crypt_do_dnode_hmac_updates(crypto_context_t ctx, uint64_t version,
 	int ret, i;
 	dnode_phys_t *adnp;
 	boolean_t le_bswap = (should_bswap == ZFS_HOST_BYTEORDER);
-#ifndef __FreeBSD__
-	crypto_data_t cd;
-#endif
 	uint8_t tmp_dncore[offsetof(dnode_phys_t, dn_blkptr)];
-
-#ifndef __FreeBSD__
-	cd.cd_format = CRYPTO_DATA_RAW;
-	cd.cd_offset = 0;
-#endif
 
 	/* authenticate the core dnode (masking out non-portable bits) */
 	bcopy(dnp, tmp_dncore, sizeof (tmp_dncore));
@@ -1283,19 +983,7 @@ zio_crypt_do_dnode_hmac_updates(crypto_context_t ctx, uint64_t version,
 	adnp->dn_flags &= DNODE_CRYPT_PORTABLE_FLAGS_MASK;
 	adnp->dn_used = 0;
 
-#ifdef __FreeBSD__
 	crypto_mac_update(ctx, adnp, sizeof (tmp_dncore));
-#else
-	cd.cd_length = sizeof (tmp_dncore);
-	cd.cd_raw.iov_base = (char *)adnp;
-	cd.cd_raw.iov_len = cd.cd_length;
-
-	ret = crypto_mac_update(ctx, &cd, NULL);
-	if (ret != CRYPTO_SUCCESS) {
-		ret = SET_ERROR(EIO);
-		goto error;
-	}
-#endif
 
 	for (i = 0; i < dnp->dn_nblkptr; i++) {
 		ret = zio_crypt_bp_do_hmac_updates(ctx, version,
@@ -1347,56 +1035,21 @@ zio_crypt_do_objset_hmacs(zio_crypt_key_t *key, void *data, uint_t datalen,
     boolean_t should_bswap, uint8_t *portable_mac, uint8_t *local_mac)
 {
 	int ret;
-#ifdef __FreeBSD__
 	struct hmac_ctx hash_ctx;
 	struct hmac_ctx *ctx = &hash_ctx;
-#else
-	crypto_mechanism_t mech;
-	crypto_context_t ctx;
-	crypto_data_t cd;
-#endif
 	objset_phys_t *osp = data;
 	uint64_t intval;
 	boolean_t le_bswap = (should_bswap == ZFS_HOST_BYTEORDER);
 	uint8_t raw_portable_mac[SHA512_DIGEST_LENGTH];
 	uint8_t raw_local_mac[SHA512_DIGEST_LENGTH];
 
-#ifndef __FreeBSD__
-	/* initialize HMAC mechanism */
-	mech.cm_type = crypto_mech2id(SUN_CKM_SHA512_HMAC);
-	mech.cm_param = NULL;
-	mech.cm_param_len = 0;
-
-	cd.cd_format = CRYPTO_DATA_RAW;
-	cd.cd_offset = 0;
-#endif
 
 	/* calculate the portable MAC from the portable fields and metadnode */
-#ifdef __FreeBSD__
 	crypto_mac_init(ctx, &key->zk_hmac_key);
-#else
-	ret = crypto_mac_init(&mech, &key->zk_hmac_key, NULL, &ctx, NULL);
-	if (ret != CRYPTO_SUCCESS) {
-		ret = SET_ERROR(EIO);
-		goto error;
-	}
-#endif
 
 	/* add in the os_type */
 	intval = (le_bswap) ? osp->os_type : BSWAP_64(osp->os_type);
-#ifdef __FreeBSD__
 	crypto_mac_update(ctx, &intval, sizeof (uint64_t));
-#else
-	cd.cd_length = sizeof (uint64_t);
-	cd.cd_raw.iov_base = (char *)&intval;
-	cd.cd_raw.iov_len = cd.cd_length;
-
-	ret = crypto_mac_update(ctx, &cd, NULL);
-	if (ret != CRYPTO_SUCCESS) {
-		ret = SET_ERROR(EIO);
-		goto error;
-	}
-#endif
 
 	/* add in the portable os_flags */
 	intval = osp->os_flags;
@@ -1407,19 +1060,7 @@ zio_crypt_do_objset_hmacs(zio_crypt_key_t *key, void *data, uint_t datalen,
 	if (!ZFS_HOST_BYTEORDER)
 		intval = BSWAP_64(intval);
 
-#ifdef __FreeBSD__
 	crypto_mac_update(ctx, &intval, sizeof (uint64_t));
-#else
-	cd.cd_length = sizeof (uint64_t);
-	cd.cd_raw.iov_base = (char *)&intval;
-	cd.cd_raw.iov_len = cd.cd_length;
-
-	ret = crypto_mac_update(ctx, &cd, NULL);
-	if (ret != CRYPTO_SUCCESS) {
-		ret = SET_ERROR(EIO);
-		goto error;
-	}
-#endif
 
 	/* add in fields from the metadnode */
 	ret = zio_crypt_do_dnode_hmac_updates(ctx, key->zk_version,
@@ -1427,20 +1068,7 @@ zio_crypt_do_objset_hmacs(zio_crypt_key_t *key, void *data, uint_t datalen,
 	if (ret)
 		goto error;
 
-#ifdef __FreeBSD__
 	crypto_mac_final(ctx, raw_portable_mac, SHA512_DIGEST_LENGTH);
-#else
-	/* store the final digest in a temporary buffer and copy what we need */
-	cd.cd_length = SHA512_DIGEST_LENGTH;
-	cd.cd_raw.iov_base = (char *)raw_portable_mac;
-	cd.cd_raw.iov_len = cd.cd_length;
-
-	ret = crypto_mac_final(ctx, &cd, NULL);
-	if (ret != CRYPTO_SUCCESS) {
-		ret = SET_ERROR(EIO);
-		goto error;
-	}
-#endif
 
 	bcopy(raw_portable_mac, portable_mac, ZIO_OBJSET_MAC_LEN);
 
@@ -1461,15 +1089,7 @@ zio_crypt_do_objset_hmacs(zio_crypt_key_t *key, void *data, uint_t datalen,
 	}
 
 	/* calculate the local MAC from the userused and groupused dnodes */
-#ifdef __FreeBSD__
 	crypto_mac_init(ctx, &key->zk_hmac_key);
-#else
-	ret = crypto_mac_init(&mech, &key->zk_hmac_key, NULL, &ctx, NULL);
-	if (ret != CRYPTO_SUCCESS) {
-		ret = SET_ERROR(EIO);
-		goto error;
-	}
-#endif
 
 	/* add in the non-portable os_flags */
 	intval = osp->os_flags;
@@ -1480,19 +1100,7 @@ zio_crypt_do_objset_hmacs(zio_crypt_key_t *key, void *data, uint_t datalen,
 	if (!ZFS_HOST_BYTEORDER)
 		intval = BSWAP_64(intval);
 
-#ifdef __FreeBSD__
 	crypto_mac_update(ctx, &intval, sizeof (uint64_t));
-#else
-	cd.cd_length = sizeof (uint64_t);
-	cd.cd_raw.iov_base = (char *)&intval;
-	cd.cd_raw.iov_len = cd.cd_length;
-
-	ret = crypto_mac_update(ctx, &cd, NULL);
-	if (ret != CRYPTO_SUCCESS) {
-		ret = SET_ERROR(EIO);
-		goto error;
-	}
-#endif
 
 	/* XXX check dnode type ... */
 	/* add in fields from the user accounting dnodes */
@@ -1518,20 +1126,7 @@ zio_crypt_do_objset_hmacs(zio_crypt_key_t *key, void *data, uint_t datalen,
 			goto error;
 	}
 
-#ifdef __FreeBSD__
 	crypto_mac_final(ctx, raw_local_mac, SHA512_DIGEST_LENGTH);
-#else
-	/* store the final digest in a temporary buffer and copy what we need */
-	cd.cd_length = SHA512_DIGEST_LENGTH;
-	cd.cd_raw.iov_base = (char *)raw_local_mac;
-	cd.cd_raw.iov_len = cd.cd_length;
-
-	ret = crypto_mac_final(ctx, &cd, NULL);
-	if (ret != CRYPTO_SUCCESS) {
-		ret = SET_ERROR(EIO);
-		goto error;
-	}
-#endif
 
 	bcopy(raw_local_mac, local_mac, ZIO_OBJSET_MAC_LEN);
 
@@ -1635,7 +1230,6 @@ zio_crypt_do_indirect_mac_checksum_abd(boolean_t generate, abd_t *abd,
  * here is to encrypt everything except the blkptr_t of a lr_write_t and
  * the zil_chain_t header. Everything that is not encrypted is authenticated.
  */
-#ifdef __FreeBSD__
 /*
  * The OpenCrypto used in FreeBSD does not use seperate source and
  * destination buffers; instead, the same buffer is used.  Further, to
@@ -1645,17 +1239,12 @@ zio_crypt_do_indirect_mac_checksum_abd(boolean_t generate, abd_t *abd,
  * It also means we'll only return one uio_t, which we do via the clumsy
  * ifdef in the function declaration.
  */
-#endif
 
 /* ARGSUSED */
 static int
 zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
     uint8_t *cipherbuf, uint_t datalen, boolean_t byteswap, uio_t *puio,
-#ifdef __FreeBSD__
     uio_t *out_uio, uint_t *enc_len, uint8_t **authbuf, uint_t *auth_len,
-#else
-    uio_t *cuio, uint_t *enc_len, uint8_t **authbuf, uint_t *auth_len,
-#endif
     boolean_t *no_crypt)
 {
 	int ret;
@@ -1680,14 +1269,13 @@ zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
 		nr_src = 1;
 		nr_dst = 0;
 	}
-#ifdef __FreeBSD__
+
 	/*
 	 * We need at least two iovecs -- one for the AAD,
 	 * one for the MAC.
 	 */
 	bcopy(src, dst, datalen);
 	nr_dst = 2;
-#endif
 
 	/* find the start and end record of the log block */
 	zilc = (zil_chain_t *)src;
@@ -1712,11 +1300,7 @@ zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
 			nr_iovecs++;
 	}
 
-#ifdef __FreeBSD__
 	nr_src = 0;
-#else
-	nr_src += nr_iovecs;
-#endif
 	nr_dst += nr_iovecs;
 
 	/* allocate the iovec arrays */
@@ -1750,12 +1334,8 @@ zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
 	aad_len += sizeof (zil_chain_t) - sizeof (zio_eck_t);
 
 	/* loop over records again, filling in iovecs */
-#ifdef __FreeBSD__
 	/* The first one will contain the authbuf */
 	nr_iovecs = 1;
-#else
-	nr_iovecs = 0;
-#endif
 
 	slrp = src + sizeof (zil_chain_t);
 	dlrp = dst + sizeof (zil_chain_t);
@@ -1777,9 +1357,6 @@ zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
 		aadp += sizeof (lr_t);
 		aad_len += sizeof (lr_t);
 
-#ifndef __FreeBSD__
-		ASSERT3P(src_iovecs, !=, NULL);
-#endif
 		ASSERT3P(dst_iovecs, !=, NULL);
 
 		/*
@@ -1790,11 +1367,6 @@ zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
 		if (txtype == TX_WRITE) {
 			crypt_len = sizeof (lr_write_t) -
 			    sizeof (lr_t) - sizeof (blkptr_t);
-#ifndef __FreeBSD__
-			src_iovecs[nr_iovecs].iov_base = (char *)slrp +
-			    sizeof (lr_t);
-			src_iovecs[nr_iovecs].iov_len = crypt_len;
-#endif
 			dst_iovecs[nr_iovecs].iov_base = (char *)dlrp +
 			    sizeof (lr_t);
 			dst_iovecs[nr_iovecs].iov_len = crypt_len;
@@ -1812,11 +1384,6 @@ zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
 
 			if (lr_len != sizeof (lr_write_t)) {
 				crypt_len = lr_len - sizeof (lr_write_t);
-#ifndef __FreeBSD__
-				src_iovecs[nr_iovecs].iov_base = (char *)
-				    slrp + sizeof (lr_write_t);
-				src_iovecs[nr_iovecs].iov_len = crypt_len;
-#endif
 				dst_iovecs[nr_iovecs].iov_base = (char *)
 				    dlrp + sizeof (lr_write_t);
 				dst_iovecs[nr_iovecs].iov_len = crypt_len;
@@ -1825,11 +1392,6 @@ zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
 			}
 		} else {
 			crypt_len = lr_len - sizeof (lr_t);
-#ifndef __FreeBSD__
-			src_iovecs[nr_iovecs].iov_base = (char *)slrp +
-			    sizeof (lr_t);
-			src_iovecs[nr_iovecs].iov_len = crypt_len;
-#endif
 			dst_iovecs[nr_iovecs].iov_base = (char *)dlrp +
 			    sizeof (lr_t);
 			dst_iovecs[nr_iovecs].iov_len = crypt_len;
@@ -1842,27 +1404,11 @@ zio_crypt_init_uios_zil(boolean_t encrypt, uint8_t *plainbuf,
 	*enc_len = total_len;
 	*authbuf = aadbuf;
 	*auth_len = aad_len;
-#ifdef __FreeBSD__
 	dst_iovecs[0].iov_base = aadbuf;
 	dst_iovecs[0].iov_len = aad_len;
 
 	out_uio->uio_iov = dst_iovecs;
 	out_uio->uio_iovcnt = nr_dst;
-#else
-
-
-	if (encrypt) {
-		puio->uio_iov = src_iovecs;
-		puio->uio_iovcnt = nr_src;
-		cuio->uio_iov = dst_iovecs;
-		cuio->uio_iovcnt = nr_dst;
-	} else {
-		puio->uio_iov = dst_iovecs;
-		puio->uio_iovcnt = nr_dst;
-		cuio->uio_iov = src_iovecs;
-		cuio->uio_iovcnt = nr_src;
-	}
-#endif
 
 	return (0);
 
@@ -1879,13 +1425,9 @@ error:
 	*no_crypt = B_FALSE;
 	puio->uio_iov = NULL;
 	puio->uio_iovcnt = 0;
-#ifdef __FreeBSD__
 	out_uio->uio_iov = NULL;
 	out_uio->uio_iovcnt = 0;
-#else
-	cuio->uio_iov = NULL;
-	cuio->uio_iovcnt = 0;
-#endif
+
 	return (ret);
 }
 
@@ -1895,11 +1437,7 @@ error:
 static int
 zio_crypt_init_uios_dnode(boolean_t encrypt, uint64_t version,
     uint8_t *plainbuf, uint8_t *cipherbuf, uint_t datalen, boolean_t byteswap,
-#ifdef __FreeBSD__
     uio_t *puio, uio_t *out_uio, uint_t *enc_len, uint8_t **authbuf,
-#else
-    uio_t *puio, uio_t *cuio, uint_t *enc_len, uint8_t **authbuf,
-#endif
     uint_t *auth_len, boolean_t *no_crypt)
 {
 	int ret;
@@ -1923,10 +1461,8 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint64_t version,
 		nr_dst = 0;
 	}
 
-#ifdef __FreeBSD__
 	bcopy(src, dst, datalen);
 	nr_dst = 2;
-#endif
 
 	sdnp = (dnode_phys_t *)src;
 	ddnp = (dnode_phys_t *)dst;
@@ -1950,11 +1486,7 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint64_t version,
 		}
 	}
 
-#ifdef __FreeBSD__
 	nr_src = 0;
-#else
-	nr_src += nr_iovecs;
-#endif
 	nr_dst += nr_iovecs;
 
 	if (nr_src != 0) {
@@ -1975,11 +1507,7 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint64_t version,
 		bzero(dst_iovecs, nr_dst * sizeof (iovec_t));
 	}
 
-#ifdef __FreeBSD__
 	nr_iovecs = 1;
-#else
-	nr_iovecs = 0;
-#endif
 
 	/*
 	 * Iterate through the dnodes again, this time filling in the uios
@@ -2039,16 +1567,8 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint64_t version,
 		if (dnp->dn_type != DMU_OT_NONE &&
 		    DMU_OT_IS_ENCRYPTED(dnp->dn_bonustype) &&
 		    dnp->dn_bonuslen != 0) {
-#ifndef __FreeBSD__
-			ASSERT3U(nr_iovecs, <, nr_src);
-			ASSERT3P(src_iovecs, !=, NULL);
-#endif
 			ASSERT3U(nr_iovecs, <, nr_dst);
 			ASSERT3P(dst_iovecs, !=, NULL);
-#ifndef __FreeBSD__
-			src_iovecs[nr_iovecs].iov_base = DN_BONUS(dnp);
-			src_iovecs[nr_iovecs].iov_len = crypt_len;
-#endif
 			dst_iovecs[nr_iovecs].iov_base = DN_BONUS(&ddnp[i]);
 			dst_iovecs[nr_iovecs].iov_len = crypt_len;
 
@@ -2067,24 +1587,10 @@ zio_crypt_init_uios_dnode(boolean_t encrypt, uint64_t version,
 	*authbuf = aadbuf;
 	*auth_len = aad_len;
 
-#ifdef __FreeBSD__
 	dst_iovecs[0].iov_base = aadbuf;
 	dst_iovecs[0].iov_len = aad_len;
 	out_uio->uio_iov = dst_iovecs;
 	out_uio->uio_iovcnt = nr_dst;
-#else
-	if (encrypt) {
-		puio->uio_iov = src_iovecs;
-		puio->uio_iovcnt = nr_src;
-		cuio->uio_iov = dst_iovecs;
-		cuio->uio_iovcnt = nr_dst;
-	} else {
-		puio->uio_iov = dst_iovecs;
-		puio->uio_iovcnt = nr_dst;
-		cuio->uio_iov = src_iovecs;
-		cuio->uio_iovcnt = nr_src;
-	}
-#endif
 
 	return (0);
 
@@ -2099,45 +1605,22 @@ error:
 	*authbuf = NULL;
 	*auth_len = 0;
 	*no_crypt = B_FALSE;
-#ifdef __FreeBSD__
 	out_uio->uio_iov = NULL;
 	out_uio->uio_iovcnt = 0;
-#else
-	puio->uio_iov = NULL;
-	puio->uio_iovcnt = 0;
-	cuio->uio_iov = NULL;
-	cuio->uio_iovcnt = 0;
-#endif
+
 	return (ret);
 }
 
 /* ARGSUSED */
 static int
 zio_crypt_init_uios_normal(boolean_t encrypt, uint8_t *plainbuf,
-#ifdef __FreeBSD__
     uint8_t *cipherbuf, uint_t datalen, uio_t *puio, uio_t *out_uio,
-#else
-    uint8_t *cipherbuf, uint_t datalen, uio_t *puio, uio_t *cuio,
-#endif
     uint_t *enc_len)
 {
 	int ret;
 	uint_t nr_plain = 1, nr_cipher = 2;
 	iovec_t *plain_iovecs = NULL, *cipher_iovecs = NULL;
-#ifdef __FreeBSD__
 	void *src, *dst;
-
-//	nr_cipher = 3;
-#else
-
-	/* allocate the iovecs for the plain and cipher data */
-	plain_iovecs = kmem_alloc(nr_plain * sizeof (iovec_t),
-	    KM_SLEEP);
-	if (!plain_iovecs) {
-		ret = SET_ERROR(ENOMEM);
-		goto error;
-	}
-#endif
 
 	cipher_iovecs = kmem_alloc(nr_cipher * sizeof (iovec_t),
 	    KM_SLEEP);
@@ -2147,7 +1630,6 @@ zio_crypt_init_uios_normal(boolean_t encrypt, uint8_t *plainbuf,
 	}
 	bzero(cipher_iovecs, nr_cipher * sizeof (iovec_t));
 
-#ifdef __FreeBSD__
 	if (encrypt) {
 		src = plainbuf;
 		dst = cipherbuf;
@@ -2158,23 +1640,10 @@ zio_crypt_init_uios_normal(boolean_t encrypt, uint8_t *plainbuf,
 	bcopy(src, dst, datalen);
 	cipher_iovecs[0].iov_base = dst;
 	cipher_iovecs[0].iov_len = datalen;
-#else
-	plain_iovecs[0].iov_base = (void *)plainbuf;
-	plain_iovecs[0].iov_len = datalen;
-	cipher_iovecs[0].iov_base = (void *)cipherbuf;
-	cipher_iovecs[0].iov_len = datalen;
-#endif
 
 	*enc_len = datalen;
-#ifdef __FreeBSD__
 	out_uio->uio_iov = cipher_iovecs;
 	out_uio->uio_iovcnt = nr_cipher;
-#else
-	puio->uio_iov = plain_iovecs;
-	puio->uio_iovcnt = nr_plain;
-	cuio->uio_iov = cipher_iovecs;
-	cuio->uio_iovcnt = nr_cipher;
-#endif
 
 	return (0);
 
@@ -2185,15 +1654,9 @@ error:
 		kmem_free(cipher_iovecs, nr_cipher * sizeof (iovec_t));
 
 	*enc_len = 0;
-#ifdef __FreeBSD__
 	out_uio->uio_iov = NULL;
 	out_uio->uio_iovcnt = 0;
-#else
-	puio->uio_iov = NULL;
-	puio->uio_iovcnt = 0;
-	cuio->uio_iov = NULL;
-	cuio->uio_iovcnt = 0;
-#endif
+
 	return (ret);
 }
 
@@ -2241,9 +1704,6 @@ zio_crypt_init_uios(boolean_t encrypt, uint64_t version, dmu_object_type_t ot,
 		goto error;
 
 	/* populate the uios */
-#ifndef __FreeBSD__
-	puio->uio_segflg = UIO_SYSSPACE;
-#endif
 	cuio->uio_segflg = UIO_SYSSPACE;
 
 	mac_iov = ((iovec_t *)&cuio->uio_iov[cuio->uio_iovcnt - 1]);
@@ -2276,11 +1736,7 @@ zio_do_crypt_data(boolean_t encrypt, zio_crypt_key_t *key,
 	uio_t puio, cuio;
 	uint8_t enc_keydata[MASTER_KEY_MAX_LEN];
 	crypto_key_t tmp_ckey, *ckey = NULL;
-#ifdef __FreeBSD__
 	freebsd_crypt_session_t *tmpl = NULL;
-#else
-	crypto_ctx_template_t tmpl;
-#endif
 	uint8_t *authbuf = NULL;
 
 	bzero(&puio, sizeof (uio_t));
@@ -2317,11 +1773,7 @@ zio_do_crypt_data(boolean_t encrypt, zio_crypt_key_t *key,
 
 	if (bcmp(salt, key->zk_salt, ZIO_DATA_SALT_LEN) == 0) {
 		ckey = &key->zk_current_key;
-#ifdef __FreeBSD__
 		tmpl = &key->zk_session;
-#else
-		tmpl = key->zk_current_tmpl;
-#endif
 	} else {
 		rw_exit(&key->zk_salt_lock);
 		locked = B_FALSE;
@@ -2339,13 +1791,8 @@ zio_do_crypt_data(boolean_t encrypt, zio_crypt_key_t *key,
 	}
 
 	/* perform the encryption / decryption */
-#ifdef __FreeBSD__
 	ret = zio_do_crypt_uio_opencrypto(encrypt, tmpl, key->zk_crypt,
 	    ckey, iv, enc_len, &cuio, auth_len);
-#else
-	ret = zio_do_crypt_uio(encrypt, key->zk_crypt, ckey, tmpl, iv, enc_len,
-	    &puio, &cuio, authbuf, auth_len);
-#endif
 	if (ret != 0)
 		goto error;
 	if (locked) {

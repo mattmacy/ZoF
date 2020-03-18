@@ -2194,17 +2194,14 @@ zfs_init(void)
 	zfs_vnodes_adjust();
 
 	dmu_objset_register_type(DMU_OST_ZFS, zfs_space_delta_cb);
-#if defined(__FreeBSD__)
+
 	zfsvfs_taskq = taskq_create("zfsvfs", 1, minclsyspri, 0, 0, 0);
-#endif
 }
 
 void
 zfs_fini(void)
 {
-#if defined(__FreeBSD__)
 	taskq_destroy(zfsvfs_taskq);
-#endif
 	zfsctl_fini();
 	zfs_znode_fini();
 	zfs_vnodes_adjust_back();

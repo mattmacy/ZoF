@@ -325,7 +325,7 @@ zfs_unlinked_drain(zfsvfs_t *zfsvfs)
 			continue;
 
 		vn_lock(ZTOV(zp), LK_EXCLUSIVE | LK_RETRY);
-#if defined(__FreeBSD__)
+
 		/*
 		 * Due to changes in zfs_rmnode we need to make sure the
 		 * link count is set to zero here.
@@ -344,7 +344,7 @@ zfs_unlinked_drain(zfsvfs_t *zfsvfs)
 			    &zp->z_links, sizeof (zp->z_links), tx));
 			dmu_tx_commit(tx);
 		}
-#endif
+
 		zp->z_unlinked = B_TRUE;
 		vput(ZTOV(zp));
 	}
@@ -416,9 +416,7 @@ zfs_purgedir(znode_t *dzp)
 	return (skipped);
 }
 
-#if defined(__FreeBSD__)
 extern taskq_t *zfsvfs_taskq;
-#endif
 
 void
 zfs_rmnode(znode_t *zp)
@@ -505,7 +503,6 @@ zfs_rmnode(znode_t *zp)
 		return;
 	}
 
-#if defined(__FreeBSD__)
 	/*
 	 * FreeBSD's implemention of zfs_zget requires a vnode to back it.
 	 * This means that we could end up calling into getnewvnode while
@@ -520,16 +517,6 @@ zfs_rmnode(znode_t *zp)
 		VERIFY3U(0, ==,
 		    zap_add_int(os, zfsvfs->z_unlinkedobj, xattr_obj, tx));
 	}
-#else
-	if (xzp) {
-		ASSERT(error == 0);
-		xzp->z_unlinked = B_TRUE;	/* mark xzp for deletion */
-		xzp->z_links = 0;	/* no more links to it */
-		VERIFY(0 == sa_update(xzp->z_sa_hdl, SA_ZPL_LINKS(zfsvfs),
-		    &xzp->z_links, sizeof (xzp->z_links), tx));
-		zfs_unlinked_add(xzp, tx);
-	}
-#endif
 
 	/* Remove this znode from the unlinked set */
 	VERIFY3U(0, ==,
@@ -539,7 +526,6 @@ zfs_rmnode(znode_t *zp)
 
 	dmu_tx_commit(tx);
 
-#if defined(__FreeBSD__)
 	if (xattr_obj) {
 		/*
 		 * We're using the FreeBSD taskqueue API here instead of
@@ -549,7 +535,6 @@ zfs_rmnode(znode_t *zp)
 		taskqueue_enqueue(zfsvfs_taskq->tq_queue,
 		    &zfsvfs->z_unlinked_drain_task);
 	}
-#endif
 }
 
 static uint64_t

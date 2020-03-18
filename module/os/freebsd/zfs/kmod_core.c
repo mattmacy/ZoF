@@ -312,13 +312,11 @@ zfs__init(void)
 {
 	int error;
 
-#ifdef __FreeBSD__
 #if KSTACK_PAGES < ZFS_MIN_KSTACK_PAGES
 	printf("ZFS NOTICE: KSTACK_PAGES is %d which could result in stack "
 	    "overflow panic!\nPlease consider adding "
 	    "'options KSTACK_PAGES=%d' to your kernel config\n", KSTACK_PAGES,
 	    ZFS_MIN_KSTACK_PAGES);
-#endif
 #endif
 	zfs_root_token = root_mount_hold("ZFS");
 	if ((error = zfs_kmod_init()) != 0) {

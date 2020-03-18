@@ -31,7 +31,7 @@
 #include <sys/u8_textprep.h>
 #include <sys/vnode.h>
 
-#if defined(__linux__) || defined(_KERNEL)
+#if defined(_KERNEL)
 typedef int ddi_devid_t;
 #endif
 

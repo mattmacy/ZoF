@@ -196,15 +196,7 @@ zfs_avx_available(void)
 	boolean_t has_avx;
 
 #if defined(_KERNEL)
-#ifdef __linux__
-#if defined(KERNEL_EXPORTS_X86_FPU)
-	has_avx = !!boot_cpu_has(X86_FEATURE_AVX);
-#else
-	has_avx = B_FALSE;
-#endif
-#elif defined(__FreeBSD__)
 	has_avx = !!(cpu_feature2 & CPUID2_AVX);
-#endif
 #elif !defined(_KERNEL)
 	has_avx = __cpuid_has_avx();
 #endif

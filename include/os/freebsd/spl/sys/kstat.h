@@ -24,15 +24,8 @@
 
 #ifndef _SPL_KSTAT_H
 #define	_SPL_KSTAT_H
-#ifdef __linux__
-#include <linux/module.h>
-#include <sys/types.h>
-#include <sys/time.h>
-#include <sys/kmem.h>
-#else
 #include <sys/sysctl.h>
 struct list_head {};
-#endif
 #include <sys/mutex.h>
 #include <sys/proc.h>
 
@@ -102,16 +95,6 @@ typedef struct kstat_raw_ops {
 	void *(*addr)(kstat_t *ksp, loff_t index);
 } kstat_raw_ops_t;
 
-#ifdef __linux__
-typedef struct kstat_proc_entry {
-	char	kpe_name[KSTAT_STRLEN+1];	/* kstat name */
-	char	kpe_module[KSTAT_STRLEN+1];	/* provider module name */
-	kstat_module_t		*kpe_owner;	/* kstat module linkage */
-	struct list_head	kpe_list;	/* kstat linkage */
-	struct proc_dir_entry	*kpe_proc;	/* procfs entry */
-} kstat_proc_entry_t;
-#endif
-
 struct kstat_s {
 	int		ks_magic;		/* magic value */
 	kid_t		ks_kid;			/* unique kstat ID */
@@ -126,7 +109,7 @@ struct kstat_s {
 	void		*ks_data;		/* kstat type-specific data */
 	uint_t		ks_ndata;		/* # of data records */
 	size_t		ks_data_size;		/* size of kstat data section */
-#if defined(__linux__) || !defined(_KERNEL)
+#if !defined(_KERNEL)
 	kstat_proc_entry_t ks_proc;		/* proc linkage */
 #endif
 	kstat_update_t	*ks_update;		/* dynamic updates */
@@ -138,7 +121,7 @@ struct kstat_s {
 	kstat_raw_ops_t	ks_raw_ops;		/* ops table for raw type */
 	char		*ks_raw_buf;		/* buf used for raw ops */
 	size_t		ks_raw_bufsize;		/* size of raw ops buffer */
-#if defined(_KERNEL) && defined(__FreeBSD__)
+#if defined(_KERNEL)
 	struct sysctl_ctx_list ks_sysctl_ctx;
 	struct sysctl_oid *ks_sysctl_root;
 #endif
@@ -209,14 +192,6 @@ extern void __kstat_set_raw_ops(kstat_t *ksp,
 extern kstat_t *__kstat_create(const char *ks_module, int ks_instance,
     const char *ks_name, const char *ks_class, uchar_t ks_type,
     uint_t ks_ndata, uchar_t ks_flags);
-
-#ifdef __linux__
-extern void kstat_proc_entry_init(kstat_proc_entry_t *kpep,
-    const char *module, const char *name);
-extern void kstat_proc_entry_delete(kstat_proc_entry_t *kpep);
-extern void kstat_proc_entry_install(kstat_proc_entry_t *kpep, mode_t mode,
-    const struct file_operations *file_ops, void *data);
-#endif
 
 extern void __kstat_install(kstat_t *ksp);
 extern void __kstat_delete(kstat_t *ksp);
