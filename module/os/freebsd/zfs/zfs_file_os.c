@@ -47,10 +47,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/zfs_znode.h>
 #include <sys/zfs_file.h>
 #include <sys/buf.h>
+#include <sys/linker.h>
 #include <sys/stat.h>
 
-int
-zfs_file_open(const char *path, int flags, int mode, zfs_file_t **fpp)
+static int
+zfs_file_open_impl(const char *path, int flags, int mode, zfs_file_t **fpp)
 {
 	struct thread *td;
 	int rc, fd;
@@ -69,9 +70,54 @@ zfs_file_open(const char *path, int flags, int mode, zfs_file_t **fpp)
 	return (0);
 }
 
+static int
+zfs_file_open_loader(const char *path, int flags, int mode, zfs_file_t **fpp)
+{
+	void *ptr;
+	zfs_file_t *fp;
+
+	ptr = preload_search_by_name(path);
+	if (ptr == NULL)
+		return (ENOENT);
+
+	fp = kmem_alloc(sizeof (*fp), KM_SLEEP);
+	fp->f_data = ptr;
+	fp->f_type = -1;
+	fp->f_offset = 0;
+	*fpp = fp;
+
+	return (0);
+}
+
+int
+zfs_file_open(const char *path, int flags, int mode, zfs_file_t **fpp)
+{
+	int mounted;
+	int rc;
+
+	mounted = root_mounted();
+	/*
+	 * If root is already mounted we read file using file system,
+	 * if not, we use loader.
+	 */
+	if (mounted)
+		rc = zfs_file_open_impl(path, flags, mode, fpp);
+	else
+		rc = zfs_file_open_loader(path, flags, mode, fpp);
+
+	if (rc != 0)
+		return (SET_ERROR(rc));
+
+	return (0);
+}
+
 void
 zfs_file_close(zfs_file_t *fp)
 {
+	if (fp->f_type == -1) {
+		kmem_free(fp, sizeof (*fp));
+		return;
+	}
 	fo_close(fp, curthread);
 }
 
@@ -118,6 +164,9 @@ zfs_file_write(zfs_file_t *fp, const void *buf, size_t count, ssize_t *resid)
 	loff_t off = fp->f_offset;
 	ssize_t rc;
 
+	if (fp->f_type == -1)
+		return (SET_ERROR(EINVAL));
+
 	rc = zfs_file_write_impl(fp, buf, count, &off, resid);
 	if (rc == 0)
 		fp->f_offset = off;
@@ -130,6 +179,20 @@ zfs_file_pwrite(zfs_file_t *fp, const void *buf, size_t count, loff_t off,
     ssize_t *resid)
 {
 	return (zfs_file_write_impl(fp, buf, count, &off, resid));
+}
+
+static int
+zfs_file_read_loader(zfs_file_t *fp, void *buf, size_t size, loff_t *offp,
+    ssize_t *resid)
+{
+	char *ptr;
+
+	ptr = preload_fetch_addr(fp->f_data);
+	if (ptr == NULL)
+		return (ENOENT);
+	bcopy(ptr + *offp, buf, size);
+	*offp += size;
+	return (0);
 }
 
 static int
@@ -169,7 +232,10 @@ zfs_file_read(zfs_file_t *fp, void *buf, size_t count, ssize_t *resid)
 	loff_t off = fp->f_offset;
 	ssize_t rc;
 
-	rc = zfs_file_read_impl(fp, buf, count, &off, resid);
+	if (fp->f_type == -1)
+		rc = zfs_file_read_loader(fp, buf, count, &off, resid);
+	else
+		rc = zfs_file_read_impl(fp, buf, count, &off, resid);
 	if (rc == 0)
 		fp->f_offset = off;
 	return (rc);
@@ -204,6 +270,12 @@ zfs_file_getattr(zfs_file_t *fp, zfs_file_attr_t *zfattr)
 	struct stat sb;
 	int rc;
 
+	if (fp->f_type == -1) {
+		void *ptr = preload_search_info(fp->f_data, MODINFO_SIZE);
+		if (ptr == NULL)
+			return (SET_ERROR(ENOENT));
+		zfattr->zfa_size = (uint64_t)*(size_t *)ptr;
+	}
 	td = curthread;
 
 	rc = fo_stat(fp, &sb, td->td_ucred, td);
