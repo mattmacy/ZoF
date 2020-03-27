@@ -165,10 +165,6 @@ typedef enum arc_flags
 	ARC_FLAG_COMPRESS_5		= 1 << 29,
 	ARC_FLAG_COMPRESS_6		= 1 << 30,
 
-	/*
-	 * cache lookup only
-	 */
-	ARC_FLAG_CACHED_ONLY		= 1 << 31
 } arc_flags_t;
 
 typedef enum arc_buf_flags {
