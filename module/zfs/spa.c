@@ -963,6 +963,20 @@ spa_get_errlists(spa_t *spa, avl_tree_t *last, avl_tree_t *scrub)
 }
 
 static void
+spa_zio_thread_init(void *context __maybe_unused)
+{
+
+	VERIFY0(dmu_thread_context_create());
+}
+
+static void
+spa_zio_thread_destroy(void *context)
+{
+
+	dmu_thread_context_destroy(context);
+}
+
+static void
 spa_taskqs_init(spa_t *spa, zio_type_t t, zio_taskq_type_t q)
 {
 	const zio_taskq_info_t *ztip = &zio_taskqs[t][q];
@@ -1030,7 +1044,8 @@ spa_taskqs_init(spa_t *spa, zio_type_t t, zio_taskq_type_t q)
 				pri++;
 
 			tq = taskq_create_proc(name, value, pri, 50,
-			    INT_MAX, spa->spa_proc, flags);
+			    INT_MAX, spa->spa_proc, flags,
+			    spa_zio_thread_init, spa_zio_thread_destroy);
 		}
 
 		tqs->stqs_taskq[i] = tq;
