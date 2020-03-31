@@ -94,6 +94,33 @@ dmu_buf_hold_array(objset_t *os, uint64_t object, uint64_t offset,
 	return (err);
 }
 
+void
+dmu_buf_write_pages(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
+    uint64_t sz)
+{
+	vm_page_t *pp = dbs->dbs_dc->dc_data_buf;
+	struct sf_buf *sf;
+	int copied;
+
+	/*
+	 * Seek to the page that starts this transfer.
+	 */
+	pp += (db->db_offset	+ off - dbs->dbs_dc->dc_dn_start) / PAGESIZE;
+	for (copied = 0; copied < sz; copied += PAGESIZE) {
+		caddr_t va;
+		int thiscpy;
+
+		ASSERT3U(ptoa((*pp)->pindex), ==, db->db_offset + off);
+		thiscpy = MIN(PAGESIZE, sz - copied);
+		va = zfs_map_page(*pp, &sf);
+		bcopy(va, (char *)db->db_data + off, thiscpy);
+		zfs_unmap_page(sf);
+		pp += 1;
+		off += PAGESIZE;
+	}
+}
+
+#if 0
 int
 dmu_write_pages(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
     vm_page_t *ma, dmu_tx_t *tx)
@@ -150,6 +177,7 @@ dmu_write_pages(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 	dmu_buf_rele_array(dbp, numbufs, FTAG);
 	return (err);
 }
+#endif
 
 int
 dmu_read_pages(objset_t *os, uint64_t object, vm_page_t *ma, int count,
