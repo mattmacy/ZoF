@@ -329,7 +329,7 @@ extern void cv_broadcast(kcondvar_t *cv);
 #define	tsd_get(k) pthread_getspecific(k)
 #define	tsd_set(k, v) pthread_setspecific(k, v)
 #define	tsd_create(kp, d) pthread_key_create((pthread_key_t *)kp, d)
-#define	tsd_destroy(kp) /* nothing */
+#define	tsd_destroy(kp) pthread_key_delete((pthread_key_t *)*kp)
 
 /*
  * kstat creation, installation and deletion
