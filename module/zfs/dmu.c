@@ -181,10 +181,6 @@ static xuio_stats_t xuio_stats = {
 	atomic_add_64(&xuio_stats.stat.value.ui64, (val))
 #define	XUIOSTAT_BUMP(stat)	XUIOSTAT_INCR(stat, 1)
 
-#ifdef _KERNEL
-SYSCTL_DECL(_vfs_zfs);
-SYSCTL_NODE(_vfs_zfs, OID_AUTO, dmu, CTLFLAG_RW, 0, "ZFS DMU");
-#endif
 
 #ifdef ZFS_DEBUG
 #define DEBUG_REFCOUNT(a, b, c) uint32_t b
@@ -1067,7 +1063,7 @@ dmu_ctx_set_error(dmu_ctx_t *dc, int err)
 		mutex_exit(&dc->dc_mtx);
 	}
 }
-
+#ifdef UIO_XUIO
 static void
 dmu_buf_read_xuio(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
     uint64_t sz)
@@ -1090,6 +1086,7 @@ dmu_buf_read_xuio(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
 		XUIOSTAT_BUMP(xuiostat_rbuf_copied);
 #endif
 }
+#endif
 
 static void
 dmu_buf_do_uio(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
@@ -1220,8 +1217,7 @@ dmu_buf_set_transfer_write_tx(dmu_buf_set_t *dbs)
 void
 dmu_ctx_rele(dmu_ctx_t *dmu_ctx)
 {
-
-	if (!refcount_release(&dmu_ctx->dc_holds))
+	if (zfs_refcount_remove(&dmu_ctx->dc_holds, NULL) != 0)
 		return;
 
 	ASSERT(dmu_ctx_in_flight > 0);
@@ -1297,7 +1293,7 @@ dmu_thread_context_create(void)
 }
 
 void
-dmu_thread_context_destroy(void *context __unused)
+dmu_thread_context_destroy(void *context __maybe_unused)
 {
 	dmu_cb_state_t *dcs;
 
@@ -1355,8 +1351,8 @@ dmu_buf_set_rele(dmu_buf_set_t *dbs, int err)
 		dmu_buf_set_set_error(dbs, err);
 
 	/* If we are finished, schedule this buffer set for delivery. */
-	ASSERT(dbs->dbs_holds > 0);
-	if (refcount_release(&dbs->dbs_holds)) {
+	ASSERT(!zfs_refcount_is_zero(&dbs->dbs_holds));
+	if (zfs_refcount_remove(&dbs->dbs_holds, NULL) == 0) {
 		dmu_cb_state_t *dcs = tsd_get(zfs_async_io_key);
 
 		if (dcs != NULL && (dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC)) {
@@ -1405,18 +1401,20 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 		int err = dbuf_hold_impl(dn, /*level*/0, blkid + i,
 			/*fail_sparse*/FALSE, /*fail_uncached*/FALSE, dmu_ctx->dc_tag, &db, dbs);
 		uint64_t bufoff, bufsiz;
+		zfs_refcount_create(&dbs->dbs_holds);
 
 		if (db == NULL) {
 			/* Only include counts for the processed buffers. */
 			dbs->dbs_count = i;
-			dbs->dbs_holds = i + 1 /*initiator*/;
+			/*initiator*/
+			zfs_refcount_add_many(&dbs->dbs_holds, i + 1, NULL);
 			zio_nowait(dbs->dbs_zio);
 			return (err);
 		}
 		/* initiate async i/o */
 		if (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ)
 			(void) dbuf_read(db, dbs->dbs_zio, dbuf_flags);
-#ifdef _KERNEL
+#if defined(_KERNEL) && defined(__FreeBSD__)
 		else
 			curthread->td_ru.ru_oublock++;
 #endif
@@ -1497,7 +1495,7 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	dnode_t *dn = dmu_ctx->dc_dn;
 
 	ASSERT(dmu_ctx != NULL);
-	ASSERT(dmu_ctx->dc_holds > 0);
+	ASSERT(!zfs_refcount_is_zero(&dmu_ctx->dc_holds));
 
 	/*
 	 * Create a transaction for writes, if needed.  This must be done
@@ -1545,15 +1543,16 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	buf_set->dbs_count = nblks;
 	buf_set->dbs_dbp_length = nblks;
 	buf_set->dbs_tx = tx;
+	zfs_refcount_create(&buf_set->dbs_holds);
 
 	/* Include a refcount for the initiator. */
 	if (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ)
-		refcount_init(&buf_set->dbs_holds, nblks + 1);
+		zfs_refcount_add_many(&buf_set->dbs_holds, nblks + 1, NULL);
 	else
 		/* For writes, dbufs never need to call us back. */
-		refcount_init(&buf_set->dbs_holds, 1);
+		zfs_refcount_add(&buf_set->dbs_holds, NULL);
 	buf_set->dbs_dc = dmu_ctx;
-	refcount_acquire(&dmu_ctx->dc_holds);
+	zfs_refcount_add(&dmu_ctx->dc_holds, NULL);
 	/* Either we're a reader or we have a transaction somewhere. */
 	ASSERT((dmu_ctx->dc_flags & DMU_CTX_FLAG_READ) || dmu_buf_set_tx(buf_set));
 	buf_set->dbs_zio = zio_root(dn->dn_objset->os_spa, NULL, NULL,
@@ -1676,7 +1675,7 @@ dmu_issue(dmu_ctx_t *dc)
 	 * At this point, either this I/O is async, or all buffer sets
 	 * have finished processing.
 	 */
-	ASSERT((dc->dc_flags & DMU_CTX_FLAG_ASYNC) || dc->dc_holds == 1);
+	ASSERT((dc->dc_flags & DMU_CTX_FLAG_ASYNC) || zfs_refcount_count(&dc->dc_holds) == 1);
 
 	/*
 	 * If an error occurs while actually performing I/O, propagate to
@@ -1764,9 +1763,11 @@ dmu_ctx_init(dmu_ctx_t *dmu_ctx, struct dnode *dn, objset_t *os,
 			dmu_ctx->dc_data_transfer_cb = reader ? dmu_buf_read_uio :
 			    dmu_buf_write_uio;
 		}
+#if defined(_KERNEL) && !defined(__linux__)
 	} else if (dmu_ctx->dc_flags & DMU_CTX_FLAG_SUN_PAGES) {
 		/* implies writer */
 		dmu_ctx->dc_data_transfer_cb = dmu_buf_write_pages;
+#endif
 	} else {
 		dmu_ctx->dc_data_transfer_cb = reader ? dmu_buf_read_char :
 		    dmu_buf_write_char;
@@ -1780,7 +1781,8 @@ dmu_ctx_init(dmu_ctx_t *dmu_ctx, struct dnode *dn, objset_t *os,
 		dmu_ctx->dc_buf_transfer_cb = dmu_buf_transfer_nofill;
 
 	/* Initialize including a refcount for the initiator. */
-	refcount_init(&dmu_ctx->dc_holds, 1);
+	zfs_refcount_create(&dmu_ctx->dc_holds);
+	zfs_refcount_add(&dmu_ctx->dc_holds, NULL);
 	return (0);
 }
 
@@ -2080,7 +2082,7 @@ int
 dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 {
 
-	return (dmu_read_impl(dn, NULL, 0, uio->uio_offset, size, uio,
+	return (dmu_read_impl(dn, NULL, 0, uio->uio_loffset, size, uio,
                 DMU_CTX_FLAG_READ|DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_NO_HOLD));
 }
 
