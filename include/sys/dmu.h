@@ -395,7 +395,7 @@ typedef struct dmu_ctx {
 	uint64_t dc_object;	/* Object ID associated with the dnode. */
 
 	/* Number of buffer sets left to complete. */
-	int dc_holds;
+	zfs_refcount_t dc_holds;
 
 	/* The tag used for this context. */
 	void *dc_tag;
@@ -447,7 +447,7 @@ typedef struct dmu_buf_set {
 	int dbs_dbp_length;
 
 	/* Number of dmu_bufs left to complete. */
-	int dbs_holds;
+	zfs_refcount_t dbs_holds;
 
 	/* The starting offset, relative to the associated dnode. */
 	uint64_t dbs_dn_start;
@@ -480,7 +480,7 @@ void dmu_buf_set_transfer(dmu_buf_set_t *dbs);
 void dmu_buf_set_transfer_write(dmu_buf_set_t *dbs);
 
 #ifndef __lint
-inline boolean_t
+static inline boolean_t
 dmu_ctx_buf_is_char(dmu_ctx_t *dc)
 {
 	return ((dc->dc_flags & (DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_SUN_PAGES)) ?
@@ -488,25 +488,25 @@ dmu_ctx_buf_is_char(dmu_ctx_t *dc)
 }
 
 /* Optional context setters; use after calling dmu_ctx_init*(). */
-inline void
+static inline void
 dmu_ctx_set_complete_cb(dmu_ctx_t *dc, dmu_ctx_cb_t cb)
 {
 	dc->dc_complete_cb = cb;
 }
 
-inline void
+static inline void
 dmu_ctx_set_buf_set_transfer_cb(dmu_ctx_t *dc, dmu_buf_set_cb_t cb)
 {
 	dc->dc_buf_set_transfer_cb = cb;
 }
 
-inline void
+static inline void
 dmu_ctx_set_buf_transfer_cb(dmu_ctx_t *dc, dmu_buf_transfer_cb_t cb)
 {
 	dc->dc_buf_transfer_cb = cb;
 }
 
-inline void
+static inline void
 dmu_ctx_set_dmu_tx(dmu_ctx_t *dc, dmu_tx_t *tx)
 {
 	ASSERT(tx != NULL && ((dc->dc_flags & DMU_CTX_FLAG_READ) == 0));
@@ -514,7 +514,7 @@ dmu_ctx_set_dmu_tx(dmu_ctx_t *dc, dmu_tx_t *tx)
 	dc->dc_tx = tx;
 }
 
-inline dmu_tx_t *
+static inline dmu_tx_t *
 dmu_buf_set_tx(dmu_buf_set_t *dbs)
 {
 	return (dbs->dbs_dc->dc_tx ? dbs->dbs_dc->dc_tx : dbs->dbs_tx);
