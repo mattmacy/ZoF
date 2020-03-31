@@ -4060,7 +4060,7 @@ function get_arcstat # stat
 
 	case $(uname) in
 	FreeBSD)
-		sysctl -n kstat.zfs.misc.arcstat.$stat
+		sysctl -n kstat.zfs.misc.arcstats.$stat
 		;;
 	Linux)
 		typeset zfs_arcstats="/proc/spl/kstat/zfs/arcstats"
