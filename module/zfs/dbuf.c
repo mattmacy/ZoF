@@ -1503,6 +1503,22 @@ dbuf_resolve_ranges(dmu_buf_impl_t *db, arc_buf_t *buf)
 }
 
 static void
+dbuf_process_buf_sets(dmu_buf_impl_t *db, boolean_t err)
+{
+	dmu_buf_set_node_t *dbsn, *next;
+
+	for (dbsn = list_head(&db->db_buf_sets); dbsn != NULL; dbsn = next) {
+		next = list_next(&db->db_buf_sets, dbsn);
+		dmu_buf_set_rele(dbsn->dbsn_dbs, err);
+		dmu_buf_set_node_remove(&db->db_buf_sets, dbsn);
+	}
+}
+#define	DBUF_PROCESS_BUF_SETS(db, err) do {		\
+	if (!list_is_empty(&(db)->db_buf_sets))	\
+		dbuf_process_buf_sets(db, err);		\
+} while (0)
+
+static void
 dbuf_read_complete(dmu_buf_impl_t *db, arc_buf_t *buf, boolean_t is_hole_read)
 {
 	dbuf_dirty_record_t *oldest_dr = list_tail(&db->db_dirty_records);
@@ -1608,6 +1624,7 @@ dbuf_read_complete(dmu_buf_impl_t *db, arc_buf_t *buf, boolean_t is_hole_read)
 		    db->db_state == DB_UNCACHED);
 		arc_release(buf, db);
 	}
+	DBUF_PROCESS_BUF_SETS(db, B_FALSE);
 }
 
 static void
@@ -1650,6 +1667,7 @@ dbuf_read_done(zio_t *zio, const zbookmark_phys_t *zb, int err,
 		} else {
 			ASSERT3P(db->db_buf, ==, NULL);
 			db->db_state = DB_UNCACHED;
+			DBUF_PROCESS_BUF_SETS(db, B_TRUE);
 			DTRACE_SET_STATE(db, "read failed");
 		}
 		arc_buf_destroy(buf, db);
@@ -2737,6 +2755,13 @@ dbuf_dirty_compute_state(dbuf_dirty_state_t *dds)
 	dbuf_dirty_record_t *dr, *newest;
 	dnode_t *dn = dds->dds_dn;
 
+#ifdef HAVE_ASYNC
+	/* Only one filler allowed at a time. */
+	while (db->db_state & DB_FILL) {
+		ASSERT0(db->db_level);
+		cv_wait(&db->db_changed, &db->db_mtx);
+	}
+#endif
 	dbuf_dirty_verify(db, tx);
 	if (db->db_blkid == DMU_SPILL_BLKID)
 		dds->dds_dn->dn_have_spill = B_TRUE;
@@ -3744,14 +3769,41 @@ dmu_buf_is_dirty(dmu_buf_t *db_fake, dmu_tx_t *tx)
 	return (dr != NULL);
 }
 
+#pragma weak dmu_buf_will_dirty_range = dbuf_will_dirty_range
+/*
+ * Signal intent to dirty a subset of the buffer.
+ *
+ * XXX: This needs to be merged into dbuf_will_dirty().
+ */
+void
+dbuf_will_dirty_range(dmu_buf_impl_t *db, dmu_tx_t *tx, int offset, int size)
+{
+
+	ASSERT(tx->tx_txg != 0);
+	ASSERT(!zfs_refcount_is_zero(&db->db_holds));
+	ASSERT(db->db_level == 0);
+	ASSERT(db->db_blkid != DMU_SPILL_BLKID);
+	ASSERT(db->db_blkid != DMU_BONUS_BLKID);
+#ifdef ZFS_DEBUG
+	{
+		dnode_t *dn;
+
+		DB_DNODE_ENTER(db);
+		dn = DB_DNODE(db);
+		ASSERT(!DMU_OBJECT_IS_SPECIAL(dn->dn_object));
+		DB_DNODE_EXIT(db);
+	}
+#endif
+
+	dbuf_dirty_leaf(db, tx, offset, size);
+}
+
 void
 dmu_buf_will_not_fill(dmu_buf_t *db_fake, dmu_tx_t *tx)
 {
 	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
 
-	db->db_state = DB_NOFILL;
-	DTRACE_SET_STATE(db, "allocating NOFILL buffer");
-	dmu_buf_will_fill(db_fake, tx);
+	dbuf_dirty_nofill(db, tx);
 }
 
 void
@@ -4147,7 +4199,7 @@ dbuf_findbp(dnode_t *dn, int level, uint64_t blkid, int fail_sparse,
 		int err;
 
 		err = dbuf_hold_impl(dn, level + 1,
-		    blkid >> epbs, fail_sparse, FALSE, NULL, parentp);
+	        blkid >> epbs, fail_sparse, FALSE, NULL, parentp, NULL);
 
 		if (err)
 			return (err);
@@ -4496,7 +4548,7 @@ dbuf_prefetch(dnode_t *dn, int64_t level, uint64_t blkid, zio_priority_t prio,
 		dmu_buf_impl_t *db;
 
 		if (dbuf_hold_impl(dn, parent_level, parent_blkid,
-		    FALSE, TRUE, FTAG, &db) == 0) {
+		    FALSE, TRUE, FTAG, &db, NULL) == 0) {
 			blkptr_t *bpp = db->db_buf->b_data;
 			bp = bpp[P2PHASE(curblkid, 1 << epbs)];
 			dbuf_rele(db, FTAG);
@@ -4600,7 +4652,7 @@ dbuf_hold_copy(dnode_t *dn, dmu_buf_impl_t *db)
 int
 dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid,
     boolean_t fail_sparse, boolean_t fail_uncached,
-    void *tag, dmu_buf_impl_t **dbp)
+	void *tag, dmu_buf_impl_t **dbp, dmu_buf_set_t *dbs)
 {
 	dmu_buf_impl_t *db, *parent = NULL;
 
@@ -4690,6 +4742,15 @@ dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid,
 	}
 	(void) zfs_refcount_add(&db->db_holds, tag);
 	dbuf_verify(db);
+
+	/* If a reading buffer set is associated, add the callback now. */
+	if (dbs != NULL && (dbs->dbs_dc->dc_flags & DMU_CTX_FLAG_READ)) {
+		if (db->db_state == DB_CACHED) {
+			/* Dbuf is already at the desired state. */
+			dmu_buf_set_rele(dbs, /*err*/0);
+		} else
+			dmu_buf_set_node_add(&db->db_buf_sets, dbs);
+	}
 	mutex_exit(&db->db_mtx);
 
 	/* NOTE: we can't rele the parent until after we drop the db_mtx */
@@ -4714,7 +4775,7 @@ dmu_buf_impl_t *
 dbuf_hold_level(dnode_t *dn, int level, uint64_t blkid, void *tag)
 {
 	dmu_buf_impl_t *db;
-	int err = dbuf_hold_impl(dn, level, blkid, FALSE, FALSE, tag, &db);
+	int err = dbuf_hold_impl(dn, level, blkid, FALSE, FALSE, tag, &db, NULL);
 	return (err ? NULL : db);
 }
 
