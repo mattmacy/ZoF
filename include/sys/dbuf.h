@@ -504,6 +504,9 @@ typedef struct dmu_buf_set_node {
 
 } dmu_buf_set_node_t;
 
+/* Used for TSD for processing completed asynchronous I/Os. */
+extern uint_t zfs_async_io_key;
+
 void dmu_buf_set_node_add(list_t *list, dmu_buf_set_t *buf_set);
 void dmu_buf_set_node_remove(list_t *list, dmu_buf_set_node_t *dbsn);
 
