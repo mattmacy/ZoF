@@ -1220,6 +1220,7 @@ dmu_ctx_rele(dmu_ctx_t *dmu_ctx)
 	if (zfs_refcount_remove(&dmu_ctx->dc_holds, NULL) != 0)
 		return;
 
+	zfs_refcount_destroy(&dmu_ctx->dc_holds);
 	ASSERT(dmu_ctx_in_flight > 0);
 	DEBUG_REFCOUNT_DEC(dmu_ctx_in_flight);
 
@@ -1345,6 +1346,7 @@ void
 dmu_buf_set_rele(dmu_buf_set_t *dbs, int err)
 {
 	dmu_ctx_t *dmu_ctx = dbs->dbs_dc;
+	dmu_cb_state_t *dcs;
 
 	/* Report an error, if any. */
 	if (err)
@@ -1352,19 +1354,19 @@ dmu_buf_set_rele(dmu_buf_set_t *dbs, int err)
 
 	/* If we are finished, schedule this buffer set for delivery. */
 	ASSERT(!zfs_refcount_is_zero(&dbs->dbs_holds));
-	if (zfs_refcount_remove(&dbs->dbs_holds, NULL) == 0) {
-		dmu_cb_state_t *dcs = tsd_get(zfs_async_io_key);
+	if (zfs_refcount_remove(&dbs->dbs_holds, NULL) != 0)
+		return;
 
-		if (dcs != NULL && (dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC)) {
-			dmu_buf_set_node_add(&dcs->dcs_io_list, dbs);
-		} else {
+	dcs = tsd_get(zfs_async_io_key);
+	if (dcs != NULL && (dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC)) {
+		dmu_buf_set_node_add(&dcs->dcs_io_list, dbs);
+	} else {
 			/*
 			 * The current thread doesn't have anything
 			 * registered in its TSD, so it must not handle
 			 * queued delivery.  Dispatch this set now.
 			 */
 			dmu_buf_set_ready(dbs);
-		}
 	}
 }
 
@@ -1488,7 +1490,7 @@ static int
 dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
     uint64_t size)
 {
-	dmu_buf_set_t *buf_set;
+	dmu_buf_set_t *dbs;
 	dmu_tx_t *tx = NULL;
 	size_t set_size;
 	int err, nblks;
@@ -1522,7 +1524,7 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 			    (longlong_t)dn->dn_object, dn->dn_datablksz,
 			    (longlong_t)dmu_ctx->dc_dn_offset,
 			    (longlong_t)size);
-			err = EIO;
+			err = SET_ERROR(EIO);
 			goto out;
 		}
 		nblks = 1;
@@ -1530,36 +1532,36 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 
 	/* Create the new buffer set. */
 	set_size = sizeof(dmu_buf_set_t) + nblks * sizeof(dmu_buf_t *);
-	buf_set = kmem_zalloc(set_size, KM_SLEEP);
+	dbs = kmem_zalloc(set_size, KM_SLEEP);
 
 	/* Initialize a new buffer set. */
 	DEBUG_REFCOUNT_ADD(buf_set_in_flight);
 #ifdef ZFS_DEBUG
 	atomic_add_64(&buf_set_total, 1);
 #endif
-	buf_set->dbs_size = size;
-	buf_set->dbs_resid = size;
-	buf_set->dbs_dn_start = dmu_ctx->dc_dn_offset;
-	buf_set->dbs_count = nblks;
-	buf_set->dbs_dbp_length = nblks;
-	buf_set->dbs_tx = tx;
-	zfs_refcount_create(&buf_set->dbs_holds);
+	dbs->dbs_size = size;
+	dbs->dbs_resid = size;
+	dbs->dbs_dn_start = dmu_ctx->dc_dn_offset;
+	dbs->dbs_count = nblks;
+	dbs->dbs_dbp_length = nblks;
+	dbs->dbs_tx = tx;
+	zfs_refcount_create(&dbs->dbs_holds);
 
 	/* Include a refcount for the initiator. */
 	if (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ)
-		zfs_refcount_add_many(&buf_set->dbs_holds, nblks + 1, NULL);
+		zfs_refcount_add_many(&dbs->dbs_holds, nblks + 1, NULL);
 	else
 		/* For writes, dbufs never need to call us back. */
-		zfs_refcount_add(&buf_set->dbs_holds, NULL);
-	buf_set->dbs_dc = dmu_ctx;
+		zfs_refcount_add(&dbs->dbs_holds, NULL);
+	dbs->dbs_dc = dmu_ctx;
 	zfs_refcount_add(&dmu_ctx->dc_holds, NULL);
 	/* Either we're a reader or we have a transaction somewhere. */
-	ASSERT((dmu_ctx->dc_flags & DMU_CTX_FLAG_READ) || dmu_buf_set_tx(buf_set));
-	buf_set->dbs_zio = zio_root(dn->dn_objset->os_spa, NULL, NULL,
+	ASSERT((dmu_ctx->dc_flags & DMU_CTX_FLAG_READ) || dmu_buf_set_tx(dbs));
+	dbs->dbs_zio = zio_root(dn->dn_objset->os_spa, NULL, NULL,
 	    ZIO_FLAG_CANFAIL);
-	*buf_set_p = buf_set;
+	*buf_set_p = dbs;
 
-	err = dmu_buf_set_setup_buffers(buf_set);
+	err = dmu_buf_set_setup_buffers(dbs);
 
 out:
 	if (err && tx != NULL)
@@ -1635,9 +1637,9 @@ dmu_buf_set_process_io(dmu_buf_set_t *buf_set)
 int
 dmu_issue(dmu_ctx_t *dc)
 {
-	int held, firsterr, err;
+	int err = 0;
 	uint64_t io_size;
-	dmu_buf_set_t *buf_set;
+	dmu_buf_set_t *dbs;
 
 	/* If this context is async, it must have a context callback. */
 	ASSERT((dc->dc_flags & DMU_CTX_FLAG_ASYNC) == 0 ||
@@ -1655,27 +1657,26 @@ dmu_issue(dmu_ctx_t *dc)
 			return (err);
 	}
 
-	firsterr = err = 0;
 	/* While there is work left to do, execute the next chunk. */
 	dprintf("%s(%p) -> buf %p off %lu sz %lu\n", __func__, dc,
 	    dc->dc_data_buf, dc->dc_dn_offset, dc->dc_resid);
-	held = 1;
 	while (dc->dc_resid > 0 && err == 0) {
 		io_size = MIN(dc->dc_resid, DMU_MAX_ACCESS/2);
 
 		dprintf("%s(%p@%lu+%lu) chunk %lu\n", __func__, dc,
 		    dc->dc_dn_offset, dc->dc_resid, io_size);
-		err = dmu_buf_set_init(dc, &buf_set, io_size);
+		err = dmu_buf_set_init(dc, &dbs, io_size);
 		/* Process the I/O requests, if the initialization passed. */
 		if (err == 0)
-			err = dmu_buf_set_process_io(buf_set);
-		dmu_buf_set_rele(buf_set, err);
+			err = dmu_buf_set_process_io(dbs);
+		dmu_buf_set_rele(dbs, err);
 	}
 	/*
 	 * At this point, either this I/O is async, or all buffer sets
 	 * have finished processing.
 	 */
-	ASSERT((dc->dc_flags & DMU_CTX_FLAG_ASYNC) || zfs_refcount_count(&dc->dc_holds) == 1);
+	ASSERT((dc->dc_flags & DMU_CTX_FLAG_ASYNC) ||
+	    zfs_refcount_count(&dc->dc_holds) == 1);
 
 	/*
 	 * If an error occurs while actually performing I/O, propagate to
@@ -2121,21 +2122,12 @@ dmu_read_uio_dbuf(dmu_buf_t *zdb, uio_t *uio, uint64_t size)
 int
 dmu_read_uio(objset_t *os, uint64_t object, uio_t *uio, uint64_t size)
 {
-	dnode_t *dn;
-	int err;
 
 	if (size == 0)
 		return (0);
 
-	err = dnode_hold(os, object, FTAG, &dn);
-	if (err)
-		return (err);
-
-	err = dmu_read_uio_dnode(dn, uio, size);
-
-	dnode_rele(dn, FTAG);
-
-	return (err);
+	return (dmu_read_impl(NULL, os, object, uio->uio_loffset, size, uio,
+	    DMU_CTX_FLAG_READ|DMU_CTX_FLAG_UIO));
 }
 
 int
