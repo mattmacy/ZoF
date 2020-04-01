@@ -5691,7 +5691,6 @@ arc_read(zio_t *pio, spa_t *spa, const blkptr_t *bp,
 	kmutex_t *hash_lock = NULL;
 	zio_t *rzio;
 	uint64_t guid = spa_load_guid(spa);
-	boolean_t cached_only = (*arc_flags & ARC_FLAG_CACHED_ONLY) != 0;
 	boolean_t compressed_read = (zio_flags & ZIO_FLAG_RAW_COMPRESS) != 0;
 	boolean_t encrypted_read = BP_IS_ENCRYPTED(bp) &&
 	    (zio_flags & ZIO_FLAG_RAW_ENCRYPT) != 0;
@@ -5700,7 +5699,6 @@ arc_read(zio_t *pio, spa_t *spa, const blkptr_t *bp,
 	boolean_t embedded_bp = !!BP_IS_EMBEDDED(bp);
 	int rc = 0;
 
-	ASSERT(!cached_only || done != NULL);
 	ASSERT(!embedded_bp ||
 	    BPE_GET_ETYPE(bp) == BP_EMBEDDED_TYPE_DATA);
 	ASSERT(!BP_IS_HOLE(bp));
@@ -5742,6 +5740,7 @@ top:
 			zio_t *head_zio = hdr->b_l1hdr.b_acb->acb_zio_head;
 
 			if (*arc_flags & ARC_FLAG_CACHED_ONLY) {
+				*arc_flags &= ~ARC_FLAG_CACHED;
 				mutex_exit(hash_lock);
 				ARCSTAT_BUMP(arcstat_cached_only_in_progress);
 				rc = SET_ERROR(ENOENT);
@@ -5760,21 +5759,6 @@ top:
 				DTRACE_PROBE1(arc__async__upgrade__sync,
 				    arc_buf_hdr_t *, hdr);
 				ARCSTAT_BUMP(arcstat_async_upgrade_sync);
-			}
-			/*
-			 * Cache-only lookups should only occur from consumers
-			 * that do not have any data yet.  However, prefetch
-			 * I/O of this block could be in progress.  Since
-			 * cache-only lookups must be synchronous, the done
-			 * callback chaining cannot occur here.  In that case,
-			 * simply return as a cache miss.
-			 */
-			if (cached_only) {
-				*arc_flags &= ~ARC_FLAG_CACHED;
-				mutex_exit(hash_lock);
-				done(NULL, zb, 0, bp, NULL, private);
-				rc = SET_ERROR(ENOENT);
-				goto out;
 			}
 			if (hdr->b_flags & ARC_FLAG_PREDICTIVE_PREFETCH) {
 				arc_hdr_clear_flags(hdr,
@@ -5913,13 +5897,6 @@ top:
 			rc = SET_ERROR(ECKSUM);
 			if (hash_lock != NULL)
 				mutex_exit(hash_lock);
-			goto out;
-		}
-		if (cached_only) {
-			if (hdr)
-				mutex_exit(hash_lock);
-			done(NULL, zb, 0, bp, NULL, private);
-			rc = SET_ERROR(ENOENT);
 			goto out;
 		}
 
