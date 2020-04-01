@@ -34,6 +34,15 @@ int reference_tracking_enable = TRUE;
 int reference_history = 3; /* tunable */
 
 #ifdef	ZFS_DEBUG
+typedef struct reference {
+	list_node_t ref_link;
+	const void *ref_holder;
+	uint64_t ref_number;
+	uint8_t *ref_removed;
+	const char *ref_file;
+	int ref_line;
+} reference_t;
+
 static kmem_cache_t *reference_cache;
 static kmem_cache_t *reference_history_cache;
 
@@ -86,12 +95,18 @@ zfs_refcount_destroy_many(zfs_refcount_t *rc, uint64_t number)
 {
 	reference_t *ref;
 
-	ASSERT3U(rc->rc_count, ==, number);
 	while ((ref = list_head(&rc->rc_list))) {
 		list_remove(&rc->rc_list, ref);
+#if !defined(_KERNEL) || defined(__FreeBSD__)
+		if (rc->rc_count != number)
+			printf("ref_holder: %p ref_number: %lu %s:%d\n",
+				   ref->ref_holder, (uint64_t)ref->ref_number, ref->ref_file, ref->ref_line);
+#endif
 		kmem_cache_free(reference_cache, ref);
 	}
 	list_destroy(&rc->rc_list);
+
+	ASSERT3U(rc->rc_count, ==, number);
 
 	while ((ref = list_head(&rc->rc_removed))) {
 		list_remove(&rc->rc_removed, ref);
@@ -121,7 +136,7 @@ zfs_refcount_count(zfs_refcount_t *rc)
 }
 
 int64_t
-zfs_refcount_add_many(zfs_refcount_t *rc, uint64_t number, const void *holder)
+zfs_refcount_add_many_(zfs_refcount_t *rc, uint64_t number, const void *holder, const char *file, int line)
 {
 	reference_t *ref = NULL;
 	int64_t count;
@@ -130,6 +145,8 @@ zfs_refcount_add_many(zfs_refcount_t *rc, uint64_t number, const void *holder)
 		ref = kmem_cache_alloc(reference_cache, KM_SLEEP);
 		ref->ref_holder = holder;
 		ref->ref_number = number;
+		ref->ref_file = file;
+		ref->ref_line = line;
 	}
 	mutex_enter(&rc->rc_mtx);
 	ASSERT3U(rc->rc_count, >=, 0);
