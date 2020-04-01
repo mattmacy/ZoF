@@ -1878,7 +1878,7 @@ dmu_write_impl(dnode_t *dn, objset_t *os, uint64_t object, uint64_t offset, uint
 	dmu_ctx_t dmu_ctx;
 	int err;
 
-	err = dmu_ctx_init(&dmu_ctx, /*dnode*/NULL, os, object, offset,
+	err = dmu_ctx_init(&dmu_ctx, dn, os, object, offset,
 	    size, bufp, FTAG, flags);
 	if (err == 0) {
 		dmu_ctx_set_dmu_tx(&dmu_ctx, tx);
