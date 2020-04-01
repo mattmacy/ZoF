@@ -1979,7 +1979,7 @@ load_nvlist(spa_t *spa, uint64_t obj, nvlist_t **value)
 
 	packed = vmem_alloc(nvsize, KM_SLEEP);
 	error = dmu_read(spa->spa_meta_objset, obj, 0, nvsize, packed,
-	    DMU_READ_PREFETCH);
+	    DMU_CTX_FLAG_PREFETCH);
 	if (error == 0)
 		error = nvlist_unpack(packed, nvsize, value, 0);
 	vmem_free(packed, nvsize);
