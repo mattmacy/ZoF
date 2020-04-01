@@ -169,7 +169,7 @@ static uint64_t dirty_ranges_in_flight;
 #endif
 
 static boolean_t dbuf_undirty(dmu_buf_impl_t *db, dmu_tx_t *tx);
-static void dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx);
+static zio_t *dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx);
 static void dbuf_sync_leaf_verify_bonus_dnode(dbuf_dirty_record_t *dr);
 static int dbuf_read_verify_dnode_crypt(dmu_buf_impl_t *db, uint32_t flags);
 static dbuf_dirty_record_t *dbuf_dirty_bonus(dmu_buf_impl_t *db, dmu_tx_t *tx);
@@ -5234,12 +5234,22 @@ dbuf_prepare_encrypted_dnode_leaf(dbuf_dirty_record_t *dr)
 }
 
 boolean_t
-dbuf_resolve_still_pending(dbuf_dirty_record_t *dr)
+dbuf_resolve_still_pending(dbuf_dirty_record_t *dr, zio_t **dr_zio, zio_t *zio)
 {
 	/* Resolve race with dbuf_read_complete()/dbuf_free_range() */
 	boolean_t resolve_pending;
 	mutex_enter(&dr->dr_dbuf->db_mtx);
 	resolve_pending = !list_is_empty(&dr->dt.dl.write_ranges);
+	if (resolve_pending) {
+		ASSERT(*dr_zio == NULL);
+		*dr_zio = zio;
+#ifdef ZFS_DEBUG
+		if (dr_zio == &dr->dr_zio)
+			/* DEBUG_COUNTER_INC(syncer_deferred_resolves) */ ;
+		else
+			ASSERT(!"unexpected zio_t **dr_zio!");
+#endif
+}
 	mutex_exit(&dr->dr_dbuf->db_mtx);
 	return (resolve_pending);
 }
@@ -5286,10 +5296,9 @@ dbuf_sync_indirect(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 
 	mutex_exit(&db->db_mtx);
 
-	dbuf_write(dr, db->db_buf, tx);
-
-	zio = dr->dr_zio;
+	zio = dr->dr_zio = dbuf_write(dr, db->db_buf, tx);
 	mutex_enter(&dr->dt.di.dr_mtx);
+
 	dbuf_sync_list(&dr->dt.di.dr_children, db->db_level - 1, tx);
 	ASSERT(list_head(&dr->dt.di.dr_children) == NULL);
 	mutex_exit(&dr->dt.di.dr_mtx);
@@ -5348,6 +5357,7 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 	dmu_buf_impl_t *db = dr->dr_dbuf;
 	dnode_t *dn;
 	objset_t *os;
+	zio_t *zio;
 	uint64_t txg = tx->tx_txg;
 	boolean_t resolve_pending;
 
@@ -5440,8 +5450,6 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 		cv_wait(&db->db_changed, &db->db_mtx);
 		ASSERT(dr->dt.dl.dr_override_state != DR_NOT_OVERRIDDEN);
 	}
-	/* Remember if we need to defer write execution to dbuf_read_done(). */
-	resolve_pending = !list_is_empty(&dr->dt.dl.write_ranges);
 
 	/*
 	 * If this is a dnode block, ensure it is appropriately encrypted
@@ -5450,25 +5458,9 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 	if (os->os_encrypted && dn->dn_object == DMU_META_DNODE_OBJECT)
 		dbuf_prepare_encrypted_dnode_leaf(dr);
 
-	if (db->db_state != DB_NOFILL &&
-	    dn->dn_object != DMU_META_DNODE_OBJECT &&
-	    zfs_refcount_count(&db->db_holds) > 1 &&
-	    dr->dt.dl.dr_override_state != DR_OVERRIDDEN &&
-	    *datap == db->db_buf) {
-		/*
-		 * If this buffer is currently "in use" (i.e., there
-		 * are active holds and db_data still references it),
-		 * then make a copy before we start the write so that
-		 * any modifications from the open txg will not leak
-		 * into this write.
-		 *
-		 * NOTE: this copy does not need to be made for
-		 * objects only modified in the syncing context (e.g.
-		 * DNONE_DNODE blocks).
-		 */
-		*datap = dbuf_alloc_arcbuf_from_arcbuf(db, db->db_buf);
-		bcopy(db->db.db_data, (*datap)->b_data, arc_buf_size(*datap));
-	}
+	/* Remember if we need to defer write execution to dbuf_read_done(). */
+	resolve_pending = !list_is_empty(&dr->dt.dl.write_ranges);
+
 	/*
 	 * Syncer splits must be deferred until the buffer contents
 	 * are fully valid.
@@ -5480,14 +5472,15 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 	ASSERT(list_next(&db->db_dirty_records, dr) == NULL);
 	mutex_exit(&db->db_mtx);
 
-	dbuf_write(dr, *datap, tx);
+	zio = dbuf_write(dr, *datap, tx);
 	if (resolve_pending &&
-	    dbuf_resolve_still_pending(dr)) {
+	    dbuf_resolve_still_pending(dr, &dr->dr_zio, zio)) {
 		/* XXX */
 		DB_DNODE_EXIT(db);
 		return;
 	}
 
+	dr->dr_zio = zio;
 	ASSERT(!list_link_active(&dr->dr_dirty_node));
 	if (dn->dn_object == DMU_META_DNODE_OBJECT) {
 		list_insert_tail(&dn->dn_dirty_records[txg & TXG_MASK], dr);
@@ -5501,7 +5494,7 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 		 * zio_nowait() invalidates the dbuf.
 		 */
 		DB_DNODE_EXIT(db);
-		zio_nowait(dr->dr_zio);
+		zio_nowait(zio);
 	}
 }
 
@@ -5893,7 +5886,7 @@ dbuf_remap(dnode_t *dn, dmu_buf_impl_t *db, dmu_tx_t *tx)
 
 
 /* Issue I/O to commit a dirty buffer to disk. */
-static void
+static zio_t *
 dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx)
 {
 	dmu_buf_impl_t *db = dr->dr_dbuf;
@@ -5904,6 +5897,7 @@ dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx)
 	zbookmark_phys_t zb;
 	zio_prop_t zp;
 	zio_t *pio; /* parent I/O */
+	zio_t *dr_zio;
 	int wp_flag = 0;
 
 	ASSERT(dmu_tx_is_syncing(tx));
@@ -5985,20 +5979,20 @@ dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx)
 		abd_t *contents = (data != NULL) ?
 		    abd_get_from_buf(data->b_data, arc_buf_size(data)) : NULL;
 
-		dr->dr_zio = zio_write(pio, os->os_spa, txg,
+		dr_zio = zio_write(pio, os->os_spa, txg,
 		    &dr->dr_bp_copy, contents, db->db.db_size, db->db.db_size,
 		    &zp, dbuf_write_override_ready, NULL, NULL,
 		    dbuf_write_override_done,
 		    dr, ZIO_PRIORITY_ASYNC_WRITE, ZIO_FLAG_MUSTSUCCEED, &zb);
 		mutex_enter(&db->db_mtx);
 		dr->dt.dl.dr_override_state = DR_NOT_OVERRIDDEN;
-		zio_write_override(dr->dr_zio, &dr->dt.dl.dr_overridden_by,
+		zio_write_override(dr_zio, &dr->dt.dl.dr_overridden_by,
 		    dr->dt.dl.dr_copies, dr->dt.dl.dr_nopwrite);
 		mutex_exit(&db->db_mtx);
 	} else if (db->db_state == DB_NOFILL) {
 		ASSERT(zp.zp_checksum == ZIO_CHECKSUM_OFF ||
 		    zp.zp_checksum == ZIO_CHECKSUM_NOPARITY);
-		dr->dr_zio = zio_write(pio, os->os_spa, txg,
+		dr_zio = zio_write(pio, os->os_spa, txg,
 		    &dr->dr_bp_copy, NULL, db->db.db_size, db->db.db_size, &zp,
 		    dbuf_write_nofill_ready, NULL, NULL,
 		    dbuf_write_nofill_done, db,
@@ -6016,13 +6010,14 @@ dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx)
 		if (db->db_level != 0)
 			children_ready_cb = dbuf_write_children_ready;
 
-		dr->dr_zio = arc_write(pio, os->os_spa, txg,
+		dr_zio = arc_write(pio, os->os_spa, txg,
 		    &dr->dr_bp_copy, data, DBUF_IS_L2CACHEABLE(db),
 		    &zp, dbuf_write_ready,
 		    children_ready_cb, dbuf_write_physdone,
 		    dbuf_write_done, db, ZIO_PRIORITY_ASYNC_WRITE,
 		    ZIO_FLAG_MUSTSUCCEED, &zb);
 	}
+	return (dr_zio);
 }
 
 EXPORT_SYMBOL(dbuf_find);
