@@ -87,7 +87,7 @@ dmu_buf_hold_array(objset_t *os, uint64_t object, uint64_t offset,
 		return (err);
 
 	err = dmu_buf_hold_array_by_dnode(dn, offset, length, read, tag,
-	    numbufsp, dbpp, DMU_READ_PREFETCH);
+	    numbufsp, dbpp, DMU_CTX_FLAG_PREFETCH);
 
 	dnode_rele(dn, FTAG);
 
