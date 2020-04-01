@@ -1403,12 +1403,12 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 		int err = dbuf_hold_impl(dn, /*level*/0, blkid + i,
 			/*fail_sparse*/FALSE, /*fail_uncached*/FALSE, dmu_ctx->dc_tag, &db, dbs);
 		uint64_t bufoff, bufsiz;
-		zfs_refcount_create(&dbs->dbs_holds);
-
 		if (db == NULL) {
 			/* Only include counts for the processed buffers. */
 			dbs->dbs_count = i;
 			/*initiator*/
+			zfs_refcount_destroy(&dbs->dbs_holds);
+			zfs_refcount_create_untracked(&dbs->dbs_holds);
 			zfs_refcount_add_many(&dbs->dbs_holds, i + 1, NULL);
 			zio_nowait(dbs->dbs_zio);
 			return (err);
@@ -1545,7 +1545,7 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	dbs->dbs_count = nblks;
 	dbs->dbs_dbp_length = nblks;
 	dbs->dbs_tx = tx;
-	zfs_refcount_create(&dbs->dbs_holds);
+	zfs_refcount_create_untracked(&dbs->dbs_holds);
 
 	/* Include a refcount for the initiator. */
 	if (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ)
@@ -1858,7 +1858,7 @@ dmu_read(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 {
 
 	return (dmu_read_impl(/* dnode */NULL, os, object, offset, size,
-				buf, flags|DMU_CTX_FLAG_READ));
+				buf, flags));
 }
 
 int
@@ -1867,31 +1867,33 @@ dmu_read_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size, void *buf,
 {
 
 	return (dmu_read_impl(dn, dn->dn_objset, dn->dn_object, offset, size,
-				buf, flags|DMU_CTX_FLAG_READ));
+				buf, flags));
 }
 
-static void
+static int
 dmu_write_impl(dnode_t *dn, objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
-    const void *buf, dmu_tx_t *tx)
+    const void *buf, dmu_tx_t *tx, uint32_t flags)
 {
 	void *bufp = (void *)(uintptr_t)buf;
 	dmu_ctx_t dmu_ctx;
 	int err;
 
 	err = dmu_ctx_init(&dmu_ctx, /*dnode*/NULL, os, object, offset,
-	    size, bufp, FTAG, /*flags*/0);
-	VERIFY(err == 0);
-	dmu_ctx_set_dmu_tx(&dmu_ctx, tx);
+	    size, bufp, FTAG, flags);
+	if (err == 0) {
+		dmu_ctx_set_dmu_tx(&dmu_ctx, tx);
 
-	(void) dmu_issue(&dmu_ctx);
-	dmu_ctx_rele(&dmu_ctx);
+		err = dmu_issue(&dmu_ctx);
+		dmu_ctx_rele(&dmu_ctx);
+	}
+	return (err);
 }
 
 void
 dmu_write(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
     const void *buf, dmu_tx_t *tx)
 {
-	return (dmu_write_impl(/*dnode*/NULL, os, object, offset, size, buf, tx));
+	dmu_write_impl(/*dnode*/NULL, os, object, offset, size, buf, tx, 0);
 }
 
 void
@@ -1899,22 +1901,21 @@ dmu_write_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size,
     const void *buf, dmu_tx_t *tx)
 {
 
-	return (dmu_write_impl(dn, dn->dn_objset, dn->dn_object, offset, size, buf, tx));
+	dmu_write_impl(dn, dn->dn_objset, dn->dn_object, offset, size, buf, tx, 0);
 }
 
 int
 dmu_prealloc(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
     dmu_tx_t *tx)
 {
-	uint32_t flags = DMU_CTX_FLAG_NOFILL;
 	dmu_ctx_t dc;
 	int err;
 
 	if (size == 0)
 		return (0);
 
-	err = dmu_ctx_init(&dc, /*dnode*/NULL, os, object, offset, size,
-		/*data_buf*/NULL, FTAG, flags);
+	err = dmu_ctx_init(&dc, /* dnode */ NULL, os, object, offset, size,
+	    /* data_buf */ NULL, FTAG, DMU_CTX_FLAG_NOFILL);
 	if (err)
 		return (err);
 
@@ -2084,7 +2085,7 @@ dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 {
 
 	return (dmu_read_impl(dn, NULL, 0, uio->uio_loffset, size, uio,
-                DMU_CTX_FLAG_READ|DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_NO_HOLD));
+                DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_NO_HOLD));
 }
 
 /*
@@ -2127,7 +2128,7 @@ dmu_read_uio(objset_t *os, uint64_t object, uio_t *uio, uint64_t size)
 		return (0);
 
 	return (dmu_read_impl(NULL, os, object, uio->uio_loffset, size, uio,
-	    DMU_CTX_FLAG_READ|DMU_CTX_FLAG_UIO));
+	    DMU_CTX_FLAG_UIO));
 }
 
 int
@@ -2208,9 +2209,9 @@ dmu_write_uio_dbuf(dmu_buf_t *zdb, uio_t *uio, uint64_t size,
 
 	DB_DNODE_ENTER(db);
 	dn = DB_DNODE(db);
-	err = dmu_write_uio_dnode(dn, uio, size, tx);
+	err = dmu_write_impl(dn, NULL, 0, uio->uio_loffset, size, uio, tx,
+	    DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_NO_HOLD);
 	DB_DNODE_EXIT(db);
-
 	return (err);
 }
 
@@ -2223,21 +2224,11 @@ int
 dmu_write_uio(objset_t *os, uint64_t object, uio_t *uio, uint64_t size,
     dmu_tx_t *tx)
 {
-	dnode_t *dn;
-	int err;
 
 	if (size == 0)
 		return (0);
-
-	err = dnode_hold(os, object, FTAG, &dn);
-	if (err)
-		return (err);
-
-	err = dmu_write_uio_dnode(dn, uio, size, tx);
-
-	dnode_rele(dn, FTAG);
-
-	return (err);
+	return (dmu_write_impl(NULL, os, object, uio->uio_loffset, size, uio, tx,
+	    DMU_CTX_FLAG_UIO));
 }
 #endif /* _KERNEL */
 
