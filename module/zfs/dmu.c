@@ -1220,6 +1220,7 @@ dmu_ctx_rele(dmu_ctx_t *dmu_ctx)
 	if (zfs_refcount_remove(&dmu_ctx->dc_holds, NULL) != 0)
 		return;
 
+	mutex_destroy(&dmu_ctx->dc_mtx);
 	zfs_refcount_destroy(&dmu_ctx->dc_holds);
 	ASSERT(dmu_ctx_in_flight > 0);
 	DEBUG_REFCOUNT_DEC(dmu_ctx_in_flight);
@@ -1743,6 +1744,7 @@ dmu_ctx_init(dmu_ctx_t *dmu_ctx, struct dnode *dn, objset_t *os,
 
 	/* All set, actually initialize the context! */
 	bzero(dmu_ctx, sizeof(dmu_ctx_t));
+	mutex_init(&dmu_ctx->dc_mtx, "context lock", MUTEX_DEFAULT, NULL);
 	dmu_ctx->dc_dn = dn;
 	dmu_ctx->dc_os = os;
 	dmu_ctx->dc_object = object;
