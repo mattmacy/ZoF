@@ -1904,9 +1904,7 @@ dbuf_read_impl(dmu_buf_impl_t *db, zio_t *zio, uint32_t *flags,
 		    /* zio_flags */0, &aflags, &zb);
 		if (aflags & ARC_FLAG_CACHED)
 			*flags |= DB_RF_CACHED;
-		DB_DNODE_EXIT(db);
-		/* Cache lookups never drop the dbuf mutex. */
-		return (err);
+		goto early_unlock;
 	}
 
 	err = dbuf_read_verify_dnode_crypt(db, *flags);
