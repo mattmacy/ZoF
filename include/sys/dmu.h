@@ -370,6 +370,7 @@ typedef enum {
 	DMU_CTX_FLAG_SUN_PAGES	= 1 << 5,
 	DMU_CTX_FLAG_NOFILL	= 1 << 6,
 	DMU_CTX_FLAG_ASYNC	= 1 << 7,
+	DMU_CTX_FLAG_NODECRYPT	= 1 << 8,
 	DMU_CTX_WRITER_FLAGS	= DMU_CTX_FLAG_SUN_PAGES|DMU_CTX_FLAG_NOFILL,
 	DMU_CTX_READER_FLAGS	= DMU_CTX_FLAG_PREFETCH
 } dmu_ctx_flag_t;
@@ -1022,9 +1023,6 @@ int dmu_free_long_object(objset_t *os, uint64_t object);
  * Canfail routines will return 0 on success, or an errno if there is a
  * nonrecoverable I/O error.
  */
-#define	DMU_READ_PREFETCH	0 /* prefetch */
-#define	DMU_READ_NO_PREFETCH	1 /* don't prefetch */
-#define	DMU_READ_NO_DECRYPT	2 /* don't decrypt */
 int dmu_issue(dmu_ctx_t *dc);
 int dmu_read(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 	void *buf, uint32_t flags);

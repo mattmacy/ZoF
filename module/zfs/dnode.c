@@ -125,7 +125,7 @@ dnode_cons(void *arg, void *unused, int kmflag)
 	 * Every dbuf has a reference, and dropping a tracked reference is
 	 * O(number of references), so don't track dn_holds.
 	 */
-	zfs_refcount_create_untracked(&dn->dn_holds);
+	zfs_refcount_create(&dn->dn_holds);
 	zfs_refcount_create(&dn->dn_tx_holds);
 	list_link_init(&dn->dn_link);
 
