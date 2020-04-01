@@ -255,9 +255,9 @@ dmu_buf_hold_by_dnode(dnode_t *dn, uint64_t offset,
 	int err;
 	int db_flags = DB_RF_CANFAIL;
 
-	if (flags & DMU_READ_NO_PREFETCH)
+	if ((flags & DMU_CTX_FLAG_PREFETCH) == 0)
 		db_flags |= DB_RF_NOPREFETCH;
-	if (flags & DMU_READ_NO_DECRYPT)
+	if (flags & DMU_CTX_FLAG_NODECRYPT)
 		db_flags |= DB_RF_NO_DECRYPT;
 
 	err = dmu_buf_hold_noread_by_dnode(dn, offset, tag, dbp);
@@ -280,9 +280,9 @@ dmu_buf_hold(objset_t *os, uint64_t object, uint64_t offset,
 	int err;
 	int db_flags = DB_RF_CANFAIL;
 
-	if (flags & DMU_READ_NO_PREFETCH)
+	if ((flags & DMU_CTX_FLAG_PREFETCH) == 0)
 		db_flags |= DB_RF_NOPREFETCH;
-	if (flags & DMU_READ_NO_DECRYPT)
+	if (flags & DMU_CTX_FLAG_NODECRYPT)
 		db_flags |= DB_RF_NO_DECRYPT;
 
 	err = dmu_buf_hold_noread(os, object, offset, tag, dbp);
@@ -392,9 +392,9 @@ int dmu_bonus_hold_by_dnode(dnode_t *dn, void *tag, dmu_buf_t **dbp,
 	int error;
 	uint32_t db_flags = DB_RF_MUST_SUCCEED;
 
-	if (flags & DMU_READ_NO_PREFETCH)
+	if ((flags & DMU_CTX_FLAG_PREFETCH) == 0)
 		db_flags |= DB_RF_NOPREFETCH;
-	if (flags & DMU_READ_NO_DECRYPT)
+	if (flags & DMU_CTX_FLAG_NODECRYPT)
 		db_flags |= DB_RF_NO_DECRYPT;
 
 	rw_enter(&dn->dn_struct_rwlock, RW_READER);
@@ -441,7 +441,7 @@ dmu_bonus_hold(objset_t *os, uint64_t object, void *tag, dmu_buf_t **dbp)
 	if (error)
 		return (error);
 
-	error = dmu_bonus_hold_by_dnode(dn, tag, dbp, DMU_READ_NO_PREFETCH);
+	error = dmu_bonus_hold_by_dnode(dn, tag, dbp, 0);
 	dnode_rele(dn, FTAG);
 
 	return (error);
@@ -522,7 +522,7 @@ dmu_spill_hold_by_bonus(dmu_buf_t *bonus, uint32_t flags, void *tag,
 	int err;
 	uint32_t db_flags = DB_RF_CANFAIL;
 
-	if (flags & DMU_READ_NO_DECRYPT)
+	if (flags & DMU_CTX_FLAG_NODECRYPT)
 		db_flags |= DB_RF_NO_DECRYPT;
 
 	DB_DNODE_ENTER(db);
@@ -596,7 +596,7 @@ dmu_buf_hold_array_by_dnode(dnode_t *dn, uint64_t offset, uint64_t length,
 		dbp[i] = &db->db;
 	}
 
-	if ((flags & DMU_READ_NO_PREFETCH) == 0 &&
+	if ((flags & DMU_CTX_FLAG_PREFETCH) &&
 	    DNODE_META_IS_CACHEABLE(dn) && length <= zfetch_array_rd_sz) {
 		dmu_zfetch(&dn->dn_zfetch, blkid, nblks,
 		    read && DNODE_IS_CACHEABLE(dn), B_TRUE);
@@ -644,7 +644,7 @@ dmu_buf_hold_array(objset_t *os, uint64_t object, uint64_t offset,
 		return (err);
 
 	err = dmu_buf_hold_array_by_dnode(dn, offset, length, read, tag,
-	    numbufsp, dbpp, DMU_READ_PREFETCH);
+	    numbufsp, dbpp, DMU_CTX_FLAG_PREFETCH);
 
 	dnode_rele(dn, FTAG);
 
@@ -663,7 +663,7 @@ dmu_buf_hold_array_by_bonus(dmu_buf_t *db_fake, uint64_t offset,
 	DB_DNODE_ENTER(db);
 	dn = DB_DNODE(db);
 	err = dmu_buf_hold_array_by_dnode(dn, offset, length, read, tag,
-	    numbufsp, dbpp, DMU_READ_PREFETCH);
+	    numbufsp, dbpp, DMU_CTX_FLAG_PREFETCH);
 	DB_DNODE_EXIT(db);
 
 	return (err);
@@ -1203,10 +1203,7 @@ dmu_buf_set_transfer_write_tx(dmu_buf_set_t *dbs)
 {
 
 	dmu_buf_set_transfer_write(dbs);
-	if (dbs->dbs_err)
-		dmu_tx_abort(dbs->dbs_tx);
-	else
-		dmu_tx_commit(dbs->dbs_tx);
+	dmu_tx_commit(dbs->dbs_tx);
 }
 
 /**
@@ -1869,7 +1866,7 @@ dmu_read_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size, void *buf,
 {
 
 	return (dmu_read_impl(dn, dn->dn_objset, dn->dn_object, offset, size,
-				buf, flags));
+		       buf, flags|DMU_CTX_FLAG_NO_HOLD));
 }
 
 static int
@@ -2142,7 +2139,7 @@ dmu_write_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size, dmu_tx_t *tx)
 	int i;
 
 	err = dmu_buf_hold_array_by_dnode(dn, uio->uio_loffset, size,
-	    FALSE, FTAG, &numbufs, &dbp, DMU_READ_PREFETCH);
+	    FALSE, FTAG, &numbufs, &dbp, DMU_CTX_FLAG_PREFETCH);
 	if (err)
 		return (err);
 
@@ -2274,7 +2271,7 @@ dmu_copy_from_buf(objset_t *os, uint64_t object, uint64_t offset,
 
 	/* hold the db that we want to write to */
 	VERIFY0(dmu_buf_hold(os, object, offset, FTAG, &dst_handle,
-	    DMU_READ_NO_DECRYPT));
+	    DMU_CTX_FLAG_NODECRYPT));
 	dstdb = (dmu_buf_impl_t *)dst_handle;
 	datalen = arc_buf_size(srcdb->db_buf);
 
