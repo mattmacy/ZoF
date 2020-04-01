@@ -63,11 +63,11 @@ void zfs_refcount_destroy(zfs_refcount_t *);
 void zfs_refcount_destroy_many(zfs_refcount_t *, uint64_t);
 int zfs_refcount_is_zero(zfs_refcount_t *);
 int64_t zfs_refcount_count(zfs_refcount_t *);
-int64_t zfs_refcount_add(zfs_refcount_t *, const void *);
-int64_t zfs_refcount_remove(zfs_refcount_t *, const void *);
+int64_t zfs_refcount_add_(zfs_refcount_t *, const void *, const char *, int);
+int64_t zfs_refcount_remove_(zfs_refcount_t *, const void *, const char *, int);
 int64_t zfs_refcount_add_many_(zfs_refcount_t *, uint64_t, const void *,
     const char *, int);
-int64_t zfs_refcount_remove_many(zfs_refcount_t *, uint64_t, const void *);
+int64_t zfs_refcount_remove_many_(zfs_refcount_t *, uint64_t, const void *, const char *, int);
 void zfs_refcount_transfer(zfs_refcount_t *, zfs_refcount_t *);
 void zfs_refcount_transfer_ownership(zfs_refcount_t *, const void *,
     const void *);
@@ -76,8 +76,15 @@ void zfs_refcount_transfer_ownership_many(zfs_refcount_t *, uint64_t,
 boolean_t zfs_refcount_held(zfs_refcount_t *, const void *);
 boolean_t zfs_refcount_not_held(zfs_refcount_t *, const void *);
 
+#define zfs_refcount_add(rc, tag)	\
+	zfs_refcount_add_((rc), (tag), __FILE__, __LINE__)
 #define zfs_refcount_add_many(rc, count, tag)	\
 	zfs_refcount_add_many_((rc), (count), (tag), __FILE__, __LINE__)
+#define zfs_refcount_remove(rc, tag)	\
+	zfs_refcount_remove_((rc), (tag), __FILE__, __LINE__)
+#define zfs_refcount_remove_many(rc, count, tag)	\
+	zfs_refcount_remove_many_((rc), (count), (tag), __FILE__, __LINE__)
+
 void zfs_refcount_init(void);
 void zfs_refcount_fini(void);
 
