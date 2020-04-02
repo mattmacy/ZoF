@@ -189,7 +189,7 @@ zfs_refcount_remove_many_(zfs_refcount_t *rc, uint64_t number,
 		mutex_exit(&rc->rc_mtx);
 		return (count);
 	}
-#if !defined(__KERNEL) || defined(__FreeBSD__)
+#if !defined(_KERNEL) || defined(__FreeBSD__)
 	if (rc->rc_count < number) {
 		printf("refs added:\n");
 		for (ref = list_head(&rc->rc_list); ref;
