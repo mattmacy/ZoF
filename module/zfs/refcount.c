@@ -236,6 +236,12 @@ zfs_refcount_remove_many_(zfs_refcount_t *rc, uint64_t number,
 			return (count);
 		}
 	}
+#if !defined(_KERNEL) || defined(__FreeBSD__)
+	for (ref = list_head(&rc->rc_list); ref;
+		 ref = list_next(&rc->rc_list, ref)) {
+		printf("%p : %lu %s:%d\n", ref->ref_holder, ref->ref_number, ref->ref_add_file, ref->ref_add_line);
+	}
+#endif
 	panic("No such hold %p on refcount %llx", holder,
 	    (u_longlong_t)(uintptr_t)rc);
 	return (-1);
@@ -300,6 +306,28 @@ zfs_refcount_transfer_ownership_many(zfs_refcount_t *rc, uint64_t number,
 			break;
 		}
 	}
+#if !defined(_KERNEL) || defined(__FreeBSD__)
+
+	if (!found) {
+		for (ref = list_head(&rc->rc_list); ref;
+			 ref = list_next(&rc->rc_list, ref)) {
+			if (ref->ref_holder == current_holder)
+				printf("%p : %lu\n", current_holder, ref->ref_number);
+		}
+		for (ref = list_head(&rc->rc_list); ref;
+			 ref = list_next(&rc->rc_list, ref)) {
+			if (ref->ref_holder == new_holder) {
+				panic("new_holder %p already in reference list with number %lu and old holder %p not found\n", new_holder, ref->ref_number, current_holder);
+				found = B_TRUE;
+				break;
+			}
+		}
+		for (ref = list_head(&rc->rc_list); ref;
+			 ref = list_next(&rc->rc_list, ref)) {
+			printf("%p : %lu %s:%d\n", ref->ref_holder, ref->ref_number, ref->ref_add_file, ref->ref_add_line);
+		}
+	}
+#endif
 	ASSERT(found);
 	mutex_exit(&rc->rc_mtx);
 }
