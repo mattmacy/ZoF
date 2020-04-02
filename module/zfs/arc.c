@@ -3351,6 +3351,8 @@ arc_hdr_realloc_crypt(arc_buf_hdr_t *hdr, boolean_t need_crypt)
 		buf->b_hdr = nhdr;
 		mutex_exit(&buf->b_evict_lock);
 	}
+	zfs_refcount_transfer_ownership_many(&hdr->b_l1hdr.b_state->arcs_size,
+	    arc_hdr_size(hdr), hdr, nhdr);
 
 	zfs_refcount_transfer(&nhdr->b_l1hdr.b_refcnt, &hdr->b_l1hdr.b_refcnt);
 	(void) zfs_refcount_remove(&nhdr->b_l1hdr.b_refcnt, FTAG);
