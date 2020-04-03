@@ -1655,9 +1655,10 @@ dmu_issue(dmu_ctx_t *dc)
 		    dc->dc_dn_offset, dc->dc_resid, io_size);
 		err = dmu_buf_set_init(dc, &dbs, io_size);
 		/* Process the I/O requests, if the initialization passed. */
-		if (err == 0)
+		if (err == 0) {
 			err = dmu_buf_set_process_io(dbs);
-		dmu_buf_set_rele(dbs, err);
+			dmu_buf_set_rele(dbs, err);
+		}
 	}
 	/*
 	 * At this point, either this I/O is async, or all buffer sets
