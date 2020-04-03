@@ -53,8 +53,6 @@
 
 kstat_t *dbuf_ksp;
 
-#define	CFAPRINTF(...)
-
 typedef struct dbuf_stats {
 	/*
 	 * Various statistics about the size of the dbuf cache.
@@ -2306,7 +2304,7 @@ dbuf_free_range_already_freed(dmu_buf_impl_t *db)
 static boolean_t
 dbuf_free_range_filler_will_free(dmu_buf_impl_t *db)
 {
-	if (db->db_state == DB_FILL || db->db_state == DB_READ) {
+	if (db->db_state & DB_FILL) {
 		/*
 		 * If the buffer is currently being filled, then its
 		 * contents cannot be directly cleared.  Signal the filler
@@ -2756,13 +2754,12 @@ dbuf_dirty_compute_state(dbuf_dirty_state_t *dds)
 	dbuf_dirty_record_t *dr, *newest;
 	dnode_t *dn = dds->dds_dn;
 
-#ifdef HAVE_ASYNC
 	/* Only one filler allowed at a time. */
 	while (db->db_state & DB_FILL) {
 		ASSERT0(db->db_level);
 		cv_wait(&db->db_changed, &db->db_mtx);
 	}
-#endif
+
 	dbuf_dirty_verify(db, tx);
 	if (db->db_blkid == DMU_SPILL_BLKID)
 		dds->dds_dn->dn_have_spill = B_TRUE;
@@ -3068,7 +3065,6 @@ dbuf_dirty_record_add_range(dbuf_dirty_record_t *dr, int offset, int size)
 	} else {
 		/* If old_range is NULL, this does a list_insert_tail(). */
 		list_insert_before(&dl->write_ranges, old_range, range);
-		CFAPRINTF("add_range db=%p dr=%p\n", db, dr);
 		DEBUG_REFCOUNT_INC(dirty_ranges_in_flight);
 		DEBUG_COUNTER_INC(dirty_ranges_total);
 	}
@@ -3484,7 +3480,10 @@ dbuf_undirty_bonus(dbuf_dirty_record_t *dr)
 	if (dr->dr_dbuf->db_level != 0) {
 		mutex_destroy(&dr->dt.di.dr_mtx);
 		list_destroy(&dr->dt.di.dr_children);
+	} else {
+		dbuf_dirty_record_cleanup_ranges(dr);
 	}
+	list_destroy(&dr->dt.dl.write_ranges);
 	kmem_free(dr, sizeof (dbuf_dirty_record_t));
 	ASSERT3U(db->db_dirtycnt, >, 0);
 	db->db_dirtycnt -= 1;
@@ -3510,7 +3509,6 @@ dbuf_undirty_leaf(dbuf_dirty_record_t *dr)
 			 * retained in the cache after the last dbuf
 			 * reference is removed.
 			 */
-			CFAPRINTF("transfer cache state dr=%p db=%p\n", dr, db);
 			arc_transfer_cache_state(dr->dt.dl.dr_data, db->db_buf);
 		}
 		/*
@@ -3642,7 +3640,8 @@ dbuf_undirty(dmu_buf_impl_t *db, dmu_tx_t *tx)
 	ASSERT(MUTEX_HELD(&db->db_mtx));
 
 	/*
-	 * If this buffer is not dirty, we're done.
+	 * If this buffer is not dirty in this transaction
+	 * group, we're done.
 	 */
 	dr = dbuf_find_dirty_eq(db, txg);
 	if (dr == NULL)
@@ -3689,6 +3688,8 @@ dbuf_undirty(dmu_buf_impl_t *db, dmu_tx_t *tx)
 			arc_buf_destroy(dr->dt.dl.dr_data, db);
 	}
 
+	dbuf_dirty_record_cleanup_ranges(dr);
+	list_destroy(&dr->dt.dl.write_ranges);
 	kmem_free(dr, sizeof (dbuf_dirty_record_t));
 	cv_broadcast(&db->db_changed);
 	ASSERT(db->db_dirtycnt > 0);
@@ -5373,7 +5374,6 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 		 */
 		ASSERT(arc_released(*datap));
 		dbuf_transition_to_read(db);
-		CFAPRINTF("transitioned to read %p\n", db);
 	}
 	/*
 	 * To be synced, we must be dirtied.  But we
