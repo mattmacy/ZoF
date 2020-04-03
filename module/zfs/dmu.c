@@ -1493,6 +1493,7 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	 * correct values for dn_datablksz, etc.
 	 */
 	err = dmu_ctx_setup_tx(dmu_ctx, &tx, &dn, size);
+	*buf_set_p = NULL;
 	if (err)
 		return (err);
 
@@ -1547,10 +1548,26 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	ASSERT((dmu_ctx->dc_flags & DMU_CTX_FLAG_READ) || dmu_buf_set_tx(dbs));
 	dbs->dbs_zio = zio_root(dn->dn_objset->os_spa, NULL, NULL,
 	    ZIO_FLAG_CANFAIL);
-	*buf_set_p = dbs;
+
 
 	err = dmu_buf_set_setup_buffers(dbs);
-
+	if (err  == 0) {
+		*buf_set_p = dbs;
+	} else {
+		if (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ)
+			zfs_refcount_destroy_many(&dbs->dbs_holds, nblks + 1);
+		else
+			/* For writes, dbufs never need to call us back. */
+			zfs_refcount_destroy_many(&dbs->dbs_holds, 1);
+		zfs_refcount_remove(&dmu_ctx->dc_holds, NULL);
+		zio_nowait(dbs->dbs_zio);
+		kmem_free(dbs, set_size);
+		/* Initialize a new buffer set. */
+		DEBUG_REFCOUNT_ADD(buf_set_in_flight);
+#ifdef ZFS_DEBUG
+		atomic_add_64(&buf_set_total, -1);
+#endif
+	}
 out:
 	if (err && tx != NULL)
 		dmu_tx_abort(tx);
