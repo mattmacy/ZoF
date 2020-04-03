@@ -1126,8 +1126,6 @@ dmu_buf_read_char(dmu_buf_set_t *buf_set, dmu_buf_t *db, uint64_t off,
 {
 	char *data = (char *)buf_set->dbs_dc->dc_data_buf + db->db_offset -
 	    buf_set->dbs_dc->dc_dn_start + off;
-	dprintf("%s(set=%p, db=%p, off=%lu, sz=%lu) db_data=%p data=%p\n",
-			__func__, buf_set, db, off, sz, (caddr_t)db->db_data + off, data);
 	bcopy((char *)db->db_data + off, data, sz);
 }
 
@@ -1137,8 +1135,6 @@ dmu_buf_write_char(dmu_buf_set_t *buf_set, dmu_buf_t *db, uint64_t off,
 {
 	char *data = (char *)buf_set->dbs_dc->dc_data_buf + db->db_offset -
 	    buf_set->dbs_dc->dc_dn_start + off;
-	dprintf("%s(set=%p, db=%p, off=%lu, sz=%lu) data=%p db_data=%p\n",
-			__func__, buf_set, db, off, sz, data, (caddr_t)db->db_data + off);
 	bcopy(data, (char *)db->db_data + off, sz);
 }
 
@@ -1266,15 +1262,10 @@ int
 dmu_thread_context_create(void)
 {
 	int ret = 0;
-#ifdef _KERNEL /* XXX TSD only works in the kernel.  FIXME! */
 	dmu_cb_state_t *dcs;
 
 	/* This function should never be called more than once in a thread. */
-#ifdef ZFS_DEBUG
-	dcs = tsd_get(zfs_async_io_key);
-	ASSERT(dcs == NULL);
-#endif
-
+	ASSERT3P(tsd_get(zfs_async_io_key), ==, NULL);
 	/* Called with taskqueue mutex held. */
 	dcs = kmem_zalloc(sizeof(dmu_cb_state_t), KM_SLEEP);
 	list_create(&dcs->dcs_io_list, sizeof (dmu_buf_set_node_t),
@@ -1287,7 +1278,6 @@ dmu_thread_context_create(void)
 		ASSERT(check == dcs);
 	}
 #endif
-#endif /* _KERNEL */
 	return (ret);
 }
 
