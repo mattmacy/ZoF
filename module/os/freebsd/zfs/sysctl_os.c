@@ -110,6 +110,7 @@ SYSCTL_NODE(_vfs_zfs, OID_AUTO, lua, CTLFLAG_RW, 0, "lua");
 SYSCTL_NODE(_vfs_zfs, OID_AUTO, l2arc, CTLFLAG_RW, 0, "l2arc");
 SYSCTL_NODE(_vfs_zfs, OID_AUTO, dbuf, CTLFLAG_RW, 0, "ZFS disk buf cache");
 SYSCTL_NODE(_vfs_zfs, OID_AUTO, dbuf_cache, CTLFLAG_RW, 0, "ZFS disk buf cache");
+SYSCTL_NODE(_vfs_zfs, OID_AUTO, deadman, CTLFLAG_RW, 0, "ZFS deadman");
 SYSCTL_NODE(_vfs_zfs, OID_AUTO, condense, CTLFLAG_RW, 0, "ZFS condense");
 SYSCTL_NODE(_vfs_zfs, OID_AUTO, arc, CTLFLAG_RW, 0, "ZFS Adaptive Replacement Cache");
 
@@ -442,8 +443,8 @@ SYSCTL_PROC(_vfs_zfs, OID_AUTO, debugflags,
     CTLTYPE_UINT | CTLFLAG_MPSAFE | CTLFLAG_RWTUN, NULL, 0,
     sysctl_vfs_zfs_debug_flags, "IU", "Debug flags for ZFS testing.");
 
-static int
-zfs_deadman_synctime_ms_sysctl(SYSCTL_HANDLER_ARGS)
+int
+param_set_deadman_synctime(SYSCTL_HANDLER_ARGS)
 {
 	unsigned long val;
 	int err;
@@ -459,13 +460,8 @@ zfs_deadman_synctime_ms_sysctl(SYSCTL_HANDLER_ARGS)
 	return (0);
 }
 
-SYSCTL_PROC(_vfs_zfs, OID_AUTO, deadman_synctime_ms,
-    CTLTYPE_ULONG | CTLFLAG_MPSAFE | CTLFLAG_RW, NULL, 0,
-    zfs_deadman_synctime_ms_sysctl, "LU",
-    "Pool sync expiration time in milliseconds");
-
-static int
-zfs_deadman_ziotime_ms_sysctl(SYSCTL_HANDLER_ARGS)
+int
+param_set_deadman_ziotime(SYSCTL_HANDLER_ARGS)
 {
 	unsigned long val;
 	int err;
@@ -481,13 +477,8 @@ zfs_deadman_ziotime_ms_sysctl(SYSCTL_HANDLER_ARGS)
 	return (0);
 }
 
-SYSCTL_PROC(_vfs_zfs, OID_AUTO, deadman_ziotime_ms,
-    CTLTYPE_ULONG | CTLFLAG_MPSAFE | CTLFLAG_RW, NULL, 0,
-    zfs_deadman_ziotime_ms_sysctl, "LU",
-    "IO expiration time in milliseconds");
-
-static int
-zfs_deadman_failmode_sysctl(SYSCTL_HANDLER_ARGS)
+int
+param_set_deadman_failmode(SYSCTL_HANDLER_ARGS)
 {
 	char buf[16];
 	int rc;
@@ -509,10 +500,6 @@ zfs_deadman_failmode_sysctl(SYSCTL_HANDLER_ARGS)
 
 	return (-param_set_deadman_failmode_common(buf));
 }
-
-SYSCTL_PROC(_vfs_zfs, OID_AUTO, deadman_failmode, CTLTYPE_STRING | CTLFLAG_RW,
-    NULL, 0, zfs_deadman_failmode_sysctl, "A",
-    "Behavior when a \"hung\" I/O value is detected as wait, continue, or panic");
 
 
 /* spacemap.c */
@@ -664,22 +651,50 @@ SYSCTL_INT(_vfs_zfs_zio, OID_AUTO, exclude_metadata, CTLFLAG_RDTUN, &zio_exclude
     "Exclude metadata buffers from dumps as well");
 
 
-extern unsigned long zfs_arc_max;
-extern unsigned long zfs_arc_min;
-extern unsigned long zfs_arc_meta_limit;
-extern unsigned long zfs_arc_meta_min;
-extern unsigned long zfs_arc_meta_limit_percent;
+int
+param_set_arc_long(SYSCTL_HANDLER_ARGS)
+{
+	int err;
 
-ZFS_MODULE_PARAM(zfs_arc, zfs_arc_, min, UQUAD, ZMOD_RW, "Min arc size");
+	err = sysctl_handle_long(oidp, arg1, 0, req);
+	if (err != 0 || req->newptr == NULL)
+		return (err);
 
-ZFS_MODULE_PARAM(zfs_arc, zfs_arc_, max, UQUAD, ZMOD_RW,
-    "Maximum ARC size");
+	arc_tuning_update();
 
-ZFS_MODULE_PARAM(zfs_arc, zfs_arc_, meta_limit, UQUAD, ZMOD_RW,
-	"Metadata limit for arc size");
+	return (0);
+}
 
-ZFS_MODULE_PARAM(zfs_arc, zfs_arc_, meta_limit_percent, UQUAD, ZMOD_RW,
-	"Percent of arc size for arc meta limit");
+int
+param_set_arc_int(SYSCTL_HANDLER_ARGS)
+{
+	int err;
 
-ZFS_MODULE_PARAM(zfs_arc, zfs_arc_, meta_min, UQUAD, ZMOD_RW,
-	"Min arc metadata");
+	err = sysctl_handle_int(oidp, arg1, 0, req);
+	if (err != 0 || req->newptr == NULL)
+		return (err);
+
+	arc_tuning_update();
+
+	return (0);
+}
+
+int
+param_set_slop_shift(SYSCTL_HANDLER_ARGS)
+{
+	int val;
+	int err;
+
+	val = *(int *)arg1;
+
+	err = sysctl_handle_int(oidp, &val, 0, req);
+	if (err != 0 || req->newptr == NULL)
+		return (err);
+
+	if (val < 1 || val > 31)
+		return (EINVAL);
+
+	*(int *)arg1 = val;
+
+	return (0);
+}

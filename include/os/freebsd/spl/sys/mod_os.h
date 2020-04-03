@@ -29,13 +29,51 @@
 #ifndef _SPL_MOD_H
 #define	_SPL_MOD_H
 
+#include <sys/sysctl.h>
+
 #define	ZFS_MODULE_DESCRIPTION(s)
 #define	ZFS_MODULE_AUTHOR(s)
 #define	ZFS_MODULE_LICENSE(s)
 #define	ZFS_MODULE_VERSION(s)
 
+#define	EXPORT_SYMBOL(x)
+#define	module_param(a, b, c)
+#define	MODULE_PARM_DESC(a, b)
+
+#define	ZMOD_RW CTLFLAG_RWTUN
+#define	ZMOD_RD CTLFLAG_RDTUN
+
 /* BEGIN CSTYLED */
-#define	ZFS_MODULE_PARAM_CALL(scope_prefix, name_prefix, name, setfunc, getfunc, perm, desc)
+#define	ZFS_MODULE_PARAM(scope_prefix, name_prefix, name, type, perm, desc) \
+    SYSCTL_DECL(_vfs_ ## scope_prefix); \
+    SYSCTL_##type(_vfs_ ## scope_prefix, OID_AUTO, name, perm, &name_prefix ## name, 0, desc)
+
+#define	ZFS_MODULE_PARAM_ARGS	SYSCTL_HANDLER_ARGS
+
+#define ZFS_MODULE_PARAM_CALL_IMPL(parent, name, perm, args, desc) \
+    SYSCTL_DECL(parent); \
+    SYSCTL_PROC(parent, OID_AUTO, name, perm | args, desc)
+
+#define	ZFS_MODULE_PARAM_CALL(scope_prefix, name_prefix, name, func, _, perm, desc) \
+    ZFS_MODULE_PARAM_CALL_IMPL(_vfs_ ## scope_prefix, name, perm, func ## _args(name_prefix ## name), desc)
+
+#define	param_set_arc_long_args(var) \
+    CTLTYPE_ULONG, &var, 0, param_set_arc_long, "LU"
+
+#define	param_set_arc_int_args(var) \
+    CTLTYPE_INT, &var, 0, param_set_arc_int, "I"
+
+#define	param_set_deadman_failmode_args(var) \
+    CTLTYPE_STRING, NULL, 0, param_set_deadman_failmode, "A"
+
+#define	param_set_deadman_synctime_args(var) \
+    CTLTYPE_ULONG, NULL, 0, param_set_deadman_synctime, "LU"
+
+#define	param_set_deadman_ziotime_args(var) \
+    CTLTYPE_ULONG, NULL, 0, param_set_deadman_ziotime, "LU"
+
+#define	param_set_slop_shift_args(var) \
+    CTLTYPE_INT, &var, 0, param_set_slop_shift, "I"
 
 #include <sys/kernel.h>
 #define	module_init(fn)							\

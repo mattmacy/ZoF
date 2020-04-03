@@ -44,15 +44,6 @@
 
 #define	cond_resched()		kern_yield(PRI_USER)
 
-#include <sys/sysctl.h>
-#define	ZMOD_RW CTLFLAG_RWTUN
-#define	ZMOD_RD CTLFLAG_RDTUN
-
-#define	ZFS_MODULE_PARAM(scope_prefix, name_prefix, name, type, perm, desc) \
-	SYSCTL_DECL(_vfs_ ## scope_prefix);	 \
-	SYSCTL_##type(_vfs_ ## scope_prefix, OID_AUTO, name, perm,	\
-		&name_prefix ## name, 0, desc)
-
 #define	taskq_create_sysdc(a, b, d, e, p, dc, f) \
 	    (taskq_create(a, b, maxclsyspri, d, e, f))
 
@@ -60,10 +51,6 @@
 		*(keyp) = osd_thread_register((destructor));         \
 		KASSERT(*(keyp) > 0, ("cannot register OSD"));       \
 } while (0)
-#define	EXPORT_SYMBOL(x)
-#define	module_param(a, b, c)
-#define	 MODULE_PARM_DESC(a, b)
-
 
 #define	tsd_destroy(keyp)	osd_thread_deregister(*(keyp))
 #define	tsd_get(key)	osd_thread_get(curthread, (key))
