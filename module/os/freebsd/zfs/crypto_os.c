@@ -53,12 +53,10 @@ __FBSDID("$FreeBSD$");
 
 #undef FCRYPTO_DEBUG
 
-#ifdef _KERNEL
 static int crypt_sessions = 0;
 SYSCTL_DECL(_vfs_zfs);
 SYSCTL_INT(_vfs_zfs, OID_AUTO, crypt_sessions, CTLFLAG_RD,
 	&crypt_sessions, 0, "Number of cryptographic sessions created");
-#endif
 
 void
 crypto_mac_init(struct hmac_ctx *ctx, const crypto_key_t *c_key)
@@ -142,7 +140,6 @@ crypto_mac(const crypto_key_t *key, const void *in_data, size_t in_data_size,
 	crypto_mac_final(&ctx, out_data, out_data_size);
 }
 
-#ifdef _KERNEL
 static int
 freebsd_zfs_crypt_done(struct cryptop *crp)
 {
@@ -150,7 +147,14 @@ freebsd_zfs_crypt_done(struct cryptop *crp)
 	wakeup(crp);
 	return (0);
 }
-#endif
+
+void
+freebsd_crypt_freesession(freebsd_crypt_session_t *sess)
+{
+	mtx_destroy(&sess->session_lock);
+	crypto_freesession(sess->session);
+	bzero(sess, sizeof (*sess));
+}
 
 /*
  * Create a new cryptographic session.  This should
@@ -211,12 +215,71 @@ freebsd_crypt_newsession(freebsd_crypt_session_t *sessp,
 bad:
 	return (error);
 }
+
+int
+freebsd_crypt_uio(boolean_t encrypt,
+    freebsd_crypt_session_t *input_sessionp,
+    struct zio_crypt_info *c_info,
+    uio_t *data_uio,
+    crypto_key_t *key,
+    uint8_t *ivbuf,
+    size_t datalen,
+    size_t auth_len)
+{
+	struct cryptop *crp;
+	iovec_t *last_iovec;
+	freebsd_crypt_session_t *session = NULL;
+	int error = 0;
+
+	if (input_sessionp == NULL) {
+		session = kmem_alloc(sizeof (*session), KM_SLEEP);
+		if (session == NULL) {
+			error = ENOMEM;
+			goto out;
+		}
+		bzero(session, sizeof (*session));
+		error = freebsd_crypt_newsession(session, c_info, key);
+		if (error)
+			goto out;
+	} else
+		session = input_sessionp;
+
+	// The tag is always last in the uio
+	last_iovec = data_uio->uio_iov + (data_uio->uio_iovcnt - 1);
+
+	crp = crypto_getreq(session->session, M_WAITOK);
+
+	mtx_lock(&session->session_lock);
+
+	crp->crp_digest_start = 0;
+	crp->crp_payload_start = auth_len;
+	crp->crp_payload_length = datalen;
+	crp->crp_session = session->session;
+	crp->crp_ilen = auth_len + datalen;
+	crp->crp_buf = (void*)data_uio;
+	crp->crp_buf_type = CRYPTO_BUF_UIO;
+	crp->crp_flags = CRYPTO_F_CBIFSYNC | CRYPTO_F_IV_SEPARATE;
+	bcopy(ivbuf, crp->crp_iv, ZIO_DATA_IV_LEN);
+	if (encrypt) {
+		crp->crp_op = CRYPTO_OP_ENCRYPT |
+		    CRYPTO_OP_COMPUTE_DIGEST;
+	} else {
+		crp->crp_op = CRYPTO_OP_ENCRYPT |
+		    CRYPTO_OP_VERIFY_DIGEST;
+	}
+	crp->crp_callback = freebsd_zfs_crypt_done;
+	crp->crp_opaque = NULL;
+	error = crypto_dispatch(crp);
+	crypto_freereq(crp);
+out:
+	return (error);
+}
+
 #else
 int
 freebsd_crypt_newsession(freebsd_crypt_session_t *sessp,
     struct zio_crypt_info *c_info, crypto_key_t *key)
 {
-#ifdef _KERNEL
 	struct cryptoini cria, crie, *crip;
 	struct enc_xform *xform;
 	struct auth_hash *xauth;
@@ -314,83 +377,7 @@ freebsd_crypt_newsession(freebsd_crypt_session_t *sessp,
 	crypt_sessions++;
 bad:
 	return (error);
-#else
-	/* no-op */
-	return (0);
-#endif
 }
-#endif
-
-void
-freebsd_crypt_freesession(freebsd_crypt_session_t *sess)
-{
-#ifdef _KERNEL
-	mtx_destroy(&sess->session_lock);
-	crypto_freesession(sess->session);
-	bzero(sess, sizeof (*sess));
-#endif
-}
-
-#if __FreeBSD_version >= 1300087
-int
-freebsd_crypt_uio(boolean_t encrypt,
-    freebsd_crypt_session_t *input_sessionp,
-    struct zio_crypt_info *c_info,
-    uio_t *data_uio,
-    crypto_key_t *key,
-    uint8_t *ivbuf,
-    size_t datalen,
-    size_t auth_len)
-{
-	struct cryptop *crp;
-	iovec_t *last_iovec;
-	freebsd_crypt_session_t *session = NULL;
-	int error = 0;
-
-	if (input_sessionp == NULL) {
-		session = kmem_alloc(sizeof (*session), KM_SLEEP);
-		if (session == NULL) {
-			error = ENOMEM;
-			goto out;
-		}
-		bzero(session, sizeof (*session));
-		error = freebsd_crypt_newsession(session, c_info, key);
-		if (error)
-			goto out;
-	} else
-		session = input_sessionp;
-
-	// The tag is always last in the uio
-	last_iovec = data_uio->uio_iov + (data_uio->uio_iovcnt - 1);
-
-	crp = crypto_getreq(session->session, M_WAITOK);
-
-	mtx_lock(&session->session_lock);
-
-	crp->crp_digest_start = 0;
-	crp->crp_payload_start = auth_len;
-	crp->crp_payload_length = datalen;
-	crp->crp_session = session->session;
-	crp->crp_ilen = auth_len + datalen;
-	crp->crp_buf = (void*)data_uio;
-	crp->crp_buf_type = CRYPTO_BUF_UIO;
-	crp->crp_flags = CRYPTO_F_CBIFSYNC | CRYPTO_F_IV_SEPARATE;
-	bcopy(ivbuf, crp->crp_iv, ZIO_DATA_IV_LEN);
-	if (encrypt) {
-		crp->crp_op = CRYPTO_OP_ENCRYPT |
-		    CRYPTO_OP_COMPUTE_DIGEST;
-	} else {
-		crp->crp_op = CRYPTO_OP_ENCRYPT |
-		    CRYPTO_OP_VERIFY_DIGEST;
-	}
-	crp->crp_callback = freebsd_zfs_crypt_done;
-	crp->crp_opaque = NULL;
-	error = crypto_dispatch(crp);
-	crypto_freereq(crp);
-out:
-	return (error);
-}
-#else
 
 /*
  * The meat of encryption/decryption.
