@@ -157,6 +157,61 @@ freebsd_zfs_crypt_done(struct cryptop *crp)
  * happen every time the key changes (including when
  * it's first loaded).
  */
+#if __FreeBSD_version >= 1300087
+int
+freebsd_crypt_newsession(freebsd_crypt_session_t *sessp,
+    struct zio_crypt_info *c_info, crypto_key_t *key)
+{
+	crypto_session_t sid;
+	struct crypto_session_params csp;
+	int error = 0;
+
+	bzero(&csp, sizeof (csp));
+	csp.csp_mode = CSP_MODE_AEAD;
+	csp.csp_cipher_key = key->ck_data;
+	csp.csp_cipher_klen = key->ck_length / 8;
+	switch (c_info->ci_crypt_type) {
+		case ZC_TYPE_GCM:
+		csp.csp_cipher_alg = CRYPTO_AES_NIST_GCM_16;
+		csp.csp_ivlen = AES_GCM_IV_LEN;
+		switch (key->ck_length/8) {
+		case AES_128_GMAC_KEY_LEN:
+		case AES_192_GMAC_KEY_LEN:
+		case AES_256_GMAC_KEY_LEN:
+			break;
+		default:
+			error = EINVAL;
+			goto bad;
+		}
+		break;
+	case ZC_TYPE_CCM:
+		csp.csp_cipher_alg = CRYPTO_AES_CCM_16;
+		csp.csp_ivlen = AES_CCM_IV_LEN;
+		switch (key->ck_length/8) {
+		case AES_128_CBC_MAC_KEY_LEN:
+		case AES_192_CBC_MAC_KEY_LEN:
+		case AES_256_CBC_MAC_KEY_LEN:
+			break;
+		default:
+			error = EINVAL;
+			goto bad;
+			break;
+		}
+		break;
+	default:
+		error = ENOTSUP;
+		goto bad;
+	}
+	error = crypto_newsession(&sid, &csp,
+	    CRYPTOCAP_F_HARDWARE | CRYPTOCAP_F_SOFTWARE);
+	sessp->session = sid;
+	mtx_init(&sessp->session_lock, "FreeBSD Cryptographic Session Lock",
+	    NULL, MTX_DEF);
+	crypt_sessions++;
+bad:
+	return (error);
+}
+#else
 int
 freebsd_crypt_newsession(freebsd_crypt_session_t *sessp,
     struct zio_crypt_info *c_info, crypto_key_t *key)
@@ -264,6 +319,7 @@ bad:
 	return (0);
 #endif
 }
+#endif
 
 void
 freebsd_crypt_freesession(freebsd_crypt_session_t *sess)
@@ -274,6 +330,67 @@ freebsd_crypt_freesession(freebsd_crypt_session_t *sess)
 	bzero(sess, sizeof (*sess));
 #endif
 }
+
+#if __FreeBSD_version >= 1300087
+int
+freebsd_crypt_uio(boolean_t encrypt,
+    freebsd_crypt_session_t *input_sessionp,
+    struct zio_crypt_info *c_info,
+    uio_t *data_uio,
+    crypto_key_t *key,
+    uint8_t *ivbuf,
+    size_t datalen,
+    size_t auth_len)
+{
+	struct cryptop *crp;
+	iovec_t *last_iovec;
+	freebsd_crypt_session_t *session = NULL;
+	int error = 0;
+
+	if (input_sessionp == NULL) {
+		session = kmem_alloc(sizeof (*session), KM_SLEEP);
+		if (session == NULL) {
+			error = ENOMEM;
+			goto out;
+		}
+		bzero(session, sizeof (*session));
+		error = freebsd_crypt_newsession(session, c_info, key);
+		if (error)
+			goto out;
+	} else
+		session = input_sessionp;
+
+	// The tag is always last in the uio
+	last_iovec = data_uio->uio_iov + (data_uio->uio_iovcnt - 1);
+
+	crp = crypto_getreq(session->session, M_WAITOK);
+
+	mtx_lock(&session->session_lock);
+
+	crp->crp_digest_start = 0;
+	crp->crp_payload_start = auth_len; 
+	crp->crp_payload_length = datalen;
+	crp->crp_session = session->session;
+	crp->crp_ilen = auth_len + datalen;
+	crp->crp_buf = (void*)data_uio;
+	crp->crp_buf_type = CRYPTO_BUF_UIO;
+	crp->crp_flags = CRYPTO_F_CBIFSYNC | CRYPTO_F_IV_SEPARATE;
+	bcopy(ivbuf, crp->crp_iv, ZIO_DATA_IV_LEN);
+	if (encrypt) {
+		crp->crp_op = CRYPTO_OP_ENCRYPT |
+			CRYPTO_OP_COMPUTE_DIGEST;
+	} else {
+		crp->crp_op = CRYPTO_OP_ENCRYPT |
+			CRYPTO_OP_VERIFY_DIGEST;
+	}
+	crp->crp_callback = freebsd_zfs_crypt_done;
+	crp->crp_opaque = NULL;
+	error = crypto_dispatch(crp);
+	crypto_freereq(crp);
+ out:
+	return (error);
+}
+#else
 
 /*
  * The meat of encryption/decryption.
@@ -291,7 +408,6 @@ freebsd_crypt_uio(boolean_t encrypt,
     size_t datalen,
     size_t auth_len)
 {
-#ifdef _KERNEL
 	struct cryptop *crp;
 	struct cryptodesc *enc_desc, *auth_desc;
 	struct enc_xform *xform;
@@ -311,14 +427,14 @@ freebsd_crypt_uio(boolean_t encrypt,
 	    c_info->ci_algname, c_info->ci_crypt_type,
 	    (unsigned int)c_info->ci_keylen, c_info->ci_name,
 	    data_uio,
-	    key->ck_format, key->ck_data, (unsigned int)key->ck_length,
+ 	    key->ck_format, key->ck_data, (unsigned int)key->ck_length,
 	    ivbuf, (unsigned int)datalen, (unsigned int)auth_len);
 	printf("\tkey = { ");
 	for (int i = 0; i < key->ck_length / 8; i++) {
 		uint8_t *b = (uint8_t *)key->ck_data;
 		printf("%02x ", b[i]);
 	}
-p	printf("}\n");
+	printf("}\n");
 	for (int i = 0; i < data_uio->uio_iovcnt; i++) {
 		printf("\tiovec #%d: <%p, %u>\n", i,
 		    data_uio->uio_iov[i].iov_base,
@@ -468,7 +584,5 @@ bad:
 		printf("%s: returning error %d\n", __FUNCTION__, error);
 #endif
 	return (error);
-#endif /* _KERNEL */
-	/* no-op */
-	return (0);
 }
+#endif
