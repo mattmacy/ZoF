@@ -368,7 +368,7 @@ freebsd_crypt_uio(boolean_t encrypt,
 	mtx_lock(&session->session_lock);
 
 	crp->crp_digest_start = 0;
-	crp->crp_payload_start = auth_len; 
+	crp->crp_payload_start = auth_len;
 	crp->crp_payload_length = datalen;
 	crp->crp_session = session->session;
 	crp->crp_ilen = auth_len + datalen;
@@ -378,16 +378,16 @@ freebsd_crypt_uio(boolean_t encrypt,
 	bcopy(ivbuf, crp->crp_iv, ZIO_DATA_IV_LEN);
 	if (encrypt) {
 		crp->crp_op = CRYPTO_OP_ENCRYPT |
-			CRYPTO_OP_COMPUTE_DIGEST;
+		    CRYPTO_OP_COMPUTE_DIGEST;
 	} else {
 		crp->crp_op = CRYPTO_OP_ENCRYPT |
-			CRYPTO_OP_VERIFY_DIGEST;
+		    CRYPTO_OP_VERIFY_DIGEST;
 	}
 	crp->crp_callback = freebsd_zfs_crypt_done;
 	crp->crp_opaque = NULL;
 	error = crypto_dispatch(crp);
 	crypto_freereq(crp);
- out:
+out:
 	return (error);
 }
 #else
@@ -426,8 +426,8 @@ freebsd_crypt_uio(boolean_t encrypt,
 	    __FUNCTION__, encrypt ? "encrypt" : "decrypt", input_sessionp,
 	    c_info->ci_algname, c_info->ci_crypt_type,
 	    (unsigned int)c_info->ci_keylen, c_info->ci_name,
-	    data_uio,
- 	    key->ck_format, key->ck_data, (unsigned int)key->ck_length,
+	    data_uio, key->ck_format, key->ck_data,
+	    (unsigned int)key->ck_length,
 	    ivbuf, (unsigned int)datalen, (unsigned int)auth_len);
 	printf("\tkey = { ");
 	for (int i = 0; i < key->ck_length / 8; i++) {
