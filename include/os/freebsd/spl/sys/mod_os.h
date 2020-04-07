@@ -50,7 +50,7 @@
 
 #define	ZFS_MODULE_PARAM_ARGS	SYSCTL_HANDLER_ARGS
 
-#define ZFS_MODULE_PARAM_CALL_IMPL(parent, name, perm, args, desc) \
+#define	ZFS_MODULE_PARAM_CALL_IMPL(parent, name, perm, args, desc) \
     SYSCTL_DECL(parent); \
     SYSCTL_PROC(parent, OID_AUTO, name, perm | args, desc)
 
