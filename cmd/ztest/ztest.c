@@ -1678,7 +1678,7 @@ ztest_log_write(ztest_ds_t *zd, dmu_tx_t *tx, lr_write_t *lr)
 
 	if (write_state == WR_COPIED &&
 	    dmu_read(zd->zd_os, lr->lr_foid, lr->lr_offset, lr->lr_length,
-	    ((lr_write_t *)&itx->itx_lr) + 1, DMU_READ_NO_PREFETCH) != 0) {
+	    ((lr_write_t *)&itx->itx_lr) + 1, 0) != 0) {
 		zil_itx_destroy(itx);
 		itx = zil_itx_create(TX_WRITE, sizeof (*lr));
 		write_state = WR_NEED_COPY;
@@ -1949,7 +1949,7 @@ ztest_replay_write(void *arg1, void *arg2, boolean_t byteswap)
 		ASSERT(offset % doi.doi_data_block_size == 0);
 		if (ztest_random(4) != 0) {
 			int prefetch = ztest_random(2) ?
-			    DMU_READ_PREFETCH : DMU_READ_NO_PREFETCH;
+			    DMU_CTX_FLAG_PREFETCH : 0;
 			ztest_block_tag_t rbt;
 
 			VERIFY(dmu_read(os, lr->lr_foid, offset,
@@ -2206,7 +2206,7 @@ ztest_get_data(void *arg, lr_write_t *lr, char *buf, struct lwb *lwb,
 		    object, offset, size, RL_READER);
 
 		error = dmu_read(os, object, offset, size, buf,
-		    DMU_READ_NO_PREFETCH);
+		    0);
 		ASSERT(error == 0);
 	} else {
 		size = doi.doi_data_block_size;
@@ -2221,7 +2221,7 @@ ztest_get_data(void *arg, lr_write_t *lr, char *buf, struct lwb *lwb,
 		    object, offset, size, RL_READER);
 
 		error = dmu_buf_hold(os, object, offset, zgd, &db,
-		    DMU_READ_NO_PREFETCH);
+		    0);
 
 		if (error == 0) {
 			blkptr_t *bp = &lr->lr_blkptr;
@@ -2563,7 +2563,7 @@ ztest_io(ztest_ds_t *zd, uint64_t object, uint64_t offset)
 		(void) pthread_rwlock_unlock(&ztest_name_lock);
 
 		VERIFY0(dmu_read(zd->zd_os, object, offset, blocksize, data,
-		    DMU_READ_NO_PREFETCH));
+		    0));
 
 		(void) ztest_write(zd, object, offset, blocksize, data);
 		break;
@@ -4468,10 +4468,10 @@ ztest_dmu_read_write(ztest_ds_t *zd, uint64_t id)
 	 * Read the current contents of our objects.
 	 */
 	error = dmu_read(os, packobj, packoff, packsize, packbuf,
-	    DMU_READ_PREFETCH);
+	    DMU_CTX_FLAG_PREFETCH);
 	ASSERT0(error);
 	error = dmu_read(os, bigobj, bigoff, bigsize, bigbuf,
-	    DMU_READ_PREFETCH);
+	    DMU_CTX_FLAG_PREFETCH);
 	ASSERT0(error);
 
 	/*
@@ -4589,9 +4589,9 @@ ztest_dmu_read_write(ztest_ds_t *zd, uint64_t id)
 		void *bigcheck = umem_alloc(bigsize, UMEM_NOFAIL);
 
 		VERIFY(0 == dmu_read(os, packobj, packoff,
-		    packsize, packcheck, DMU_READ_PREFETCH));
+		    packsize, packcheck, DMU_CTX_FLAG_PREFETCH));
 		VERIFY(0 == dmu_read(os, bigobj, bigoff,
-		    bigsize, bigcheck, DMU_READ_PREFETCH));
+		    bigsize, bigcheck, DMU_CTX_FLAG_PREFETCH));
 
 		ASSERT(bcmp(packbuf, packcheck, packsize) == 0);
 		ASSERT(bcmp(bigbuf, bigcheck, bigsize) == 0);
@@ -4807,10 +4807,10 @@ ztest_dmu_read_write_zcopy(ztest_ds_t *zd, uint64_t id)
 		 */
 		if (i != 0 || ztest_random(2) != 0) {
 			error = dmu_read(os, packobj, packoff,
-			    packsize, packbuf, DMU_READ_PREFETCH);
+			    packsize, packbuf, DMU_CTX_FLAG_PREFETCH);
 			ASSERT0(error);
 			error = dmu_read(os, bigobj, bigoff, bigsize,
-			    bigbuf, DMU_READ_PREFETCH);
+			    bigbuf, DMU_CTX_FLAG_PREFETCH);
 			ASSERT0(error);
 		}
 		compare_and_update_pbbufs(s, packbuf, bigbuf, bigsize,
@@ -4845,7 +4845,7 @@ ztest_dmu_read_write_zcopy(ztest_ds_t *zd, uint64_t id)
 
 			if (i == 1) {
 				VERIFY(dmu_buf_hold(os, bigobj, off,
-				    FTAG, &dbt, DMU_READ_NO_PREFETCH) == 0);
+				    FTAG, &dbt, 0) == 0);
 			}
 			if (i != 5 || chunksize < (SPA_MINBLOCKSIZE * 2)) {
 				VERIFY0(dmu_assign_arcbuf_by_dbuf(bonus_db,
@@ -4871,9 +4871,9 @@ ztest_dmu_read_write_zcopy(ztest_ds_t *zd, uint64_t id)
 			void *bigcheck = umem_alloc(bigsize, UMEM_NOFAIL);
 
 			VERIFY(0 == dmu_read(os, packobj, packoff,
-			    packsize, packcheck, DMU_READ_PREFETCH));
+			    packsize, packcheck, DMU_CTX_FLAG_PREFETCH));
 			VERIFY(0 == dmu_read(os, bigobj, bigoff,
-			    bigsize, bigcheck, DMU_READ_PREFETCH));
+			    bigsize, bigcheck, DMU_CTX_FLAG_PREFETCH));
 
 			ASSERT(bcmp(packbuf, packcheck, packsize) == 0);
 			ASSERT(bcmp(bigbuf, bigcheck, bigsize) == 0);
@@ -5420,7 +5420,7 @@ ztest_dmu_commit_callbacks(ztest_ds_t *zd, uint64_t id)
 	 * Read existing data to make sure there isn't a future leak.
 	 */
 	VERIFY(0 == dmu_read(os, od->od_object, 0, sizeof (uint64_t),
-	    &old_txg, DMU_READ_PREFETCH));
+	    &old_txg, DMU_CTX_FLAG_PREFETCH));
 
 	if (old_txg > txg)
 		fatal(0, "future leak: got %" PRIu64 ", open txg is %" PRIu64,

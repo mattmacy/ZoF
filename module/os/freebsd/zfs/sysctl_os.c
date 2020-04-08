@@ -121,6 +121,7 @@ SYSCTL_NODE(_vfs_zfs, OID_AUTO, livelist, CTLFLAG_RW, 0, "livelist state");
 SYSCTL_NODE(_vfs_zfs_livelist, OID_AUTO, condense, CTLFLAG_RW, 0, "condense knobs");
 SYSCTL_NODE(_vfs_zfs, OID_AUTO, recv, CTLFLAG_RW, 0, "receive knobs");
 SYSCTL_NODE(_vfs_zfs, OID_AUTO, send, CTLFLAG_RW, 0, "send knobs");
+SYSCTL_NODE(_vfs_zfs, OID_AUTO, dmu, CTLFLAG_RW, 0, "ZFS DMU");
 
 SYSCTL_DECL(_vfs_zfs_version);
 SYSCTL_CONST_STRING(_vfs_zfs_version, OID_AUTO, module, CTLFLAG_RD,

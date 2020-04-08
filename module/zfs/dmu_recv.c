@@ -1593,7 +1593,7 @@ receive_object(struct receive_writer_arg *rwa, struct drr_object *drro,
 		uint64_t offset = rwa->or_firstobj * DNODE_MIN_SIZE;
 
 		err = dmu_buf_hold_by_dnode(DMU_META_DNODE(rwa->os),
-		    offset, FTAG, &db, DMU_READ_PREFETCH | DMU_READ_NO_DECRYPT);
+		    offset, FTAG, &db, DMU_CTX_FLAG_PREFETCH | DMU_CTX_FLAG_NODECRYPT);
 		if (err != 0) {
 			dmu_tx_commit(tx);
 			return (SET_ERROR(EINVAL));
@@ -1637,10 +1637,10 @@ receive_object(struct receive_writer_arg *rwa, struct drr_object *drro,
 	if (data != NULL) {
 		dmu_buf_t *db;
 		dnode_t *dn;
-		uint32_t flags = DMU_READ_NO_PREFETCH;
+		uint32_t flags = 0;
 
 		if (rwa->raw)
-			flags |= DMU_READ_NO_DECRYPT;
+			flags |= DMU_CTX_FLAG_NODECRYPT;
 
 		VERIFY0(dnode_hold(rwa->os, drro->drr_object, FTAG, &dn));
 		VERIFY0(dmu_bonus_hold_by_dnode(dn, FTAG, &db, flags));
@@ -1862,7 +1862,7 @@ receive_write_byref(struct receive_writer_arg *rwa,
 	guid_map_entry_t *gmep;
 	avl_index_t where;
 	objset_t *ref_os = NULL;
-	int flags = DMU_READ_PREFETCH;
+	int flags = DMU_CTX_FLAG_PREFETCH;
 	dmu_buf_t *dbp;
 
 	if (drrwbr->drr_offset + drrwbr->drr_length < drrwbr->drr_offset)
@@ -1887,7 +1887,7 @@ receive_write_byref(struct receive_writer_arg *rwa,
 		rwa->max_object = drrwbr->drr_object;
 
 	if (rwa->raw)
-		flags |= DMU_READ_NO_DECRYPT;
+		flags |= DMU_CTX_FLAG_NODECRYPT;
 
 	/* may return either a regular db or an encrypted one */
 	err = dmu_buf_hold(ref_os, drrwbr->drr_refobject,
@@ -2001,7 +2001,7 @@ receive_spill(struct receive_writer_arg *rwa, struct drr_spill *drrs,
 		rwa->max_object = drrs->drr_object;
 
 	VERIFY0(dmu_bonus_hold(rwa->os, drrs->drr_object, FTAG, &db));
-	if ((err = dmu_spill_hold_by_bonus(db, DMU_READ_NO_DECRYPT, FTAG,
+	if ((err = dmu_spill_hold_by_bonus(db, DMU_CTX_FLAG_NODECRYPT, FTAG,
 	    &db_spill)) != 0) {
 		dmu_buf_rele(db, FTAG);
 		return (err);
