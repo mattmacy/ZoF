@@ -26,7 +26,11 @@
  */
 
 #include <stddef.h>
+#ifdef HAVE_LIBBSD
+#include <bsd/string.h>
+#else
 #include <string.h>
+#endif
 #include <strings.h>
 #include <libuutil.h>
 #include <libzfs.h>
