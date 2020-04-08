@@ -248,9 +248,9 @@ freebsd_crypt_uio(boolean_t encrypt,
 	iovec_t *last_iovec;
 	freebsd_crypt_session_t *session = NULL;
 	int error = 0;
+	size_t total = 0;
 
 #ifdef FCRYPTO_DEBUG
-	size_t total = 0;
 
 	printf("%s(%s, %p, { %s, %d, %d, %s }, %p, { %d, %p, %u }, "
 	    "%p, %u, %u)\n",
@@ -272,6 +272,10 @@ freebsd_crypt_uio(boolean_t encrypt,
 		    (unsigned int)data_uio->uio_iov[i].iov_len);
 		total += data_uio->uio_iov[i].iov_len;
 	}
+	data_uio->uio_resid = total;
+#else
+	for (int i = 0; i < data_uio->uio_iovcnt; i++)
+		total += data_uio->uio_iov[i].iov_len;
 	data_uio->uio_resid = total;
 #endif
 
@@ -297,7 +301,7 @@ freebsd_crypt_uio(boolean_t encrypt,
 	crp->crp_flags = CRYPTO_F_CBIFSYNC | CRYPTO_F_IV_SEPARATE;
 	crp->crp_buf_type = CRYPTO_BUF_UIO;
 	crp->crp_uio = (void*)data_uio;
-	crp->crp_ilen = auth_len + datalen;
+	crp->crp_ilen = data_uio->uio_resid;
 
 	crp->crp_aad_start = 0;
 	crp->crp_aad_length = auth_len;
@@ -572,7 +576,7 @@ freebsd_crypt_uio(boolean_t encrypt,
 	enc_desc = auth_desc->crd_next;
 
 	crp->crp_session = session->session;
-	crp->crp_ilen = auth_len + datalen;
+	crp->crp_ilen = uio->uio_resid;
 	crp->crp_buf = (void*)data_uio;
 	crp->crp_flags = CRYPTO_F_IOV | CRYPTO_F_CBIFSYNC;
 
