@@ -27,8 +27,6 @@
 #include <sys/sha2.h>
 #include <sys/hkdf.h>
 
-#undef FCRYPTO_DEBUG
-
 /*
  * This file is responsible for handling all of the details of generating
  * encryption parameters and performing encryption and authentication.
