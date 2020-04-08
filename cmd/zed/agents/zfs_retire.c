@@ -39,7 +39,11 @@
 #include <sys/fm/protocol.h>
 #include <sys/fm/fs/zfs.h>
 #include <libzfs.h>
+#ifdef HAVE_LIBBSD
+#include <bsd/string.h>
+#else
 #include <string.h>
+#endif
 
 #include "zfs_agents.h"
 #include "fmd_api.h"
