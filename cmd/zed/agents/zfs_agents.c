@@ -19,7 +19,11 @@
 #include <libzfs.h>
 #include <stddef.h>
 #include <stdlib.h>
+#ifdef HAVE_LIBBSD
+#include <bsd/string.h>
+#else
 #include <string.h>
+#endif
 #include <sys/list.h>
 #include <sys/time.h>
 #include <sys/sysevent/eventdefs.h>
