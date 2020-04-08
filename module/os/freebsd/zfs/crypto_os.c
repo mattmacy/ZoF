@@ -187,7 +187,7 @@ zfs_crypto_dispatch(freebsd_crypt_session_t *session, 	struct cryptop *crp)
 		 * Session ID changed, so we should record that,
 		 * and try again
 		 */
-		session->session = crp->crp_session;
+		session->fs_sid = crp->crp_session;
 #endif
 	}
 	return (error);
@@ -463,7 +463,7 @@ freebsd_crypt_newsession(freebsd_crypt_session_t *sessp,
 		    __FUNCTION__, __LINE__, error);
 		goto bad;
 	}
-	sessp->session = sid;
+	sessp->fs_sid = sid;
 	mtx_init(&sessp->fs_lock, "FreeBSD Cryptographic Session Lock",
 	    NULL, MTX_DEF);
 	crypt_sessions++;
@@ -563,8 +563,8 @@ freebsd_crypt_uio(boolean_t encrypt,
 	auth_desc = crp->crp_desc;
 	enc_desc = auth_desc->crd_next;
 
-	crp->crp_session = session->session;
-	crp->crp_ilen = uio->uio_resid;
+	crp->crp_session = session->fs_sid;
+	crp->crp_ilen = auth_len + datalen;
 	crp->crp_buf = (void*)data_uio;
 	crp->crp_flags = CRYPTO_F_IOV | CRYPTO_F_CBIFSYNC;
 
