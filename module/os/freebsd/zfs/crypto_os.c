@@ -51,8 +51,6 @@ __FBSDID("$FreeBSD$");
 
 #define	SHA512_HMAC_BLOCK_SIZE	128
 
-#undef FCRYPTO_DEBUG
-
 static int crypt_sessions = 0;
 SYSCTL_DECL(_vfs_zfs);
 SYSCTL_INT(_vfs_zfs, OID_AUTO, crypt_sessions, CTLFLAG_RD,
@@ -143,7 +141,12 @@ crypto_mac(const crypto_key_t *key, const void *in_data, size_t in_data_size,
 static int
 freebsd_zfs_crypt_done(struct cryptop *crp)
 {
-	crp->crp_opaque = (void*)crp;
+	freebsd_crypt_session_t *ses;
+
+	ses = crp->crp_opaque;
+	mtx_lock(&ses->fs_lock);
+	ses->fs_done = true;
+	mtx_unlock(&ses->fs_lock);
 	wakeup(crp);
 	return (0);
 }
@@ -151,9 +154,9 @@ freebsd_zfs_crypt_done(struct cryptop *crp)
 void
 freebsd_crypt_freesession(freebsd_crypt_session_t *sess)
 {
-	mtx_destroy(&sess->session_lock);
-	crypto_freesession(sess->session);
-	bzero(sess, sizeof (*sess));
+	mtx_destroy(&sess->fs_lock);
+	crypto_freesession(sess->fs_sid);
+	explicit_bzero(sess, sizeof (*sess));
 }
 
 /*
@@ -166,10 +169,22 @@ int
 freebsd_crypt_newsession(freebsd_crypt_session_t *sessp,
     struct zio_crypt_info *c_info, crypto_key_t *key)
 {
-	crypto_session_t sid;
 	struct crypto_session_params csp;
 	int error = 0;
 
+#ifdef FCRYPTO_DEBUG
+	printf("%s(%p, { %s, %d, %d, %s }, { %d, %p, %u })\n",
+	    __FUNCTION__, sessp,
+	    c_info->ci_algname, c_info->ci_crypt_type,
+	    (unsigned int)c_info->ci_keylen, c_info->ci_name,
+	    key->ck_format, key->ck_data, (unsigned int)key->ck_length);
+	printf("\tkey = { ");
+	for (int i = 0; i < key->ck_length / 8; i++) {
+		uint8_t *b = (uint8_t *)key->ck_data;
+		printf("%02x ", b[i]);
+	}
+	printf("}\n");
+#endif
 	bzero(&csp, sizeof (csp));
 	csp.csp_mode = CSP_MODE_AEAD;
 	csp.csp_cipher_key = key->ck_data;
@@ -206,13 +221,16 @@ freebsd_crypt_newsession(freebsd_crypt_session_t *sessp,
 		error = ENOTSUP;
 		goto bad;
 	}
-	error = crypto_newsession(&sid, &csp,
+	error = crypto_newsession(&sessp->fs_sid, &csp,
 	    CRYPTOCAP_F_HARDWARE | CRYPTOCAP_F_SOFTWARE);
-	sessp->session = sid;
-	mtx_init(&sessp->session_lock, "FreeBSD Cryptographic Session Lock",
+	mtx_init(&sessp->fs_lock, "FreeBSD Cryptographic Session Lock",
 	    NULL, MTX_DEF);
 	crypt_sessions++;
 bad:
+#ifdef FCRYPTO_DEBUG
+	if (error)
+		printf("%s: returning error %d\n", __FUNCTION__, error);
+#endif
 	return (error);
 }
 
@@ -231,13 +249,34 @@ freebsd_crypt_uio(boolean_t encrypt,
 	freebsd_crypt_session_t *session = NULL;
 	int error = 0;
 
+#ifdef FCRYPTO_DEBUG
+	size_t total = 0;
+
+	printf("%s(%s, %p, { %s, %d, %d, %s }, %p, { %d, %p, %u }, "
+	    "%p, %u, %u)\n",
+	    __FUNCTION__, encrypt ? "encrypt" : "decrypt", input_sessionp,
+	    c_info->ci_algname, c_info->ci_crypt_type,
+	    (unsigned int)c_info->ci_keylen, c_info->ci_name,
+	    data_uio, key->ck_format, key->ck_data,
+	    (unsigned int)key->ck_length,
+	    ivbuf, (unsigned int)datalen, (unsigned int)auth_len);
+	printf("\tkey = { ");
+	for (int i = 0; i < key->ck_length / 8; i++) {
+		uint8_t *b = (uint8_t *)key->ck_data;
+		printf("%02x ", b[i]);
+	}
+	printf("}\n");
+	for (int i = 0; i < data_uio->uio_iovcnt; i++) {
+		printf("\tiovec #%d: <%p, %u>\n", i,
+		    data_uio->uio_iov[i].iov_base,
+		    (unsigned int)data_uio->uio_iov[i].iov_len);
+		total += data_uio->uio_iov[i].iov_len;
+	}
+	data_uio->uio_resid = total;
+#endif
+
 	if (input_sessionp == NULL) {
-		session = kmem_alloc(sizeof (*session), KM_SLEEP);
-		if (session == NULL) {
-			error = ENOMEM;
-			goto out;
-		}
-		bzero(session, sizeof (*session));
+		session = kmem_zalloc(sizeof (*session), KM_SLEEP);
 		error = freebsd_crypt_newsession(session, c_info, key);
 		if (error)
 			goto out;
@@ -247,31 +286,56 @@ freebsd_crypt_uio(boolean_t encrypt,
 	// The tag is always last in the uio
 	last_iovec = data_uio->uio_iov + (data_uio->uio_iovcnt - 1);
 
-	crp = crypto_getreq(session->session, M_WAITOK);
-
-	mtx_lock(&session->session_lock);
-
-	crp->crp_digest_start = 0;
-	crp->crp_payload_start = auth_len;
-	crp->crp_payload_length = datalen;
-	crp->crp_session = session->session;
-	crp->crp_ilen = auth_len + datalen;
-	crp->crp_buf = (void*)data_uio;
-	crp->crp_buf_type = CRYPTO_BUF_UIO;
-	crp->crp_flags = CRYPTO_F_CBIFSYNC | CRYPTO_F_IV_SEPARATE;
-	bcopy(ivbuf, crp->crp_iv, ZIO_DATA_IV_LEN);
+	crp = crypto_getreq(session->fs_sid, M_WAITOK);
 	if (encrypt) {
 		crp->crp_op = CRYPTO_OP_ENCRYPT |
 		    CRYPTO_OP_COMPUTE_DIGEST;
 	} else {
-		crp->crp_op = CRYPTO_OP_ENCRYPT |
+		crp->crp_op = CRYPTO_OP_DECRYPT |
 		    CRYPTO_OP_VERIFY_DIGEST;
 	}
+	crp->crp_flags = CRYPTO_F_CBIFSYNC | CRYPTO_F_IV_SEPARATE;
+	crp->crp_buf_type = CRYPTO_BUF_UIO;
+	crp->crp_uio = (void*)data_uio;
+	crp->crp_ilen = auth_len + datalen;
+
+	crp->crp_aad_start = 0;
+	crp->crp_aad_length = auth_len;
+	crp->crp_payload_start = auth_len;
+	crp->crp_payload_length = datalen;
+	crp->crp_digest_start = auth_len + datalen;
+	crp->crp_opaque = session;
+
+	bcopy(ivbuf, crp->crp_iv, ZIO_DATA_IV_LEN);
 	crp->crp_callback = freebsd_zfs_crypt_done;
-	crp->crp_opaque = NULL;
-	error = crypto_dispatch(crp);
+
+	for (;;) {
+		error = crypto_dispatch(crp);
+		if (error)
+			break;
+		mtx_lock(&session->fs_lock);
+		while (session->fs_done == false)
+			msleep(crp, &session->fs_lock, PRIBIO, "zfs_crypto", hz/5);
+		mtx_unlock(&session->fs_lock);
+
+		if (crp->crp_etype != EAGAIN) {
+			error = crp->crp_etype;
+			break;
+		}
+		crp->crp_etype = 0;
+		crp->crp_flags &= ~CRYPTO_F_DONE;
+		session->fs_done = false;
+	}
 	crypto_freereq(crp);
 out:
+#ifdef FCRYPTO_DEBUG
+	if (error)
+		printf("%s: returning error %d\n", __FUNCTION__, error);
+#endif
+	if (input_sessionp == NULL) {
+		freebsd_crypt_freesession(session);
+		kmem_free(session, sizeof (*session));
+	}
 	return (error);
 }
 
@@ -372,7 +436,7 @@ freebsd_crypt_newsession(freebsd_crypt_session_t *sessp,
 		goto bad;
 	}
 	sessp->session = sid;
-	mtx_init(&sessp->session_lock, "FreeBSD Cryptographic Session Lock",
+	mtx_init(&sessp->fs_lock, "FreeBSD Cryptographic Session Lock",
 	    NULL, MTX_DEF);
 	crypt_sessions++;
 bad:
@@ -502,7 +566,7 @@ freebsd_crypt_uio(boolean_t encrypt,
 		goto bad;
 	}
 
-	mtx_lock(&session->session_lock);
+	mtx_lock(&session->fs_lock);
 
 	auth_desc = crp->crp_desc;
 	enc_desc = auth_desc->crd_next;
@@ -556,7 +620,7 @@ again:
 			goto again;
 		}
 	}
-	mtx_unlock(&session->session_lock);
+	mtx_unlock(&session->fs_lock);
 
 	if (crp)
 		crypto_freereq(crp);

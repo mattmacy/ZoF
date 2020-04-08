@@ -56,10 +56,9 @@ typedef void *crypto_session_t;	/* sigh */
 struct zio_crypt_info;
 
 typedef struct freebsd_crypt_session {
-#ifdef _KERNEL
-	struct mtx		session_lock;
-#endif
-	crypto_session_t	session;
+	struct mtx		fs_lock;
+	crypto_session_t	fs_sid;
+	boolean_t	fs_done;
 } freebsd_crypt_session_t;
 
 /*
