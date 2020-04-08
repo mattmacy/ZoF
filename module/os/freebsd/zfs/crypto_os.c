@@ -159,6 +159,77 @@ freebsd_crypt_freesession(freebsd_crypt_session_t *sess)
 	explicit_bzero(sess, sizeof (*sess));
 }
 
+static int
+zfs_crypto_dispatch(freebsd_crypt_session_t *session, 	struct cryptop *crp)
+{
+	int error;
+
+	crp->crp_opaque = session;
+	crp->crp_callback = freebsd_zfs_crypt_done;
+	for (;;) {
+		error = crypto_dispatch(crp);
+		if (error)
+			break;
+		mtx_lock(&session->fs_lock);
+		while (session->fs_done == false)
+			msleep(crp, &session->fs_lock, PRIBIO, "zfs_crypto", hz/5);
+		mtx_unlock(&session->fs_lock);
+
+		if (crp->crp_etype != EAGAIN) {
+			error = crp->crp_etype;
+			break;
+		}
+		crp->crp_etype = 0;
+		crp->crp_flags &= ~CRYPTO_F_DONE;
+		session->fs_done = false;
+#if __FreeBSD_version < 1300087
+		/*
+		 * Session ID changed, so we should record that,
+		 * and try again
+		 */
+		session->session = crp->crp_session;
+#endif
+	}
+	return (error);
+}
+static void
+freebsd_crypt_uio_debug_log(boolean_t encrypt,
+    freebsd_crypt_session_t *input_sessionp,
+    struct zio_crypt_info *c_info,
+    uio_t *data_uio,
+    crypto_key_t *key,
+    uint8_t *ivbuf,
+    size_t datalen,
+    size_t auth_len)
+{
+#ifdef FCRYPTO_DEBUG
+	struct cryptodesc *crd;
+	uint8_t *p = NULL;
+	size_t total = 0;
+
+	printf("%s(%s, %p, { %s, %d, %d, %s }, %p, { %d, %p, %u }, "
+	    "%p, %u, %u)\n",
+	    __FUNCTION__, encrypt ? "encrypt" : "decrypt", input_sessionp,
+	    c_info->ci_algname, c_info->ci_crypt_type,
+	    (unsigned int)c_info->ci_keylen, c_info->ci_name,
+	    data_uio, key->ck_format, key->ck_data,
+	    (unsigned int)key->ck_length,
+	    ivbuf, (unsigned int)datalen, (unsigned int)auth_len);
+	printf("\tkey = { ");
+	for (int i = 0; i < key->ck_length / 8; i++) {
+		uint8_t *b = (uint8_t *)key->ck_data;
+		printf("%02x ", b[i]);
+	}
+	printf("}\n");
+	for (int i = 0; i < data_uio->uio_iovcnt; i++) {
+		printf("\tiovec #%d: <%p, %u>\n", i,
+		    data_uio->uio_iov[i].iov_base,
+		    (unsigned int)data_uio->uio_iov[i].iov_len);
+		total += data_uio->uio_iov[i].iov_len;
+	}
+	data_uio->uio_resid = total;
+#endif
+}
 /*
  * Create a new cryptographic session.  This should
  * happen every time the key changes (including when
@@ -245,40 +316,15 @@ freebsd_crypt_uio(boolean_t encrypt,
     size_t auth_len)
 {
 	struct cryptop *crp;
-	iovec_t *last_iovec;
 	freebsd_crypt_session_t *session = NULL;
 	int error = 0;
 	size_t total = 0;
 
-#ifdef FCRYPTO_DEBUG
-
-	printf("%s(%s, %p, { %s, %d, %d, %s }, %p, { %d, %p, %u }, "
-	    "%p, %u, %u)\n",
-	    __FUNCTION__, encrypt ? "encrypt" : "decrypt", input_sessionp,
-	    c_info->ci_algname, c_info->ci_crypt_type,
-	    (unsigned int)c_info->ci_keylen, c_info->ci_name,
-	    data_uio, key->ck_format, key->ck_data,
-	    (unsigned int)key->ck_length,
-	    ivbuf, (unsigned int)datalen, (unsigned int)auth_len);
-	printf("\tkey = { ");
-	for (int i = 0; i < key->ck_length / 8; i++) {
-		uint8_t *b = (uint8_t *)key->ck_data;
-		printf("%02x ", b[i]);
-	}
-	printf("}\n");
-	for (int i = 0; i < data_uio->uio_iovcnt; i++) {
-		printf("\tiovec #%d: <%p, %u>\n", i,
-		    data_uio->uio_iov[i].iov_base,
-		    (unsigned int)data_uio->uio_iov[i].iov_len);
-		total += data_uio->uio_iov[i].iov_len;
-	}
-	data_uio->uio_resid = total;
-#else
+	freebsd_crypt_uio_debug_log(encrypt, input_sessionp, c_info, data_uio,
+	     key, ivbuf, datalen, auth_len);
 	for (int i = 0; i < data_uio->uio_iovcnt; i++)
 		total += data_uio->uio_iov[i].iov_len;
 	data_uio->uio_resid = total;
-#endif
-
 	if (input_sessionp == NULL) {
 		session = kmem_zalloc(sizeof (*session), KM_SLEEP);
 		error = freebsd_crypt_newsession(session, c_info, key);
@@ -286,9 +332,6 @@ freebsd_crypt_uio(boolean_t encrypt,
 			goto out;
 	} else
 		session = input_sessionp;
-
-	// The tag is always last in the uio
-	last_iovec = data_uio->uio_iov + (data_uio->uio_iovcnt - 1);
 
 	crp = crypto_getreq(session->fs_sid, M_WAITOK);
 	if (encrypt) {
@@ -308,28 +351,9 @@ freebsd_crypt_uio(boolean_t encrypt,
 	crp->crp_payload_start = auth_len;
 	crp->crp_payload_length = datalen;
 	crp->crp_digest_start = auth_len + datalen;
-	crp->crp_opaque = session;
 
 	bcopy(ivbuf, crp->crp_iv, ZIO_DATA_IV_LEN);
-	crp->crp_callback = freebsd_zfs_crypt_done;
-
-	for (;;) {
-		error = crypto_dispatch(crp);
-		if (error)
-			break;
-		mtx_lock(&session->fs_lock);
-		while (session->fs_done == false)
-			msleep(crp, &session->fs_lock, PRIBIO, "zfs_crypto", hz/5);
-		mtx_unlock(&session->fs_lock);
-
-		if (crp->crp_etype != EAGAIN) {
-			error = crp->crp_etype;
-			break;
-		}
-		crp->crp_etype = 0;
-		crp->crp_flags &= ~CRYPTO_F_DONE;
-		session->fs_done = false;
-	}
+	error = zfs_crypto_dispatch(session, crp);
 	crypto_freereq(crp);
 out:
 #ifdef FCRYPTO_DEBUG
@@ -467,37 +491,11 @@ freebsd_crypt_uio(boolean_t encrypt,
 	struct cryptodesc *enc_desc, *auth_desc;
 	struct enc_xform *xform;
 	struct auth_hash *xauth;
-	iovec_t *last_iovec;
 	freebsd_crypt_session_t *session = NULL;
 	int error;
 
-#ifdef FCRYPTO_DEBUG
-	struct cryptodesc *crd;
-	uint8_t *p = NULL;
-	size_t total = 0;
-
-	printf("%s(%s, %p, { %s, %d, %d, %s }, %p, { %d, %p, %u }, "
-	    "%p, %u, %u)\n",
-	    __FUNCTION__, encrypt ? "encrypt" : "decrypt", input_sessionp,
-	    c_info->ci_algname, c_info->ci_crypt_type,
-	    (unsigned int)c_info->ci_keylen, c_info->ci_name,
-	    data_uio, key->ck_format, key->ck_data,
-	    (unsigned int)key->ck_length,
-	    ivbuf, (unsigned int)datalen, (unsigned int)auth_len);
-	printf("\tkey = { ");
-	for (int i = 0; i < key->ck_length / 8; i++) {
-		uint8_t *b = (uint8_t *)key->ck_data;
-		printf("%02x ", b[i]);
-	}
-	printf("}\n");
-	for (int i = 0; i < data_uio->uio_iovcnt; i++) {
-		printf("\tiovec #%d: <%p, %u>\n", i,
-		    data_uio->uio_iov[i].iov_base,
-		    (unsigned int)data_uio->uio_iov[i].iov_len);
-		total += data_uio->uio_iov[i].iov_len;
-	}
-	data_uio->uio_resid = total;
-#endif
+	freebsd_crypt_uio_debug_log(encrypt, input_sessionp, c_info, data_uio,
+	     key, ivbuf, datalen, auth_len);
 	switch (c_info->ci_crypt_type) {
 	case ZC_TYPE_GCM:
 		xform = &enc_xform_aes_nist_gcm;
@@ -549,28 +547,18 @@ freebsd_crypt_uio(boolean_t encrypt,
 #endif
 
 	if (input_sessionp == NULL) {
-		session = kmem_alloc(sizeof (*session), KM_SLEEP);
-		if (session == NULL) {
-			error = ENOMEM;
-			goto out;
-		}
-		bzero(session, sizeof (*session));
+		session = kmem_zalloc(sizeof (*session), KM_SLEEP);
 		error = freebsd_crypt_newsession(session, c_info, key);
 		if (error)
 			goto out;
 	} else
 		session = input_sessionp;
 
-	// The tag is always last in the uio
-	last_iovec = data_uio->uio_iov + (data_uio->uio_iovcnt - 1);
-
 	crp = crypto_getreq(2);
 	if (crp == NULL) {
 		error = ENOMEM;
 		goto bad;
 	}
-
-	mtx_lock(&session->fs_lock);
 
 	auth_desc = crp->crp_desc;
 	enc_desc = auth_desc->crd_next;
@@ -607,27 +595,8 @@ freebsd_crypt_uio(boolean_t encrypt,
 	if (encrypt)
 		enc_desc->crd_flags |= CRD_F_ENCRYPT;
 
-	crp->crp_callback = freebsd_zfs_crypt_done;
-again:
-	crp->crp_opaque = NULL;
-	error = crypto_dispatch(crp);
-	if (error == 0) {
-		while (crp->crp_opaque == NULL)
-			tsleep(crp, PRIBIO, "zfs_crypto", hz/5);
-		error = crp->crp_etype;
-		if (error == EAGAIN) {
-			/*
-			 * Session ID changed, so we should record that,
-			 * and try again
-			 */
-			session->session = crp->crp_session;
-			goto again;
-		}
-	}
-	mtx_unlock(&session->fs_lock);
-
-	if (crp)
-		crypto_freereq(crp);
+	error = zfs_crypto_dispatch(session, crp);
+	crypto_freereq(crp);
 out:
 	if (input_sessionp == NULL) {
 		freebsd_crypt_freesession(session);
