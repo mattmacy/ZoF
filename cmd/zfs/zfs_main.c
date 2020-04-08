@@ -317,14 +317,14 @@ get_usage(zfs_help_t idx)
 	case HELP_ROLLBACK:
 		return (gettext("\trollback [-rRf] <snapshot>\n"));
 	case HELP_SEND:
-		return (gettext("\tsend [-DnPpRvLecwhb] [-[i|I] snapshot] "
+		return (gettext("\tsend [-DnPpRVvLecwhb] [-[i|I] snapshot] "
 		    "<snapshot>\n"
-		    "\tsend [-nvPLecw] [-i snapshot|bookmark] "
+		    "\tsend [-nVvPLecw] [-i snapshot|bookmark] "
 		    "<filesystem|volume|snapshot>\n"
-		    "\tsend [-DnPpvLec] [-i bookmark|snapshot] "
+		    "\tsend [-DnPpVvLec] [-i bookmark|snapshot] "
 		    "--redact <bookmark> <snapshot>\n"
-		    "\tsend [-nvPe] -t <receive_resume_token>\n"
-		    "\tsend [-Pnv] --saved filesystem\n"));
+		    "\tsend [-nVvPe] -t <receive_resume_token>\n"
+		    "\tsend [-PnVv] --saved filesystem\n"));
 	case HELP_SET:
 		return (gettext("\tset <property=value> ... "
 		    "<filesystem|volume|snapshot> ...\n"));
@@ -4258,6 +4258,7 @@ zfs_do_send(int argc, char **argv)
 		{"props",	no_argument,		NULL, 'p'},
 		{"parsable",	no_argument,		NULL, 'P'},
 		{"dedup",	no_argument,		NULL, 'D'},
+		{"proctitle",	no_argument,		NULL, 'V'},
 		{"verbose",	no_argument,		NULL, 'v'},
 		{"dryrun",	no_argument,		NULL, 'n'},
 		{"large-block",	no_argument,		NULL, 'L'},
@@ -4272,7 +4273,7 @@ zfs_do_send(int argc, char **argv)
 	};
 
 	/* check options */
-	while ((c = getopt_long(argc, argv, ":i:I:RDpvnPLeht:cwbd:S",
+	while ((c = getopt_long(argc, argv, ":i:I:RDpVvnPLeht:cwbd:S",
 	    long_options, NULL)) != -1) {
 		switch (c) {
 		case 'i':
@@ -4303,6 +4304,10 @@ zfs_do_send(int argc, char **argv)
 			break;
 		case 'P':
 			flags.parsable = B_TRUE;
+			break;
+		case 'V':
+			flags.progress = B_TRUE;
+			flags.progressastitle = B_TRUE;
 			break;
 		case 'v':
 			flags.verbosity++;
