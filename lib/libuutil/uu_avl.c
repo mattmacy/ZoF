@@ -28,7 +28,11 @@
 #include "libuutil_common.h"
 
 #include <stdlib.h>
+#ifdef HAVE_LIBBSD
+#include <bsd/string.h>
+#else
 #include <string.h>
+#endif
 #include <unistd.h>
 #include <sys/avl.h>
 

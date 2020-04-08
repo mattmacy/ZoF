@@ -76,7 +76,11 @@
 #include <limits.h>
 #include <stddef.h>
 #include <stdlib.h>
+#ifdef HAVE_LIBBSD
+#include <bsd/string.h>
+#else
 #include <string.h>
+#endif
 #include <syslog.h>
 #include <sys/list.h>
 #include <sys/sunddi.h>
