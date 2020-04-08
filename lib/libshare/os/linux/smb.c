@@ -49,7 +49,11 @@
 #include <time.h>
 #include <stdlib.h>
 #include <stdio.h>
+#ifdef HAVE_LIBBSD
+#include <bsd/string.h>
+#else
 #include <string.h>
+#endif
 #include <strings.h>
 #include <fcntl.h>
 #include <sys/wait.h>

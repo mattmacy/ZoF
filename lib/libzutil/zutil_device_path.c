@@ -26,7 +26,11 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef HAVE_LIBBSD
+#include <bsd/string.h>
+#else
 #include <string.h>
+#endif
 #include <unistd.h>
 
 #include <libzutil.h>
