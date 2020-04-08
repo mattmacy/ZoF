@@ -32,9 +32,20 @@
  * cpu time.  Until its performance is improved it should be manually enabled.
  */
 int reference_tracking_enable = FALSE;
-int reference_history = 3; /* tunable */
+int reference_history = 30; /* tunable */
 
 #ifdef	ZFS_DEBUG
+typedef struct reference {
+	list_node_t ref_link;
+	const void *ref_holder;
+	uint64_t ref_number;
+	uint8_t *ref_removed;
+	const char *ref_add_file;
+	const char *ref_rem_file;
+	int ref_add_line;
+	int ref_rem_line;
+} reference_t;
+
 static kmem_cache_t *reference_cache;
 static kmem_cache_t *reference_history_cache;
 
@@ -87,19 +98,30 @@ zfs_refcount_destroy_many(zfs_refcount_t *rc, uint64_t number)
 {
 	reference_t *ref;
 
-	ASSERT3U(rc->rc_count, ==, number);
 	while ((ref = list_head(&rc->rc_list))) {
 		list_remove(&rc->rc_list, ref);
+#if !defined(_KERNEL) || defined(__FreeBSD__)
+		if (rc->rc_count != number)
+			printf("ref_holder: %p ref_number: %lu %s:%d\n",
+				   ref->ref_holder, (uint64_t)ref->ref_number, ref->ref_add_file, ref->ref_add_line);
+#endif
 		kmem_cache_free(reference_cache, ref);
 	}
 	list_destroy(&rc->rc_list);
 
 	while ((ref = list_head(&rc->rc_removed))) {
 		list_remove(&rc->rc_removed, ref);
+#if !defined(_KERNEL) || defined(__FreeBSD__)
+		if (rc->rc_count != number)
+			printf("ref_holder: %p ref_number: %lu add %s:%d remove %s:%d\n",
+				   ref->ref_holder, (uint64_t)ref->ref_number, ref->ref_add_file, ref->ref_add_line, ref->ref_rem_file, ref->ref_rem_line);
+#endif
 		kmem_cache_free(reference_history_cache, ref->ref_removed);
 		kmem_cache_free(reference_cache, ref);
 	}
 	list_destroy(&rc->rc_removed);
+	ASSERT3U(rc->rc_count, ==, number);
+
 	mutex_destroy(&rc->rc_mtx);
 }
 
@@ -122,7 +144,7 @@ zfs_refcount_count(zfs_refcount_t *rc)
 }
 
 int64_t
-zfs_refcount_add_many(zfs_refcount_t *rc, uint64_t number, const void *holder)
+zfs_refcount_add_many_(zfs_refcount_t *rc, uint64_t number, const void *holder, const char *file, int line)
 {
 	reference_t *ref = NULL;
 	int64_t count;
@@ -131,6 +153,8 @@ zfs_refcount_add_many(zfs_refcount_t *rc, uint64_t number, const void *holder)
 		ref = kmem_cache_alloc(reference_cache, KM_SLEEP);
 		ref->ref_holder = holder;
 		ref->ref_number = number;
+		ref->ref_add_file = file;
+		ref->ref_add_line = line;
 	}
 	mutex_enter(&rc->rc_mtx);
 	ASSERT3U(rc->rc_count, >=, 0);
@@ -144,32 +168,52 @@ zfs_refcount_add_many(zfs_refcount_t *rc, uint64_t number, const void *holder)
 }
 
 int64_t
-zfs_refcount_add(zfs_refcount_t *rc, const void *holder)
+zfs_refcount_add_(zfs_refcount_t *rc, const void *holder, const char *file, int line)
 {
-	return (zfs_refcount_add_many(rc, 1, holder));
+	return (zfs_refcount_add_many_(rc, 1, holder, file, line));
 }
 
 int64_t
-zfs_refcount_remove_many(zfs_refcount_t *rc, uint64_t number,
-    const void *holder)
+zfs_refcount_remove_many_(zfs_refcount_t *rc, uint64_t number,
+    const void *holder, const char *file, int line)
 {
 	reference_t *ref;
 	int64_t count;
 
 	mutex_enter(&rc->rc_mtx);
-	ASSERT3U(rc->rc_count, >=, number);
 
 	if (!rc->rc_tracked) {
+		ASSERT3U(rc->rc_count, >=, number);
 		rc->rc_count -= number;
 		count = rc->rc_count;
 		mutex_exit(&rc->rc_mtx);
 		return (count);
 	}
+#if !defined(_KERNEL) || defined(__FreeBSD__)
+	if (rc->rc_count < number) {
+		printf("refs added:\n");
+		for (ref = list_head(&rc->rc_list); ref;
+			 ref = list_next(&rc->rc_list, ref)) {
+			printf("ref_holder: %p ref_number: %lu %s:%d\n",
+				   ref->ref_holder, (uint64_t)ref->ref_number, ref->ref_add_file, ref->ref_add_line);
+		}
+		printf("refs removed:\n");
+		for (ref = list_head(&rc->rc_removed); ref;
+			 ref = list_next(&rc->rc_removed, ref)) {
+			printf("ref_holder: %p ref_number: %lu add %s:%d remove %s:%d\n",
+				   ref->ref_holder, (uint64_t)ref->ref_number, ref->ref_add_file, ref->ref_add_line, ref->ref_rem_file, ref->ref_rem_line);
 
+		}
+		delay(25*hz);
+	}
+#endif
+	ASSERT3U(rc->rc_count, >=, number);
 	for (ref = list_head(&rc->rc_list); ref;
 	    ref = list_next(&rc->rc_list, ref)) {
 		if (ref->ref_holder == holder && ref->ref_number == number) {
 			list_remove(&rc->rc_list, ref);
+			ref->ref_rem_file = file;
+			ref->ref_rem_line = line;
 			if (reference_history > 0) {
 				ref->ref_removed =
 				    kmem_cache_alloc(reference_history_cache,
@@ -193,15 +237,21 @@ zfs_refcount_remove_many(zfs_refcount_t *rc, uint64_t number,
 			return (count);
 		}
 	}
+#if !defined(_KERNEL) || defined(__FreeBSD__)
+	for (ref = list_head(&rc->rc_list); ref;
+		 ref = list_next(&rc->rc_list, ref)) {
+		printf("%p : %lu %s:%d\n", ref->ref_holder, ref->ref_number, ref->ref_add_file, ref->ref_add_line);
+	}
+#endif
 	panic("No such hold %p on refcount %llx", holder,
 	    (u_longlong_t)(uintptr_t)rc);
 	return (-1);
 }
 
 int64_t
-zfs_refcount_remove(zfs_refcount_t *rc, const void *holder)
+zfs_refcount_remove_(zfs_refcount_t *rc, const void *holder, const char *file, int line)
 {
-	return (zfs_refcount_remove_many(rc, 1, holder));
+	return (zfs_refcount_remove_many_(rc, 1, holder, file, line));
 }
 
 void
@@ -257,6 +307,28 @@ zfs_refcount_transfer_ownership_many(zfs_refcount_t *rc, uint64_t number,
 			break;
 		}
 	}
+#if !defined(_KERNEL) || defined(__FreeBSD__)
+
+	if (!found) {
+		for (ref = list_head(&rc->rc_list); ref;
+			 ref = list_next(&rc->rc_list, ref)) {
+			if (ref->ref_holder == current_holder)
+				printf("%p : %lu\n", current_holder, ref->ref_number);
+		}
+		for (ref = list_head(&rc->rc_list); ref;
+			 ref = list_next(&rc->rc_list, ref)) {
+			if (ref->ref_holder == new_holder) {
+				panic("new_holder %p already in reference list with number %lu and old holder %p not found\n", new_holder, ref->ref_number, current_holder);
+				found = B_TRUE;
+				break;
+			}
+		}
+		for (ref = list_head(&rc->rc_list); ref;
+			 ref = list_next(&rc->rc_list, ref)) {
+			printf("%p : %lu %s:%d\n", ref->ref_holder, ref->ref_number, ref->ref_add_file, ref->ref_add_line);
+		}
+	}
+#endif
 	ASSERT(found);
 	mutex_exit(&rc->rc_mtx);
 }

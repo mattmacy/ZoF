@@ -201,7 +201,7 @@ free_verify(dmu_buf_impl_t *db, uint64_t start, uint64_t end, dmu_tx_t *tx)
 
 		rw_enter(&dn->dn_struct_rwlock, RW_READER);
 		err = dbuf_hold_impl(dn, db->db_level - 1,
-		    (db->db_blkid << epbs) + i, TRUE, FALSE, FTAG, &child);
+		    (db->db_blkid << epbs) + i, TRUE, FALSE, FTAG, &child, NULL);
 		rw_exit(&dn->dn_struct_rwlock);
 		if (err == ENOENT)
 			continue;
@@ -332,7 +332,7 @@ free_children(dmu_buf_impl_t *db, uint64_t blkid, uint64_t nblks,
 				continue;
 			rw_enter(&dn->dn_struct_rwlock, RW_READER);
 			VERIFY0(dbuf_hold_impl(dn, db->db_level - 1,
-			    id, TRUE, FALSE, FTAG, &subdb));
+			    id, TRUE, FALSE, FTAG, &subdb, NULL));
 			rw_exit(&dn->dn_struct_rwlock);
 			ASSERT3P(bp, ==, subdb->db_blkptr);
 
@@ -397,7 +397,7 @@ dnode_sync_free_range_impl(dnode_t *dn, uint64_t blkid, uint64_t nblks,
 				continue;
 			rw_enter(&dn->dn_struct_rwlock, RW_READER);
 			VERIFY0(dbuf_hold_impl(dn, dnlevel - 1, i,
-			    TRUE, FALSE, FTAG, &db));
+			    TRUE, FALSE, FTAG, &db, NULL));
 			rw_exit(&dn->dn_struct_rwlock);
 			free_children(db, blkid, nblks, free_indirects, tx);
 			dbuf_rele(db, FTAG);
@@ -541,6 +541,7 @@ dnode_undirty_dbufs(list_t *list)
 		ASSERT(list_head(&db->db_dirty_records) == dr);
 		list_remove_head(&db->db_dirty_records);
 		ASSERT(list_is_empty(&db->db_dirty_records));
+		dbuf_dirty_record_cleanup_ranges(dr);
 		db->db_dirtycnt -= 1;
 		if (db->db_level == 0) {
 			ASSERT(db->db_blkid == DMU_BONUS_BLKID ||
