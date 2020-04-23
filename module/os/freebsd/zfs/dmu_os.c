@@ -87,60 +87,69 @@ dmu_buf_hold_array(objset_t *os, uint64_t object, uint64_t offset,
 		return (err);
 
 	err = dmu_buf_hold_array_by_dnode(dn, offset, length, read, tag,
-	    numbufsp, dbpp, DMU_CTX_FLAG_PREFETCH);
+	    numbufsp, dbpp, DMU_READ_PREFETCH);
 
 	dnode_rele(dn, FTAG);
 
 	return (err);
 }
 
-void
-dmu_buf_write_pages(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
-    uint64_t sz)
-{
-	vm_page_t *pp = dbs->dbs_dc->dc_data_buf;
-	struct sf_buf *sf;
-	int copied;
-
-	/*
-	 * Seek to the page that starts this transfer.
-	 */
-	pp += (db->db_offset	+ off - dbs->dbs_dc->dc_dn_start) / PAGESIZE;
-	for (copied = 0; copied < sz; copied += PAGESIZE) {
-		caddr_t va;
-		int thiscpy;
-
-		ASSERT3U(ptoa((*pp)->pindex), ==, db->db_offset + off);
-		thiscpy = MIN(PAGESIZE, sz - copied);
-		va = zfs_map_page(*pp, &sf);
-		bcopy(va, (char *)db->db_data + off, thiscpy);
-		zfs_unmap_page(sf);
-		pp += 1;
-		off += PAGESIZE;
-	}
-}
-
 int
 dmu_write_pages(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
     vm_page_t *ma, dmu_tx_t *tx)
 {
-	dmu_ctx_t dc;
+	dmu_buf_t **dbp;
+	struct sf_buf *sf;
+	int numbufs, i;
 	int err;
 
 	if (size == 0)
 		return (0);
 
-	err = dmu_ctx_init(&dc, /* dnode */ NULL, os, object, offset,
-	    size, ma, FTAG, DMU_CTX_FLAG_SUN_PAGES);
+	err = dmu_buf_hold_array(os, object, offset, size,
+	    FALSE, FTAG, &numbufs, &dbp);
 	if (err)
 		return (err);
 
-	dmu_ctx_set_dmu_tx(&dc, tx);
-	err = dmu_issue(&dc);
-	dmu_ctx_rele(&dc);
+	for (i = 0; i < numbufs; i++) {
+		int tocpy, copied, thiscpy;
+		int bufoff;
+		dmu_buf_t *db = dbp[i];
+		caddr_t va;
+
+		ASSERT(size > 0);
+		ASSERT3U(db->db_size, >=, PAGESIZE);
+
+		bufoff = offset - db->db_offset;
+		tocpy = (int)MIN(db->db_size - bufoff, size);
+
+		ASSERT(i == 0 || i == numbufs-1 || tocpy == db->db_size);
+
+		if (tocpy == db->db_size)
+			dmu_buf_will_fill(db, tx);
+		else
+			dmu_buf_will_dirty(db, tx);
+
+		for (copied = 0; copied < tocpy; copied += PAGESIZE) {
+			ASSERT3U(ptoa((*ma)->pindex), ==,
+			    db->db_offset + bufoff);
+			thiscpy = MIN(PAGESIZE, tocpy - copied);
+			va = zfs_map_page(*ma, &sf);
+			bcopy(va, (char *)db->db_data + bufoff, thiscpy);
+			zfs_unmap_page(sf);
+			ma += 1;
+			bufoff += PAGESIZE;
+		}
+
+		if (tocpy == db->db_size)
+			dmu_buf_fill_done(db, tx);
+
+		offset += tocpy;
+		size -= tocpy;
+	}
+	dmu_buf_rele_array(dbp, numbufs, FTAG);
 	return (err);
 }
-
 
 int
 dmu_read_pages(objset_t *os, uint64_t object, vm_page_t *ma, int count,

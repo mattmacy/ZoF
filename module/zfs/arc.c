@@ -1549,45 +1549,6 @@ arc_bufc_to_flags(arc_buf_contents_t type)
 	return ((uint32_t)-1);
 }
 
-boolean_t
-arc_buf_frozen(arc_buf_t *buf)
-{
-
-	return (buf->b_hdr->b_l1hdr.b_freeze_cksum != NULL);
-}
-
-void
-arc_transfer_cache_state(arc_buf_t *from, arc_buf_t *to)
-{
-	arc_buf_hdr_t *anon_hdr;
-	arc_buf_hdr_t *hdr;
-	kmutex_t *hash_lock;
-
-	mutex_enter(&to->b_evict_lock);
-	anon_hdr = to->b_hdr;
-	ASSERT(anon_hdr->b_l1hdr.b_state == arc_anon);
-
-	mutex_enter(&from->b_evict_lock);
-	ASSERT(from->b_hdr->b_l1hdr.b_state != arc_anon);
-	hash_lock = HDR_LOCK(from->b_hdr);
-	mutex_enter(hash_lock);
-	hdr = from->b_hdr;
-
-	ASSERT3U(hdr->b_l1hdr.b_refcnt.rc_count, ==,
-	    anon_hdr->b_l1hdr.b_refcnt.rc_count);
-	ASSERT3U(bcmp(from->b_data, to->b_data,
-	    hdr->b_l1hdr.b_refcnt.rc_count), ==, 0);
-
-	anon_hdr->b_l1hdr.b_buf = from;
-	from->b_hdr = anon_hdr;
-	hdr->b_l1hdr.b_buf = to;
-	to->b_hdr = hdr;
-
-	mutex_exit(hash_lock);
-	mutex_exit(&from->b_evict_lock);
-	mutex_exit(&to->b_evict_lock);
-}
-
 void
 arc_buf_thaw(arc_buf_t *buf)
 {
@@ -3405,7 +3366,7 @@ arc_hdr_realloc(arc_buf_hdr_t *hdr, kmem_cache_t *old, kmem_cache_t *new)
  * new fields will be zeroed out.
  */
 static arc_buf_hdr_t *
-arc_hdr_realloc_crypt(arc_buf_hdr_t *hdr, boolean_t need_crypt, boolean_t need_transfer)
+arc_hdr_realloc_crypt(arc_buf_hdr_t *hdr, boolean_t need_crypt)
 {
 	arc_buf_hdr_t *nhdr;
 	arc_buf_t *buf;
@@ -3476,9 +3437,7 @@ arc_hdr_realloc_crypt(arc_buf_hdr_t *hdr, boolean_t need_crypt, boolean_t need_t
 		buf->b_hdr = nhdr;
 		mutex_exit(&buf->b_evict_lock);
 	}
-	if (need_transfer)
-		zfs_refcount_transfer_ownership_many(&hdr->b_l1hdr.b_state->arcs_size,
-	        arc_hdr_size(hdr), hdr, nhdr);
+
 	zfs_refcount_transfer(&nhdr->b_l1hdr.b_refcnt, &hdr->b_l1hdr.b_refcnt);
 	(void) zfs_refcount_remove(&nhdr->b_l1hdr.b_refcnt, FTAG);
 	ASSERT0(zfs_refcount_count(&hdr->b_l1hdr.b_refcnt));
@@ -3540,22 +3499,14 @@ arc_convert_to_raw(arc_buf_t *buf, uint64_t dsobj, boolean_t byteorder,
     const uint8_t *mac)
 {
 	arc_buf_hdr_t *hdr = buf->b_hdr;
-	boolean_t need_transfer = B_TRUE;
 
 	ASSERT(ot == DMU_OT_DNODE || ot == DMU_OT_OBJSET);
 	ASSERT(HDR_HAS_L1HDR(hdr));
 	ASSERT3P(hdr->b_l1hdr.b_state, ==, arc_anon);
 
-	if (arc_buf_is_shared(buf)) {
-		arc_unshare_buf(hdr, buf);
-		arc_hdr_alloc_abd(hdr, B_FALSE);
-		abd_copy_from_buf(hdr->b_l1hdr.b_pabd, buf->b_data,
-		    HDR_GET_PSIZE(hdr));
-		need_transfer = B_FALSE;
-	}
 	buf->b_flags |= (ARC_BUF_FLAG_COMPRESSED | ARC_BUF_FLAG_ENCRYPTED);
 	if (!HDR_PROTECTED(hdr))
-		hdr = arc_hdr_realloc_crypt(hdr, B_TRUE, need_transfer);
+		hdr = arc_hdr_realloc_crypt(hdr, B_TRUE);
 	hdr->b_crypt_hdr.b_dsobj = dsobj;
 	hdr->b_crypt_hdr.b_ot = ot;
 	hdr->b_l1hdr.b_byteswap = (byteorder == ZFS_HOST_BYTEORDER) ?
@@ -5403,8 +5354,8 @@ arc_buf_access(arc_buf_t *buf)
 /* a generic arc_read_done_func_t which you can use */
 /* ARGSUSED */
 void
-arc_bcopy_func(zio_t *zio, const zbookmark_phys_t *zb, int err,
-    const blkptr_t *bp, arc_buf_t *buf, void *arg)
+arc_bcopy_func(zio_t *zio, const zbookmark_phys_t *zb, const blkptr_t *bp,
+    arc_buf_t *buf, void *arg)
 {
 	if (buf == NULL)
 		return;
@@ -5416,8 +5367,8 @@ arc_bcopy_func(zio_t *zio, const zbookmark_phys_t *zb, int err,
 /* a generic arc_read_done_func_t */
 /* ARGSUSED */
 void
-arc_getbuf_func(zio_t *zio, const zbookmark_phys_t *zb, int err,
-    const blkptr_t *bp, arc_buf_t *buf, void *arg)
+arc_getbuf_func(zio_t *zio, const zbookmark_phys_t *zb, const blkptr_t *bp,
+    arc_buf_t *buf, void *arg)
 {
 	arc_buf_t **bufp = arg;
 
@@ -5657,8 +5608,8 @@ arc_read_done(zio_t *zio)
 				    acb->acb_private);
 				acb->acb_buf = NULL;
 			}
-			acb->acb_done(zio, &zio->io_bookmark, zio->io_error,
-			    zio->io_bp, acb->acb_buf, acb->acb_private);
+			acb->acb_done(zio, &zio->io_bookmark, zio->io_bp,
+			    acb->acb_buf, acb->acb_private);
 		}
 
 		if (acb->acb_zio_dummy != NULL) {
@@ -5750,7 +5701,6 @@ top:
 			zio_t *head_zio = hdr->b_l1hdr.b_acb->acb_zio_head;
 
 			if (*arc_flags & ARC_FLAG_CACHED_ONLY) {
-				*arc_flags &= ~ARC_FLAG_CACHED;
 				mutex_exit(hash_lock);
 				ARCSTAT_BUMP(arcstat_cached_only_in_progress);
 				rc = SET_ERROR(ENOENT);
@@ -5881,7 +5831,7 @@ top:
 		    data, metadata, hits);
 
 		if (done)
-			done(NULL, zb, rc, bp, buf, private);
+			done(NULL, zb, bp, buf, private);
 	} else {
 		uint64_t lsize = BP_GET_LSIZE(bp);
 		uint64_t psize = BP_GET_PSIZE(bp);
@@ -6586,7 +6536,7 @@ arc_write_ready(zio_t *zio)
 	arc_hdr_set_flags(hdr, ARC_FLAG_IO_IN_PROGRESS);
 
 	if (BP_IS_PROTECTED(bp) != !!HDR_PROTECTED(hdr))
-		hdr = arc_hdr_realloc_crypt(hdr, BP_IS_PROTECTED(bp), B_FALSE);
+		hdr = arc_hdr_realloc_crypt(hdr, BP_IS_PROTECTED(bp));
 
 	if (BP_IS_PROTECTED(bp)) {
 		/* ZIL blocks are written through zio_rewrite */

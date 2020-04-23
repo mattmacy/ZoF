@@ -817,7 +817,6 @@ void
 kernel_init(int mode)
 {
 	extern uint_t rrw_tsd_key;
-	extern uint_t zfs_async_io_key;
 
 	umem_nofail_callback(umem_out_of_memory);
 
@@ -841,7 +840,6 @@ kernel_init(int mode)
 	fletcher_4_init();
 
 	tsd_create(&rrw_tsd_key, rrw_tsd_destroy);
-	tsd_create(&zfs_async_io_key, dmu_thread_context_destroy);
 }
 
 void

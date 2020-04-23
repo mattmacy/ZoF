@@ -595,7 +595,7 @@ zvol_log_write(zvol_state_t *zv, dmu_tx_t *tx, uint64_t offset,
 		    (wr_state == WR_COPIED ? len : 0));
 		lr = (lr_write_t *)&itx->itx_lr;
 		if (wr_state == WR_COPIED && dmu_read_by_dnode(zv->zv_dn,
-		    offset, len, lr+1, /* flags */ 0) != 0) {
+		    offset, len, lr+1, DMU_READ_NO_PREFETCH) != 0) {
 			zil_itx_destroy(itx);
 			itx = zil_itx_create(TX_WRITE, sizeof (*lr));
 			lr = (lr_write_t *)&itx->itx_lr;
@@ -687,7 +687,7 @@ zvol_get_data(void *arg, lr_write_t *lr, char *buf, struct lwb *lwb, zio_t *zio)
 		zgd->zgd_lr = zfs_rangelock_enter(&zv->zv_rangelock, offset,
 		    size, RL_READER);
 		error = dmu_read_by_dnode(zv->zv_dn, offset, size, buf,
-		    /* flags */ 0);
+		    DMU_READ_NO_PREFETCH);
 	} else { /* indirect write */
 		/*
 		 * Have to lock the whole block to ensure when it's written out
@@ -700,7 +700,7 @@ zvol_get_data(void *arg, lr_write_t *lr, char *buf, struct lwb *lwb, zio_t *zio)
 		zgd->zgd_lr = zfs_rangelock_enter(&zv->zv_rangelock, offset,
 		    size, RL_READER);
 		error = dmu_buf_hold_by_dnode(zv->zv_dn, offset, zgd, &db,
-		    /* flags */ 0);
+		    DMU_READ_NO_PREFETCH);
 		if (error == 0) {
 			blkptr_t *bp = &lr->lr_blkptr;
 
@@ -772,7 +772,7 @@ zvol_setup_zv(zvol_state_t *zv)
 	if (error)
 		return (SET_ERROR(error));
 
-	error = dnode_hold(os, ZVOL_OBJ, zv, &zv->zv_dn);
+	error = dnode_hold(os, ZVOL_OBJ, FTAG, &zv->zv_dn);
 	if (error)
 		return (SET_ERROR(error));
 
@@ -807,7 +807,7 @@ zvol_shutdown_zv(zvol_state_t *zv)
 
 	zv->zv_zilog = NULL;
 
-	dnode_rele(zv->zv_dn, zv);
+	dnode_rele(zv->zv_dn, FTAG);
 	zv->zv_dn = NULL;
 
 	/*

@@ -688,7 +688,7 @@ zvol_geom_bio_strategy(struct bio *bp)
 		size_t size = MIN(resid, zvol_maxphys);
 		if (doread) {
 			error = dmu_read(os, ZVOL_OBJ, off, size, addr,
-			    DMU_CTX_FLAG_PREFETCH);
+			    DMU_READ_PREFETCH);
 		} else {
 			dmu_tx_t *tx = dmu_tx_create(os);
 			dmu_tx_hold_write_by_dnode(tx, zv->zv_dn, off, size);

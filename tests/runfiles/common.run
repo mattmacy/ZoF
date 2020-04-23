@@ -781,7 +781,7 @@ tests = ['recv_dedup', 'recv_dedup_encrypted_zvol', 'rsend_001_pos',
     'send_encrypted_props', 'send_encrypted_truncated_files',
     'send_freeobjects', 'send_realloc_files',
     'send_realloc_encrypted_files', 'send_spill_block', 'send_holds',
-    'send_hole_birth', 'send_mixed_raw',
+    'send_hole_birth', 'send_mixed_raw', 'send-wDR_encrypted_zvol',
     'send_partial_dataset']
 tags = ['functional', 'rsend']
 
