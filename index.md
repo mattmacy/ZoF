@@ -9,12 +9,12 @@ developed for Solaris and is now maintained by the OpenZFS community.
   * [OpenZFS site](http://open-zfs.org/)
   * [OpenZFS repo](https://github.com/openzfs/zfs)
 
-# Installation
+# Installation on FreeBSD
 
 OpenZFS is available in the FreeBSD ports tree as sysutils/openzfs and
 sysutils/openzfs-kmod. It can be installed on FreeBSD stable/12 or later.
 
-# Development
+# Development on FreeBSD
 
 The following dependencies are required to build OpenZFS on FreeBSD:
   * FreeBSD sources in /usr/src or elsewhere specified by SYSDIR in env
