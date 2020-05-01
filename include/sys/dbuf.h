@@ -443,6 +443,12 @@ typedef struct dmu_buf_impl {
 	/* List of dirty records for the buffer sorted newest to oldest. */
 	list_t db_dirty_records;
 
+	/*
+	 * List of DMU buffer sets dependent on this dbuf.
+	 * See dmu_context_node_t, the indirect list entry structure used.
+	 */
+	list_t db_buf_sets;
+
 	/* Link in dbuf_cache or dbuf_metadata_cache */
 	multilist_node_t db_cache_link;
 
@@ -488,6 +494,32 @@ typedef struct dbuf_hash_table {
 	kmutex_t hash_mutexes[DBUF_MUTEXES];
 } dbuf_hash_table_t;
 
+typedef struct dmu_buf_set_node {
+
+	/* This entry's link in the list. */
+	list_node_t dbsn_link;
+
+	/* This entry's buffer set pointer. */
+	dmu_buf_set_t *dbsn_dbs;
+
+} dmu_buf_set_node_t;
+
+/* Used for TSD for processing completed asynchronous I/Os. */
+extern uint_t zfs_async_io_key;
+
+void dmu_buf_set_node_add(list_t *list, dmu_buf_set_t *buf_set);
+void dmu_buf_set_node_remove(list_t *list, dmu_buf_set_node_t *dbsn);
+
+/*
+ * Thread-specific DMU callback state for processing async I/O's.
+ */
+typedef struct dmu_cb_state {
+
+	/* The list of IOs that are ready to be processed. */
+	list_t dcs_io_list;
+
+} dmu_cb_state_t;
+
 uint64_t dbuf_whichblock(const struct dnode *di, const int64_t level,
     const uint64_t offset);
 
@@ -502,7 +534,7 @@ dmu_buf_impl_t *dbuf_hold_level(struct dnode *dn, int level, uint64_t blkid,
     void *tag);
 int dbuf_hold_impl(struct dnode *dn, uint8_t level, uint64_t blkid,
     boolean_t fail_sparse, boolean_t fail_uncached,
-    void *tag, dmu_buf_impl_t **dbp);
+	void *tag, dmu_buf_impl_t **dbp, dmu_buf_set_t *dbs);
 
 void dbuf_prefetch(struct dnode *dn, int64_t level, uint64_t blkid,
     zio_priority_t prio, arc_flags_t aflags);
@@ -520,6 +552,8 @@ dmu_buf_impl_t *dbuf_find(struct objset *os, uint64_t object, uint8_t level,
 
 int dbuf_read(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags);
 void dbuf_transition_to_read(dmu_buf_impl_t *db);
+void dbuf_will_dirty_range(dmu_buf_impl_t *db, dmu_tx_t *tx, int offset,
+    int size);
 void dmu_buf_will_not_fill(dmu_buf_t *db, dmu_tx_t *tx);
 void dmu_buf_will_fill(dmu_buf_t *db, dmu_tx_t *tx);
 void dmu_buf_fill_done(dmu_buf_t *db, dmu_tx_t *tx);

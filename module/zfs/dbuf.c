@@ -53,8 +53,6 @@
 
 kstat_t *dbuf_ksp;
 
-#define	CFAPRINTF(...)
-
 typedef struct dbuf_stats {
 	/*
 	 * Statistics about partial buffer writes
@@ -179,7 +177,7 @@ static uint64_t dirty_ranges_in_flight;
 #endif
 
 static boolean_t dbuf_undirty(dmu_buf_impl_t *db, dmu_tx_t *tx);
-static void dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx);
+static zio_t *dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx);
 static void dbuf_sync_leaf_verify_bonus_dnode(dbuf_dirty_record_t *dr);
 static int dbuf_read_verify_dnode_crypt(dmu_buf_impl_t *db, uint32_t flags);
 static dbuf_dirty_record_t *dbuf_dirty_bonus(dmu_buf_impl_t *db, dmu_tx_t *tx);
@@ -1513,6 +1511,26 @@ dbuf_resolve_ranges(dmu_buf_impl_t *db, arc_buf_t *buf)
 }
 
 static void
+dbuf_process_buf_sets(dmu_buf_impl_t *db, int err)
+{
+	dmu_buf_set_node_t *dbsn, *next;
+
+	ASSERT(db->db_buf != NULL || err);
+	for (dbsn = list_head(&db->db_buf_sets); dbsn != NULL; dbsn = next) {
+		next = list_next(&db->db_buf_sets, dbsn);
+		dmu_buf_set_rele(dbsn->dbsn_dbs, err);
+		dmu_buf_set_node_remove(&db->db_buf_sets, dbsn);
+	}
+}
+
+static inline void
+arc_discard_buf(arc_buf_t *buf, void *tag)
+{
+	arc_release(buf, tag);
+	arc_buf_destroy(buf, tag);
+}
+
+static void
 dbuf_read_complete(dmu_buf_impl_t *db, arc_buf_t *buf, boolean_t is_hole_read)
 {
 	dbuf_dirty_record_t *oldest_dr = list_tail(&db->db_dirty_records);
@@ -1551,7 +1569,6 @@ dbuf_read_complete(dmu_buf_impl_t *db, arc_buf_t *buf, boolean_t is_hole_read)
 			 * was waiting on this read.  Transition
 			 * to cached.
 			 */
-			ASSERT(db->db_buf != NULL);
 			db->db_state = DB_CACHED;
 			DTRACE_SET_STATE(db,
 			    "resolve of records in READ state");
@@ -1577,7 +1594,7 @@ dbuf_read_complete(dmu_buf_impl_t *db, arc_buf_t *buf, boolean_t is_hole_read)
 		 * The provided buffer is no longer relevant to the
 		 * current transaction group.  Discard it.
 		 */
-		arc_release(buf, db);
+		arc_discard_buf(buf, db);
 
 		if (oldest_dr->dr_zio) {
 			ASSERT(oldest_dr == db->db_data_pending);
@@ -1616,8 +1633,9 @@ dbuf_read_complete(dmu_buf_impl_t *db, arc_buf_t *buf, boolean_t is_hole_read)
 		ASSERT(db->db_buf != NULL);
 		ASSERT(db->db_state == DB_CACHED ||
 		    db->db_state == DB_UNCACHED);
-		arc_release(buf, db);
+		arc_discard_buf(buf, db);
 	}
+	dbuf_process_buf_sets(db, /* err */ 0);
 }
 
 static void
@@ -1632,8 +1650,6 @@ dbuf_read_done(zio_t *zio, const zbookmark_phys_t *zb, int err,
 	 * All reads are synchronous, so we must have a hold on the dbuf
 	 */
 	ASSERT(zfs_refcount_count(&db->db_holds) > 0);
-	ASSERT(db->db_buf == NULL);
-	ASSERT(db->db.db_data == NULL);
 	if (buf == NULL) {
 		/* i/o error */
 		ASSERT(zio == NULL || zio->io_error != 0);
@@ -1661,6 +1677,7 @@ dbuf_read_done(zio_t *zio, const zbookmark_phys_t *zb, int err,
 			ASSERT3P(db->db_buf, ==, NULL);
 			db->db_state = DB_UNCACHED;
 			DTRACE_SET_STATE(db, "read failed");
+			dbuf_process_buf_sets(db, zio->io_error);
 		}
 		arc_buf_destroy(buf, db);
 	}
@@ -1895,9 +1912,7 @@ dbuf_read_impl(dmu_buf_impl_t *db, zio_t *zio, uint32_t *flags,
 		    /* zio_flags */0, &aflags, &zb);
 		if (aflags & ARC_FLAG_CACHED)
 			*flags |= DB_RF_CACHED;
-		DB_DNODE_EXIT(db);
-		/* Cache lookups never drop the dbuf mutex. */
-		return (err);
+		goto early_unlock;
 	}
 
 	err = dbuf_read_verify_dnode_crypt(db, *flags);
@@ -1937,7 +1952,8 @@ dbuf_read_impl(dmu_buf_impl_t *db, zio_t *zio, uint32_t *flags,
 	return (err);
 early_unlock:
 	DB_DNODE_EXIT(db);
-	mutex_exit(&db->db_mtx);
+	if ((*flags & DB_RF_CACHED_ONLY) == 0)
+		mutex_exit(&db->db_mtx);
 	dmu_buf_unlock_parent(db, dblt, tag);
 	return (err);
 }
@@ -2019,7 +2035,7 @@ dbuf_read_cached(dmu_buf_impl_t *db, dnode_t *dn)
 	dbuf_read_impl(db, NULL, &rflags, dblt, FTAG);
 	ASSERT(MUTEX_HELD(&db->db_mtx));
 
-	return (db->db_state == DB_CACHED);
+	return ((rflags & DB_RF_CACHED) != 0);
 }
 
 int
@@ -2298,7 +2314,7 @@ dbuf_free_range_already_freed(dmu_buf_impl_t *db)
 static boolean_t
 dbuf_free_range_filler_will_free(dmu_buf_impl_t *db)
 {
-	if (db->db_state == DB_FILL || db->db_state == DB_READ) {
+	if (db->db_state & DB_FILL) {
 		/*
 		 * If the buffer is currently being filled, then its
 		 * contents cannot be directly cleared.  Signal the filler
@@ -2402,6 +2418,7 @@ dbuf_free_range(dnode_t *dn, uint64_t start_blkid, uint64_t end_blkid,
 		arc_buf_freeze(db->db_buf);
 		db->db_state = DB_CACHED;
 		DTRACE_SET_STATE(db, "zeroed by free");
+		dbuf_process_buf_sets(db, /*err*/0);
 		cv_broadcast(&db->db_changed);
 		mutex_exit(&db->db_mtx);
 	}
@@ -2747,6 +2764,12 @@ dbuf_dirty_compute_state(dbuf_dirty_state_t *dds)
 	dbuf_dirty_record_t *dr, *newest;
 	dnode_t *dn = dds->dds_dn;
 
+	/* Only one filler allowed at a time. */
+	while (db->db_state & DB_FILL) {
+		ASSERT0(db->db_level);
+		cv_wait(&db->db_changed, &db->db_mtx);
+	}
+
 	dbuf_dirty_verify(db, tx);
 	if (db->db_blkid == DMU_SPILL_BLKID)
 		dds->dds_dn->dn_have_spill = B_TRUE;
@@ -3052,7 +3075,6 @@ dbuf_dirty_record_add_range(dbuf_dirty_record_t *dr, int offset, int size)
 	} else {
 		/* If old_range is NULL, this does a list_insert_tail(). */
 		list_insert_before(&dl->write_ranges, old_range, range);
-		CFAPRINTF("add_range db=%p dr=%p\n", db, dr);
 		DEBUG_REFCOUNT_INC(dirty_ranges_in_flight);
 		DEBUG_COUNTER_INC(dirty_ranges_total);
 	}
@@ -3298,7 +3320,6 @@ dbuf_transition_to_read(dmu_buf_impl_t *db)
 	DB_DNODE_EXIT(db);
 
 	mutex_exit(&db->db_mtx);
-	DBUF_STAT_BUMP(buf_will_dirty);
 	(void) dbuf_read(db, zio, rf);
 	(void) zio_nowait(zio);
 	mutex_enter(&db->db_mtx);
@@ -3469,7 +3490,10 @@ dbuf_undirty_bonus(dbuf_dirty_record_t *dr)
 	if (dr->dr_dbuf->db_level != 0) {
 		mutex_destroy(&dr->dt.di.dr_mtx);
 		list_destroy(&dr->dt.di.dr_children);
+	} else {
+		dbuf_dirty_record_cleanup_ranges(dr);
 	}
+	list_destroy(&dr->dt.dl.write_ranges);
 	kmem_free(dr, sizeof (dbuf_dirty_record_t));
 	ASSERT3U(db->db_dirtycnt, >, 0);
 	db->db_dirtycnt -= 1;
@@ -3479,8 +3503,6 @@ static void
 dbuf_undirty_leaf(dbuf_dirty_record_t *dr)
 {
 	dmu_buf_impl_t *db = dr->dr_dbuf;
-	blkptr_t bp = { { { {0} } } };
-	spa_t *spa = dmu_objset_spa(db->db_objset);
 
 	ASSERT3U(db->db_blkid, !=, DMU_BONUS_BLKID);
 	if (db->db_state == DB_NOFILL)
@@ -3488,30 +3510,23 @@ dbuf_undirty_leaf(dbuf_dirty_record_t *dr)
 
 	if (dr->dt.dl.dr_data != db->db_buf) {
 		if (list_is_empty(&db->db_dirty_records) &&
-		    !arc_released(db->db_buf) /* && !db->db_is_ephemeral */) {
+		    !arc_released(db->db_buf)) {
 			/*
-			 * A syncher split preemptively duplicated the ARC
+			 * A syncer split preemptively duplicated the ARC
 			 * buffer in case the dbuf was dirtied again.  The
 			 * dbuf has not been re-dirtied.  Transfer cache
 			 * state to the foreground buffer copy so it is
 			 * retained in the cache after the last dbuf
 			 * reference is removed.
 			 */
-			CFAPRINTF("transfer cache state dr=%p db=%p\n", dr, db);
 			arc_transfer_cache_state(dr->dt.dl.dr_data, db->db_buf);
 		}
-#ifdef notyet
-		if (db->db_is_ephemeral)
-			arc_buf_to_blkptr(dr->dt.dl.dr_data, &bp);
-#endif
 		/*
 		 * The data in the ARC buffer for this dirty record is
 		 * either out of date, or duplicates the contents of
 		 * the foreground buffer.  Free it.
 		 */
 		arc_buf_destroy(dr->dt.dl.dr_data, db);
-		if (!BP_IS_HOLE(&bp))
-			arc_freed(spa, &bp);
 	}
 }
 
@@ -3635,7 +3650,8 @@ dbuf_undirty(dmu_buf_impl_t *db, dmu_tx_t *tx)
 	ASSERT(MUTEX_HELD(&db->db_mtx));
 
 	/*
-	 * If this buffer is not dirty, we're done.
+	 * If this buffer is not dirty in this transaction
+	 * group, we're done.
 	 */
 	dr = dbuf_find_dirty_eq(db, txg);
 	if (dr == NULL)
@@ -3682,6 +3698,8 @@ dbuf_undirty(dmu_buf_impl_t *db, dmu_tx_t *tx)
 			arc_buf_destroy(dr->dt.dl.dr_data, db);
 	}
 
+	dbuf_dirty_record_cleanup_ranges(dr);
+	list_destroy(&dr->dt.dl.write_ranges);
 	kmem_free(dr, sizeof (dbuf_dirty_record_t));
 	cv_broadcast(&db->db_changed);
 	ASSERT(db->db_dirtycnt > 0);
@@ -3758,14 +3776,41 @@ dmu_buf_is_dirty(dmu_buf_t *db_fake, dmu_tx_t *tx)
 	return (dr != NULL);
 }
 
+#pragma weak dmu_buf_will_dirty_range = dbuf_will_dirty_range
+/*
+ * Signal intent to dirty a subset of the buffer.
+ *
+ * XXX: This needs to be merged into dbuf_will_dirty().
+ */
+void
+dbuf_will_dirty_range(dmu_buf_impl_t *db, dmu_tx_t *tx, int offset, int size)
+{
+
+	ASSERT(tx->tx_txg != 0);
+	ASSERT(!zfs_refcount_is_zero(&db->db_holds));
+	ASSERT(db->db_level == 0);
+	ASSERT(db->db_blkid != DMU_SPILL_BLKID);
+	ASSERT(db->db_blkid != DMU_BONUS_BLKID);
+#ifdef ZFS_DEBUG
+	{
+		dnode_t *dn;
+
+		DB_DNODE_ENTER(db);
+		dn = DB_DNODE(db);
+		ASSERT(!DMU_OBJECT_IS_SPECIAL(dn->dn_object));
+		DB_DNODE_EXIT(db);
+	}
+#endif
+
+	dbuf_dirty_leaf(db, tx, offset, size);
+}
+
 void
 dmu_buf_will_not_fill(dmu_buf_t *db_fake, dmu_tx_t *tx)
 {
 	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
 
-	db->db_state = DB_NOFILL;
-	DTRACE_SET_STATE(db, "allocating NOFILL buffer");
-	dmu_buf_will_fill(db_fake, tx);
+	dbuf_dirty_nofill(db, tx);
 }
 
 void
@@ -3865,6 +3910,7 @@ dbuf_fill_done(dmu_buf_impl_t *db, dmu_tx_t *tx)
 			db->db_state = DB_CACHED;
 			DTRACE_SET_STATE(db,
 			    "fill done handling freed in flight");
+			dbuf_process_buf_sets(db, /*err*/0);
 		} else {
 
 			/*
@@ -3882,6 +3928,7 @@ dbuf_fill_done(dmu_buf_impl_t *db, dmu_tx_t *tx)
 				db->db_state = DB_CACHED;
 				DTRACE_SET_STATE(db,
 				    "filler finished, complete buffer");
+				dbuf_process_buf_sets(db, /*err*/0);
 			} else {
 				db->db_state &= ~DB_FILL;
 				DTRACE_SET_STATE(db,
@@ -4162,7 +4209,7 @@ dbuf_findbp(dnode_t *dn, int level, uint64_t blkid, int fail_sparse,
 		int err;
 
 		err = dbuf_hold_impl(dn, level + 1,
-		    blkid >> epbs, fail_sparse, FALSE, NULL, parentp);
+	        blkid >> epbs, fail_sparse, FALSE, NULL, parentp, NULL);
 
 		if (err)
 			return (err);
@@ -4208,6 +4255,8 @@ dbuf_create(dnode_t *dn, uint8_t level, uint64_t blkid,
 
 	list_create(&db->db_dirty_records, sizeof (dbuf_dirty_record_t),
 	    offsetof(dbuf_dirty_record_t, dr_dbuf_node));
+	list_create(&db->db_buf_sets, sizeof (dmu_buf_set_node_t),
+	    offsetof(dmu_buf_set_node_t, dbsn_link));
 
 	db->db_objset = os;
 	db->db.db_object = dn->dn_object;
@@ -4511,7 +4560,7 @@ dbuf_prefetch(dnode_t *dn, int64_t level, uint64_t blkid, zio_priority_t prio,
 		dmu_buf_impl_t *db;
 
 		if (dbuf_hold_impl(dn, parent_level, parent_blkid,
-		    FALSE, TRUE, FTAG, &db) == 0) {
+		    FALSE, TRUE, FTAG, &db, NULL) == 0) {
 			blkptr_t *bpp = db->db_buf->b_data;
 			bp = bpp[P2PHASE(curblkid, 1 << epbs)];
 			dbuf_rele(db, FTAG);
@@ -4615,7 +4664,7 @@ dbuf_hold_copy(dnode_t *dn, dmu_buf_impl_t *db)
 int
 dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid,
     boolean_t fail_sparse, boolean_t fail_uncached,
-    void *tag, dmu_buf_impl_t **dbp)
+	void *tag, dmu_buf_impl_t **dbp, dmu_buf_set_t *dbs)
 {
 	dmu_buf_impl_t *db, *parent = NULL;
 
@@ -4705,6 +4754,15 @@ dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid,
 	}
 	(void) zfs_refcount_add(&db->db_holds, tag);
 	dbuf_verify(db);
+
+	/* If a reading buffer set is associated, add the callback now. */
+	if (dbs != NULL && (dbs->dbs_dc->dc_flags & DMU_CTX_FLAG_READ)) {
+		if (db->db_state == DB_CACHED) {
+			/* Dbuf is already at the desired state. */
+			dmu_buf_set_rele(dbs, /*err*/0);
+		} else
+			dmu_buf_set_node_add(&db->db_buf_sets, dbs);
+	}
 	mutex_exit(&db->db_mtx);
 
 	/* NOTE: we can't rele the parent until after we drop the db_mtx */
@@ -4729,7 +4787,7 @@ dmu_buf_impl_t *
 dbuf_hold_level(dnode_t *dn, int level, uint64_t blkid, void *tag)
 {
 	dmu_buf_impl_t *db;
-	int err = dbuf_hold_impl(dn, level, blkid, FALSE, FALSE, tag, &db);
+	int err = dbuf_hold_impl(dn, level, blkid, FALSE, FALSE, tag, &db, NULL);
 	return (err ? NULL : db);
 }
 
@@ -5191,12 +5249,22 @@ dbuf_prepare_encrypted_dnode_leaf(dbuf_dirty_record_t *dr)
 }
 
 boolean_t
-dbuf_resolve_still_pending(dbuf_dirty_record_t *dr)
+dbuf_resolve_still_pending(dbuf_dirty_record_t *dr, zio_t **dr_zio, zio_t *zio)
 {
 	/* Resolve race with dbuf_read_complete()/dbuf_free_range() */
 	boolean_t resolve_pending;
 	mutex_enter(&dr->dr_dbuf->db_mtx);
 	resolve_pending = !list_is_empty(&dr->dt.dl.write_ranges);
+	if (resolve_pending) {
+		ASSERT(*dr_zio == NULL);
+		*dr_zio = zio;
+#ifdef ZFS_DEBUG
+		if (dr_zio == &dr->dr_zio)
+			/* DEBUG_COUNTER_INC(syncer_deferred_resolves) */ ;
+		else
+			ASSERT(!"unexpected zio_t **dr_zio!");
+#endif
+}
 	mutex_exit(&dr->dr_dbuf->db_mtx);
 	return (resolve_pending);
 }
@@ -5243,10 +5311,9 @@ dbuf_sync_indirect(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 
 	mutex_exit(&db->db_mtx);
 
-	dbuf_write(dr, db->db_buf, tx);
-
-	zio = dr->dr_zio;
+	zio = dr->dr_zio = dbuf_write(dr, db->db_buf, tx);
 	mutex_enter(&dr->dt.di.dr_mtx);
+
 	dbuf_sync_list(&dr->dt.di.dr_children, db->db_level - 1, tx);
 	ASSERT(list_head(&dr->dt.di.dr_children) == NULL);
 	mutex_exit(&dr->dt.di.dr_mtx);
@@ -5305,6 +5372,7 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 	dmu_buf_impl_t *db = dr->dr_dbuf;
 	dnode_t *dn;
 	objset_t *os;
+	zio_t *zio;
 	uint64_t txg = tx->tx_txg;
 	boolean_t resolve_pending;
 
@@ -5320,7 +5388,6 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 		 */
 		ASSERT(arc_released(*datap));
 		dbuf_transition_to_read(db);
-		CFAPRINTF("transitioned to read %p\n", db);
 	}
 	/*
 	 * To be synced, we must be dirtied.  But we
@@ -5397,8 +5464,6 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 		cv_wait(&db->db_changed, &db->db_mtx);
 		ASSERT(dr->dt.dl.dr_override_state != DR_NOT_OVERRIDDEN);
 	}
-	/* Remember if we need to defer write execution to dbuf_read_done(). */
-	resolve_pending = !list_is_empty(&dr->dt.dl.write_ranges);
 
 	/*
 	 * If this is a dnode block, ensure it is appropriately encrypted
@@ -5407,25 +5472,9 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 	if (os->os_encrypted && dn->dn_object == DMU_META_DNODE_OBJECT)
 		dbuf_prepare_encrypted_dnode_leaf(dr);
 
-	if (db->db_state != DB_NOFILL &&
-	    dn->dn_object != DMU_META_DNODE_OBJECT &&
-	    zfs_refcount_count(&db->db_holds) > 1 &&
-	    dr->dt.dl.dr_override_state != DR_OVERRIDDEN &&
-	    *datap == db->db_buf) {
-		/*
-		 * If this buffer is currently "in use" (i.e., there
-		 * are active holds and db_data still references it),
-		 * then make a copy before we start the write so that
-		 * any modifications from the open txg will not leak
-		 * into this write.
-		 *
-		 * NOTE: this copy does not need to be made for
-		 * objects only modified in the syncing context (e.g.
-		 * DNONE_DNODE blocks).
-		 */
-		*datap = dbuf_alloc_arcbuf_from_arcbuf(db, db->db_buf);
-		bcopy(db->db.db_data, (*datap)->b_data, arc_buf_size(*datap));
-	}
+	/* Remember if we need to defer write execution to dbuf_read_done(). */
+	resolve_pending = !list_is_empty(&dr->dt.dl.write_ranges);
+
 	/*
 	 * Syncer splits must be deferred until the buffer contents
 	 * are fully valid.
@@ -5437,14 +5486,15 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 	ASSERT(list_next(&db->db_dirty_records, dr) == NULL);
 	mutex_exit(&db->db_mtx);
 
-	dbuf_write(dr, *datap, tx);
+	zio = dbuf_write(dr, *datap, tx);
 	if (resolve_pending &&
-	    dbuf_resolve_still_pending(dr)) {
+	    dbuf_resolve_still_pending(dr, &dr->dr_zio, zio)) {
 		/* XXX */
 		DB_DNODE_EXIT(db);
 		return;
 	}
 
+	dr->dr_zio = zio;
 	ASSERT(!list_link_active(&dr->dr_dirty_node));
 	if (dn->dn_object == DMU_META_DNODE_OBJECT) {
 		list_insert_tail(&dn->dn_dirty_records[txg & TXG_MASK], dr);
@@ -5458,7 +5508,7 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 		 * zio_nowait() invalidates the dbuf.
 		 */
 		DB_DNODE_EXIT(db);
-		zio_nowait(dr->dr_zio);
+		zio_nowait(zio);
 	}
 }
 
@@ -5850,7 +5900,7 @@ dbuf_remap(dnode_t *dn, dmu_buf_impl_t *db, dmu_tx_t *tx)
 
 
 /* Issue I/O to commit a dirty buffer to disk. */
-static void
+static zio_t *
 dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx)
 {
 	dmu_buf_impl_t *db = dr->dr_dbuf;
@@ -5861,6 +5911,7 @@ dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx)
 	zbookmark_phys_t zb;
 	zio_prop_t zp;
 	zio_t *pio; /* parent I/O */
+	zio_t *dr_zio;
 	int wp_flag = 0;
 
 	ASSERT(dmu_tx_is_syncing(tx));
@@ -5942,20 +5993,20 @@ dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx)
 		abd_t *contents = (data != NULL) ?
 		    abd_get_from_buf(data->b_data, arc_buf_size(data)) : NULL;
 
-		dr->dr_zio = zio_write(pio, os->os_spa, txg,
+		dr_zio = zio_write(pio, os->os_spa, txg,
 		    &dr->dr_bp_copy, contents, db->db.db_size, db->db.db_size,
 		    &zp, dbuf_write_override_ready, NULL, NULL,
 		    dbuf_write_override_done,
 		    dr, ZIO_PRIORITY_ASYNC_WRITE, ZIO_FLAG_MUSTSUCCEED, &zb);
 		mutex_enter(&db->db_mtx);
 		dr->dt.dl.dr_override_state = DR_NOT_OVERRIDDEN;
-		zio_write_override(dr->dr_zio, &dr->dt.dl.dr_overridden_by,
+		zio_write_override(dr_zio, &dr->dt.dl.dr_overridden_by,
 		    dr->dt.dl.dr_copies, dr->dt.dl.dr_nopwrite);
 		mutex_exit(&db->db_mtx);
 	} else if (db->db_state == DB_NOFILL) {
 		ASSERT(zp.zp_checksum == ZIO_CHECKSUM_OFF ||
 		    zp.zp_checksum == ZIO_CHECKSUM_NOPARITY);
-		dr->dr_zio = zio_write(pio, os->os_spa, txg,
+		dr_zio = zio_write(pio, os->os_spa, txg,
 		    &dr->dr_bp_copy, NULL, db->db.db_size, db->db.db_size, &zp,
 		    dbuf_write_nofill_ready, NULL, NULL,
 		    dbuf_write_nofill_done, db,
@@ -5973,13 +6024,14 @@ dbuf_write(dbuf_dirty_record_t *dr, arc_buf_t *data, dmu_tx_t *tx)
 		if (db->db_level != 0)
 			children_ready_cb = dbuf_write_children_ready;
 
-		dr->dr_zio = arc_write(pio, os->os_spa, txg,
+		dr_zio = arc_write(pio, os->os_spa, txg,
 		    &dr->dr_bp_copy, data, DBUF_IS_L2CACHEABLE(db),
 		    &zp, dbuf_write_ready,
 		    children_ready_cb, dbuf_write_physdone,
 		    dbuf_write_done, db, ZIO_PRIORITY_ASYNC_WRITE,
 		    ZIO_FLAG_MUSTSUCCEED, &zb);
 	}
+	return (dr_zio);
 }
 
 EXPORT_SYMBOL(dbuf_find);
