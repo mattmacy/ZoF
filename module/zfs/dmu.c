@@ -2087,6 +2087,7 @@ xuio_stat_wbuf_nocopy(void)
 
 #ifdef _KERNEL
 
+#if 0
 int
 dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 {
@@ -2094,6 +2095,75 @@ dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 	return (dmu_read_impl(dn, NULL, 0, uio->uio_loffset, size, uio,
                 DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_NO_HOLD));
 }
+#else
+/*
+ * XXX
+ * Restore this code until we can figure out why the dmu_ctx
+ * read path doesn't always yield the right result.
+ */
+
+int
+dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
+{
+	dmu_buf_t **dbp;
+	int numbufs, i, err;
+#ifdef HAVE_UIO_ZEROCOPY
+	xuio_t *xuio = NULL;
+#endif
+
+	/*
+	 * NB: we could do this block-at-a-time, but it's nice
+	 * to be reading in parallel.
+	 */
+	err = dmu_buf_hold_array_by_dnode(dn, uio->uio_loffset, size,
+	    TRUE, FTAG, &numbufs, &dbp, 0);
+	if (err)
+		return (err);
+
+	for (i = 0; i < numbufs; i++) {
+		uint64_t tocpy;
+		int64_t bufoff;
+		dmu_buf_t *db = dbp[i];
+
+		ASSERT(size > 0);
+
+		bufoff = uio->uio_loffset - db->db_offset;
+		tocpy = MIN(db->db_size - bufoff, size);
+
+#ifdef HAVE_UIO_ZEROCOPY
+		if (xuio) {
+			dmu_buf_impl_t *dbi = (dmu_buf_impl_t *)db;
+			arc_buf_t *dbuf_abuf = dbi->db_buf;
+			arc_buf_t *abuf = dbuf_loan_arcbuf(dbi);
+			err = dmu_xuio_add(xuio, abuf, bufoff, tocpy);
+			if (!err) {
+				uio->uio_resid -= tocpy;
+				uio->uio_loffset += tocpy;
+			}
+
+			if (abuf == dbuf_abuf)
+				XUIOSTAT_BUMP(xuiostat_rbuf_nocopy);
+			else
+				XUIOSTAT_BUMP(xuiostat_rbuf_copied);
+		} else
+#endif
+#ifdef __FreeBSD__
+			err = vn_io_fault_uiomove((char *)db->db_data + bufoff,
+			    tocpy, uio);
+#else
+			err = uiomove((char *)db->db_data + bufoff, tocpy,
+			    UIO_READ, uio);
+#endif
+		if (err)
+			break;
+
+		size -= tocpy;
+	}
+	dmu_buf_rele_array(dbp, numbufs, FTAG);
+
+	return (err);
+}
+#endif
 
 /*
  * Read 'size' bytes into the uio buffer.
