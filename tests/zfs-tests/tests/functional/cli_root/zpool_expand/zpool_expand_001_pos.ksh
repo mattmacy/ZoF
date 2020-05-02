@@ -58,14 +58,22 @@ function cleanup
 {
 	poolexists $TESTPOOL1 && destroy_pool $TESTPOOL1
 
-	if losetup -a | grep -q $DEV1; then
-		losetup -d $DEV1
+	if is_freebsd; then
+		if mdconfig -l | grep -q $DEV1; then
+			mdconfig -du $DEV1
+		fi
+		if mdconfig -l | grep -q $DEV2; then
+			mdconfig -du $DEV2
+		fi
+	elif is_linux; then
+		if losetup -a | grep -q $DEV1; then
+			losetup -d $DEV1
+		fi
+		block_device_wait
+		unload_scsi_debug
 	fi
 
 	rm -f $FILE_LO $FILE_RAW
-
-	block_device_wait
-	unload_scsi_debug
 }
 
 log_onexit cleanup
@@ -74,14 +82,19 @@ log_assert "zpool can be autoexpanded after set autoexpand=on on vdev expansion"
 
 for type in " " mirror raidz raidz2; do
 	log_note "Setting up loopback, scsi_debug, and file vdevs"
+
 	log_must truncate -s $org_size $FILE_LO
-	DEV1=$(losetup -f)
-	log_must losetup $DEV1 $FILE_LO
+	if is_freebsd; then
+		DEV1=$(mdconfig $FILE_LO)
+		DEV2=$(mdconfig -a -t swap -s $org_size -S 512)
+	elif is_linux; then
+		DEV1=$(losetup -f)
+		log_must losetup $DEV1 $FILE_LO
 
-	load_scsi_debug $org_size_mb 1 1 1 '512b'
-	block_device_wait
-	DEV2=$(get_debug_device)
-
+		load_scsi_debug $org_size_mb 1 1 1 '512b'
+		block_device_wait
+		DEV2=$(get_debug_device)
+	fi
 	log_must truncate -s $org_size $FILE_RAW
 	DEV3=$FILE_RAW
 
@@ -103,15 +116,22 @@ for type in " " mirror raidz raidz2; do
 	# is easier to verify each expansion for the striped pool case, since
 	# they will not be merged in to a single larger expansion.
 	log_note "Expanding loopback, scsi_debug, and file vdevs"
-	log_must truncate -s $exp_size $FILE_LO
-	log_must losetup -c $DEV1
-	sleep 3
 
-	echo "2" > /sys/bus/pseudo/drivers/scsi_debug/virtual_gb
-	echo "1" > /sys/class/block/$DEV2/device/rescan
-	block_device_wait
-	sleep 3
+	if is_freebsd; then
+		log_must mdconfig -r -s $exp_size -u $DEV1
+		sleep 3
+		log_must mdconfig -r -s $exp_size -u $DEV2
+		sleep 3
+	elif is_linux; then
+		log_must truncate -s $exp_size $FILE_LO
+		log_must losetup -c $DEV1
+		sleep 3
 
+		echo "2" > /sys/bus/pseudo/drivers/scsi_debug/virtual_gb
+		echo "1" > /sys/class/block/$DEV2/device/rescan
+		block_device_wait
+		sleep 3
+	fi
 	log_must truncate -s $exp_size $FILE_RAW
 	log_must zpool online -e $TESTPOOL1 $FILE_RAW
 

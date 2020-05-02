@@ -35,6 +35,11 @@
 # ZFS Directories
 export ZEDLET_ETC_DIR=${ZEDLET_ETC_DIR:-@sysconfdir@/zfs/zed.d}
 export ZEDLET_LIBEXEC_DIR=${ZEDLET_LIBEXEC_DIR:-@zfsexecdir@/zed.d}
+export ZEDLET_DIR="/var/tmp/zed"
+export ZED_LOG="$ZEDLET_DIR/zed.log"
+export ZED_DEBUG_LOG="$ZEDLET_DIR/zed.debug.log"
+export VDEVID_CONF="$ZEDLET_DIR/vdev_id.conf"
+export VDEVID_CONF_ETC="${VDEVID_CONF_ETC:-@sysconfdir@/zfs/vdev_id.conf}"
 export ZPOOL_SCRIPT_DIR=${ZPOOL_SCRIPT_DIR:-@sysconfdir@/zfs/zpool.d}
 
 # Define run length constants
@@ -177,12 +182,6 @@ if is_linux; then
 	DEV_RDSKDIR="/dev"
 	DEV_MPATHDIR="/dev/mapper"
 
-	ZEDLET_DIR="/var/tmp/zed"
-	ZED_LOG="$ZEDLET_DIR/zed.log"
-	ZED_DEBUG_LOG="$ZEDLET_DIR/zed.debug.log"
-	VDEVID_CONF="$ZEDLET_DIR/vdev_id.conf"
-	VDEVID_CONF_ETC="/etc/zfs/vdev_id.conf"
-
 	NEWFS_DEFAULT_FS="ext2"
 	SLICE_PREFIX=""
 elif is_freebsd; then
@@ -217,5 +216,4 @@ else
 fi
 export unpack_opts pack_opts verbose unpack_preserve pack_preserve \
        ZVOL_DEVDIR ZVOL_RDEVDIR DEV_DSKDIR DEV_RDSKDIR DEV_MPATHDIR \
-       ZEDLET_DIR ZED_LOG ZED_DEBUG_LOG VDEVID_CONF VDEVID_CONF_ETC \
        NEWFS_DEFAULT_FS SLICE_PREFIX

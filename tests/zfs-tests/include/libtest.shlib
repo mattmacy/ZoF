@@ -3507,10 +3507,6 @@ function zed_rc_restore
 # $@ Optional list of zedlets to run under zed.
 function zed_setup
 {
-	if ! is_linux; then
-		log_unsupported "No zed on $(uname)"
-	fi
-
 	if [[ ! -d $ZEDLET_DIR ]]; then
 		log_must mkdir $ZEDLET_DIR
 	fi
@@ -3543,9 +3539,7 @@ function zed_setup
 	fi
 
 	# Customize the zed.rc file to enable the full debug log.
-	log_must sed -i '/\#ZED_DEBUG_LOG=.*/d' $ZEDLET_DIR/zed.rc
-	echo "ZED_DEBUG_LOG=$ZED_DEBUG_LOG" >>$ZEDLET_DIR/zed.rc
-
+	zed_rc_set ZED_DEBUG_LOG $ZED_DEBUG_LOG
 }
 
 #
@@ -3554,9 +3548,6 @@ function zed_setup
 # $@ Optional list of zedlets to remove from our test zed.d directory.
 function zed_cleanup
 {
-	if ! is_linux; then
-		return
-	fi
 	EXTRA_ZEDLETS=$@
 
 	log_must rm -f ${ZEDLET_DIR}/zed.rc
@@ -3582,10 +3573,6 @@ function zed_cleanup
 #
 function zed_start
 {
-	if ! is_linux; then
-		return
-	fi
-
 	# ZEDLET_DIR=/var/tmp/zed
 	if [[ ! -d $ZEDLET_DIR ]]; then
 		log_must mkdir $ZEDLET_DIR
@@ -3612,10 +3599,6 @@ function zed_start
 #
 function zed_stop
 {
-	if ! is_linux; then
-		return
-	fi
-
 	log_note "Stopping ZED"
 	if [[ -f ${ZEDLET_DIR}/zed.pid ]]; then
 		zedpid=$(<${ZEDLET_DIR}/zed.pid)
@@ -3647,12 +3630,12 @@ function zed_rc_set
 {
 	var="$1"
 	val="$2"
-	# Remove the line
-	cmd="'/$var/d'"
-	eval sed -i $cmd $ZEDLET_DIR/zed.rc
-
-	# Add it at the end
-	echo "$var=$val" >> $ZEDLET_DIR/zed.rc
+	ed -s $ZEDLET_DIR/zed.rc <<EOF
+/$var=/c
+$var=$val
+.
+w
+EOF
 }
 
 

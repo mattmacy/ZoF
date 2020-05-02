@@ -29,13 +29,15 @@
 
 verify_runnable "global"
 
-#
-# The pool expansion tests depend on udev change events being generated
-# when block devices change capacity.  Since this functionality wasn't
-# available until the 2.6.38 kernel skip this test group.
-#
-if [[ $(linux_version) -lt $(linux_version "2.6.38") ]]; then
-	log_unsupported "Requires block device udev change events"
+if is_linux; then
+	#
+	# The pool expansion tests depend on udev change events being generated
+	# when block devices change capacity.  Since this functionality wasn't
+	# available until the 2.6.38 kernel skip this test group.
+	#
+	if [[ $(linux_version) -lt $(linux_version "2.6.38") ]]; then
+		log_unsupported "Requires block device udev change events"
+	fi
 fi
 
 zed_setup

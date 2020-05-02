@@ -62,8 +62,8 @@ tests = ['add_nested_replacing_spare']
 tags = ['functional', 'cli_root', 'zpool_add']
 
 [tests/functional/cli_root/zpool_expand:Linux]
-tests = ['zpool_expand_001_pos', 'zpool_expand_002_pos',
-    'zpool_expand_003_neg', 'zpool_expand_004_pos', 'zpool_expand_005_pos']
+tests = ['zpool_expand_002_pos', 'zpool_expand_003_neg',
+    'zpool_expand_004_pos', 'zpool_expand_005_pos']
 tags = ['functional', 'cli_root', 'zpool_expand']
 
 [tests/functional/cli_root/zpool_reopen:Linux]

@@ -42,3 +42,7 @@ zed_LDADD = \
 
 zed_LDADD += -lrt
 zed_LDFLAGS = -pthread
+
+if BUILD_FREEBSD
+zed_LDADD += -luuid
+endif

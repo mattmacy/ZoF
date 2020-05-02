@@ -41,6 +41,10 @@
 #include <libzfs.h>
 #include <string.h>
 
+#ifdef __FreeBSD__
+#include <libgen.h>
+#endif
+
 #include "zfs_agents.h"
 #include "fmd_api.h"
 
