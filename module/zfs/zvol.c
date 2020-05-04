@@ -1693,6 +1693,110 @@ zvol_register_ops(const zvol_platform_ops_t *zvol_ops)
 	ops = zvol_ops;
 }
 
+static void
+zvol_dmu_buf_set_transfer_write(dmu_buf_set_t *dbs)
+ {
+	zvol_dmu_state_t *zds = (zvol_dmu_state_t *)dbs->dbs_dc;
+	zvol_state_t *zv = zds->zds_zv;
+	dmu_tx_t *tx = dmu_buf_set_tx(dbs);
+
+	dmu_buf_set_transfer_write(dbs);
+
+	/* Log this write. */
+	if (zds->zds_sync)
+		zvol_log_write(zv, tx, dbs->dbs_dn_start, dbs->dbs_size,
+		    zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS);
+	dmu_tx_commit(tx);
+}
+
+int
+zvol_dmu_ctx_init(zvol_dmu_state_t *zds, void *data, uint64_t off,
+    uint64_t io_size, uint32_t dmu_flags, dmu_ctx_cb_t done_cb)
+{
+	zvol_state_t *zv = zds->zds_zv;
+	boolean_t reader = (dmu_flags & DMU_CTX_FLAG_READ) != 0;
+	int error;
+
+	ASSERT(zv->zv_objset != NULL);
+
+	if (reader)
+		dmu_flags |= DMU_CTX_FLAG_PREFETCH;
+	else if (zv->zv_flags & ZVOL_RDONLY)
+		return (SET_ERROR(EIO));
+
+	/* Reject I/Os that don't fall within the volume. */
+	if (io_size > 0 && off >= zv->zv_volsize)
+		return (SET_ERROR(EIO));
+
+	/* Truncate I/Os to the end of the volume, if needed. */
+	io_size = MIN(io_size, zv->zv_volsize - off);
+
+	error = dmu_ctx_init(&zds->zds_dc, /*dnode*/NULL, zv->zv_objset,
+	    ZVOL_OBJ, off, io_size, data, FTAG, dmu_flags);
+	if (error)
+		return (error);
+	/* Override the writer case to log the writes. */
+	if (!reader)
+		dmu_ctx_set_buf_set_transfer_cb(&zds->zds_dc,
+		    zvol_dmu_buf_set_transfer_write);
+	dmu_ctx_set_complete_cb(&zds->zds_dc, done_cb);
+	zds->zds_lr = zfs_rangelock_enter(&zv->zv_rangelock, off, io_size,
+	    reader ? RL_READER : RL_WRITER);
+
+	return (error);
+}
+
+void
+zvol_dmu_issue(zvol_dmu_state_t *zds)
+{
+
+	/* Errors are reported to the done callback via dmu_ctx->err. */
+	(void) dmu_issue(&zds->zds_dc);
+	dmu_ctx_rele(&zds->zds_dc);
+}
+
+int
+zvol_dmu_uio(zvol_dmu_state_t *zds, uio_t *uio, uint32_t dmu_flags)
+{
+	int err;
+
+	if (zds->zds_zv == NULL)
+		return (SET_ERROR(ENXIO));
+
+#if 0
+	if (zds->zv->zv_flags & ZVOL_DUMPIFIED)
+		return (zvol_physio(zds->zv, uio));
+#endif
+
+	/* Don't allow I/Os that are not within the volume. */
+	if (uio->uio_resid > 0 &&
+	    (uio->uio_loffset < 0 || uio->uio_loffset >= zds->zds_zv->zv_volsize))
+		return (SET_ERROR(EIO));
+
+	err = zvol_dmu_ctx_init(zds, uio, uio->uio_loffset,
+	    uio->uio_resid, dmu_flags|DMU_CTX_FLAG_UIO, zvol_dmu_done);
+	if (err)
+		return (err);
+	zvol_dmu_issue(zds);
+	return (zds->zds_dc.dc_err);
+}
+
+void
+zvol_dmu_done(dmu_ctx_t *dc)
+{
+	zvol_dmu_state_t *zds = (zvol_dmu_state_t *)dc;
+	zvol_state_t *zv = zds->zds_zv;
+
+	if ((dc->dc_flags & DMU_CTX_FLAG_READ) == 0 &&
+	    (zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS))
+		zil_commit(zv->zv_zilog, ZVOL_OBJ);
+	if (dc->dc_completed_size < dc->dc_size &&
+	    dc->dc_dn_offset > zv->zv_volsize)
+		dc->dc_err = zio_worst_error(dc->dc_err, SET_ERROR(EINVAL));
+
+	zfs_rangelock_exit(zds->zds_lr);
+}
+
 int
 zvol_init_impl(void)
 {
