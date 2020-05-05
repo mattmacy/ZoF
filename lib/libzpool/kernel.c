@@ -1417,3 +1417,37 @@ zfs_file_put(int fd)
 {
 	abort();
 }
+
+static int
+uiomove_iov(void *p, size_t n, enum uio_rw rw, struct uio *uio)
+{
+	const struct iovec *iov = uio->uio_iov;
+	ulong_t cnt;
+
+	while (n && uio->uio_resid) {
+		cnt = MIN(iov->iov_len, n);
+		switch (uio->uio_segflg) {
+		case UIO_SYSSPACE:
+			if (rw == UIO_READ)
+				bcopy(p, iov->iov_base, cnt);
+			else
+				bcopy(iov->iov_base, p, cnt);
+			break;
+		case UIO_USERSPACE:
+		case UIO_USERISPACE:
+		default:
+			ASSERT(0);
+		}
+		uio->uio_resid -= cnt;
+		uio->uio_loffset += cnt;
+		p = (caddr_t)p + cnt;
+		n -= cnt;
+	}
+	return (0);
+}
+
+int
+uiomove(void *p, size_t n, enum uio_rw rw, struct uio *uio)
+{
+	return (uiomove_iov(p, n, rw, uio));
+}
