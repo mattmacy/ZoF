@@ -199,6 +199,9 @@ static void zvol_geom_worker(void *arg);
 static void zvol_geom_bio_start(struct bio *bp);
 static int zvol_geom_bio_getattr(struct bio *bp);
 static void zvol_geom_bio_check_zilog(struct bio *bp);
+static int zvol_geom_bio_delete(zvol_state_t *zv, struct bio *bp);
+static void zvol_geom_bio_readwrite(zvol_state_t *zv, struct bio *bp);
+
 /* static d_strategy_t	zvol_geom_bio_strategy; (declared elsewhere) */
 
 /*
