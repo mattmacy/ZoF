@@ -1034,7 +1034,6 @@ void dmu_write_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size,
     const void *buf, dmu_tx_t *tx);
 int dmu_prealloc(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 	dmu_tx_t *tx);
-#ifdef _KERNEL
 int dmu_read_uio(objset_t *os, uint64_t object, struct uio *uio, uint64_t size);
 int dmu_read_uio_dbuf(dmu_buf_t *zdb, struct uio *uio, uint64_t size);
 int dmu_read_uio_dnode(dnode_t *dn, struct uio *uio, uint64_t size);
@@ -1044,7 +1043,12 @@ int dmu_write_uio_dbuf(dmu_buf_t *zdb, struct uio *uio, uint64_t size,
 	dmu_tx_t *tx);
 int dmu_write_uio_dnode(dnode_t *dn, struct uio *uio, uint64_t size,
 	dmu_tx_t *tx);
-#endif
+int dmu_read_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
+    void *buf, uint32_t flags, dmu_ctx_cb_t done_cb);
+int dmu_write_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
+    void *buf, uint32_t flags, dmu_tx_t *tx, dmu_ctx_cb_t done_cb);
+
+
 struct arc_buf *dmu_request_arcbuf(dmu_buf_t *handle, int size);
 void dmu_return_arcbuf(struct arc_buf *buf);
 int dmu_assign_arcbuf_by_dnode(dnode_t *dn, uint64_t offset,

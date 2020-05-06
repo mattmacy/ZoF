@@ -1837,6 +1837,44 @@ dmu_ctx_seek(dmu_ctx_t *dmu_ctx, uint64_t offset, uint64_t size,
 
 
 static int
+dmu_async_impl(dmu_ctx_t *dc, dnode_t *dn, objset_t *os, uint64_t object, uint64_t offset,
+    uint64_t size, void *buf, uint32_t flags, dmu_tx_t *tx, dmu_ctx_cb_t done_cb)
+{
+	int err;
+
+	err = dmu_ctx_init(dc, dn, os, object, offset,
+	    size, buf, FTAG, flags|DMU_CTX_FLAG_ASYNC);
+	if (err)
+		return (err);
+	dmu_ctx_set_complete_cb(dc, done_cb);
+
+	if ((flags & DMU_CTX_FLAG_READ) == 0)
+		dmu_ctx_set_dmu_tx(dc, tx);
+	err = dmu_issue(dc);
+	dmu_ctx_rele(dc);
+
+	return (err);
+}
+
+int
+dmu_read_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
+    void *buf, uint32_t flags, dmu_ctx_cb_t done_cb)
+{
+
+	return (dmu_async_impl(dc, /* dnode */NULL, os, object, offset, size,
+				buf, flags|DMU_CTX_FLAG_READ, NULL, done_cb));
+}
+
+int
+dmu_write_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
+    void *buf, uint32_t flags, dmu_tx_t *tx, dmu_ctx_cb_t done_cb)
+{
+
+	return (dmu_async_impl(dc, /* dnode */NULL, os, object, offset, size,
+				buf, flags, tx, done_cb));
+}
+
+static int
 dmu_read_impl(dnode_t *dn, objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
     void *buf, uint32_t flags)
 {
