@@ -201,6 +201,13 @@ DEBUG_COUNTER_U(_vfs_zfs_dmu, buf_set_total, "Total buffer sets");
 DEBUG_REFCOUNT(_vfs_zfs_dmu, dmu_ctx_in_flight, "DMU contexts in flight");
 DEBUG_REFCOUNT(_vfs_zfs_dmu, buf_set_in_flight, "Buffer sets in flight");
 
+#if defined(_KERNEL) && defined(__FreeBSD__)
+#define dmu_uiomove(data, sz, dir, uio)			\
+	vn_io_fault_uiomove((data), (sz), (uio))
+#else
+#define dmu_uiomove(data, sz, dir, uio)			\
+	uiomove((data), (sz), (dir), (uio))
+#endif
 int
 dmu_buf_hold_noread_by_dnode(dnode_t *dn, uint64_t offset,
     void *tag, dmu_buf_t **dbp)
@@ -1092,18 +1099,12 @@ static void
 dmu_buf_do_uio(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
     uint64_t sz, enum uio_rw dir)
 {
-#ifdef _KERNEL
 	int err;
 	uio_t *uio = (uio_t *)dbs->dbs_dc->dc_data_buf;
 
-#ifndef __FreeBSD__
-	err = uiomove((char *)db->db_data + off, sz, dir, uio);
-#else
-	err = vn_io_fault_uiomove((char*)db->db_data + off, sz, uio);
-#endif
+	err = dmu_uiomove((char *)db->db_data + off, sz, dir, uio);
 	if (err)
 		dmu_buf_set_set_error(dbs, err);
-#endif
 }
 
 static void
@@ -1404,10 +1405,6 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 		/* initiate async i/o */
 		if (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ)
 			(void) dbuf_read(db, dbs->dbs_zio, dbuf_flags);
-#if defined(_KERNEL) && defined(__FreeBSD__)
-		else
-			curthread->td_ru.ru_oublock++;
-#endif
 
 		/* Calculate the amount of data this buffer contributes. */
 		ASSERT(dmu_ctx->dc_dn_offset >= db->db.db_offset);
@@ -1809,13 +1806,11 @@ dmu_ctx_seek(dmu_ctx_t *dmu_ctx, uint64_t offset, uint64_t size,
 	dnode_t *dn = dmu_ctx->dc_dn;
 
 #ifdef ZFS_DEBUG
-#ifdef _KERNEL
 	if (dmu_ctx->dc_flags & DMU_CTX_FLAG_UIO) {
 		uio_t *uio = (uio_t *)data_buf;
 		/* Make sure UIO callers pass in the correct offset. */
 		ASSERT(uio->uio_loffset == offset);
 	}
-#endif
 	/* Make sure non-char * pointers stay the same. */
 	if (!dmu_ctx_buf_is_char(dmu_ctx))
 		ASSERT(dmu_ctx->dc_data_buf == NULL ||
@@ -2086,16 +2081,6 @@ xuio_stat_wbuf_nocopy(void)
 }
 
 #ifdef _KERNEL
-
-#if 0
-int
-dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
-{
-
-	return (dmu_read_impl(dn, NULL, 0, uio->uio_loffset, size, uio,
-                DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_NO_HOLD));
-}
-#else
 /*
  * XXX
  * Restore this code until we can figure out why the dmu_ctx
@@ -2147,13 +2132,8 @@ dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 				XUIOSTAT_BUMP(xuiostat_rbuf_copied);
 		} else
 #endif
-#ifdef __FreeBSD__
-			err = vn_io_fault_uiomove((char *)db->db_data + bufoff,
-			    tocpy, uio);
-#else
-			err = uiomove((char *)db->db_data + bufoff, tocpy,
+			err = dmu_uiomove((char *)db->db_data + bufoff, tocpy,
 			    UIO_READ, uio);
-#endif
 		if (err)
 			break;
 
@@ -2163,7 +2143,69 @@ dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 
 	return (err);
 }
-#endif
+
+int
+dmu_write_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size, dmu_tx_t *tx)
+{
+	dmu_buf_t **dbp;
+	int numbufs;
+	int err = 0;
+	int i;
+
+	err = dmu_buf_hold_array_by_dnode(dn, uio->uio_loffset, size,
+	    FALSE, FTAG, &numbufs, &dbp, DMU_CTX_FLAG_PREFETCH);
+	if (err)
+		return (err);
+
+	for (i = 0; i < numbufs; i++) {
+		uint64_t tocpy;
+		int64_t bufoff;
+		dmu_buf_t *db = dbp[i];
+
+		ASSERT(size > 0);
+
+		bufoff = uio->uio_loffset - db->db_offset;
+		tocpy = MIN(db->db_size - bufoff, size);
+
+		ASSERT(i == 0 || i == numbufs-1 || tocpy == db->db_size);
+
+		if (tocpy == db->db_size)
+			dmu_buf_will_fill(db, tx);
+		else
+			dmu_buf_will_dirty(db, tx);
+
+		/*
+		 * XXX uiomove could block forever (eg.nfs-backed
+		 * pages).  There needs to be a uiolockdown() function
+		 * to lock the pages in memory, so that uiomove won't
+		 * block.
+		 */
+		err = dmu_uiomove((char *)db->db_data + bufoff, tocpy,
+		    UIO_WRITE, uio);
+		if (tocpy == db->db_size)
+			dmu_buf_fill_done(db, tx);
+
+		if (err)
+			break;
+
+		size -= tocpy;
+	}
+
+	dmu_buf_rele_array(dbp, numbufs, FTAG);
+	return (err);
+}
+#else
+
+int
+dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
+{
+
+	return (dmu_read_impl(dn, NULL, 0, uio->uio_loffset, size, uio,
+                DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_NO_HOLD));
+}
+
+#endif /* !_KERNEL */
+
 
 /*
  * Read 'size' bytes into the uio buffer.
@@ -2206,62 +2248,6 @@ dmu_read_uio(objset_t *os, uint64_t object, uio_t *uio, uint64_t size)
 
 	return (dmu_read_impl(NULL, os, object, uio->uio_loffset, size, uio,
 	    DMU_CTX_FLAG_UIO));
-}
-
-int
-dmu_write_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size, dmu_tx_t *tx)
-{
-	dmu_buf_t **dbp;
-	int numbufs;
-	int err = 0;
-	int i;
-
-	err = dmu_buf_hold_array_by_dnode(dn, uio->uio_loffset, size,
-	    FALSE, FTAG, &numbufs, &dbp, DMU_CTX_FLAG_PREFETCH);
-	if (err)
-		return (err);
-
-	for (i = 0; i < numbufs; i++) {
-		uint64_t tocpy;
-		int64_t bufoff;
-		dmu_buf_t *db = dbp[i];
-
-		ASSERT(size > 0);
-
-		bufoff = uio->uio_loffset - db->db_offset;
-		tocpy = MIN(db->db_size - bufoff, size);
-
-		ASSERT(i == 0 || i == numbufs-1 || tocpy == db->db_size);
-
-		if (tocpy == db->db_size)
-			dmu_buf_will_fill(db, tx);
-		else
-			dmu_buf_will_dirty(db, tx);
-
-		/*
-		 * XXX uiomove could block forever (eg.nfs-backed
-		 * pages).  There needs to be a uiolockdown() function
-		 * to lock the pages in memory, so that uiomove won't
-		 * block.
-		 */
-#ifdef __FreeBSD__
-		err = vn_io_fault_uiomove((char *)db->db_data + bufoff,
-		    tocpy, uio);
-#else
-		err = uiomove((char *)db->db_data + bufoff, tocpy,
-		    UIO_WRITE, uio);
-#endif
-		if (tocpy == db->db_size)
-			dmu_buf_fill_done(db, tx);
-
-		if (err)
-			break;
-
-		size -= tocpy;
-	}
-
-	dmu_buf_rele_array(dbp, numbufs, FTAG);
-	return (err);
 }
 
 /*
@@ -2307,7 +2293,6 @@ dmu_write_uio(objset_t *os, uint64_t object, uio_t *uio, uint64_t size,
 	return (dmu_write_impl(NULL, os, object, uio->uio_loffset, size, uio, tx,
 	    DMU_CTX_FLAG_UIO));
 }
-#endif /* _KERNEL */
 
 /*
  * Allocate a loaned anonymous arc buffer.
