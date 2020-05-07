@@ -618,7 +618,7 @@ zvol_geom_bio_delete(zvol_state_t *zv, struct bio *bp)
 	if (bp->bio_completed < bp->bio_length && off > volsize)
 		error = EINVAL;
 
-	if  (sync)
+	if (sync)
 		zil_commit(zv->zv_zilog, ZVOL_OBJ);
 	return (error);
 }
@@ -703,7 +703,7 @@ zvol_geom_bio_strategy(struct bio *bp)
 	}
 
 	if ((bp->bio_cmd != BIO_READ) &&
-		(zv->zv_flags & ZVOL_RDONLY)) {
+	    (zv->zv_flags & ZVOL_RDONLY)) {
 		zvol_done(bp, SET_ERROR(EROFS));
 		return;
 	}
