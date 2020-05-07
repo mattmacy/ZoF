@@ -879,7 +879,7 @@ dump_packed_nvlist(objset_t *os, uint64_t object, void *data, size_t size)
 	size_t nvsize = *(uint64_t *)data;
 	char *packed = umem_alloc(nvsize, UMEM_NOFAIL);
 
-	VERIFY(0 == dmu_read(os, object, 0, nvsize, packed, DMU_CTX_FLAG_PREFETCH));
+	VERIFY0(dmu_read(os, object, 0, nvsize, packed, DMU_CTX_FLAG_PREFETCH));
 
 	VERIFY(nvlist_unpack(packed, nvsize, &nv, 0) == 0);
 

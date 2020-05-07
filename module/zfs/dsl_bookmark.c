@@ -1662,7 +1662,7 @@ dsl_redaction_list_traverse(redaction_list_t *rl, zbookmark_phys_t *resume,
 		ASSERT3U(maxbufid, >, minbufid);
 		uint64_t midbufid = minbufid + ((maxbufid - minbufid) / 2);
 		err = dmu_read(mos, rl->rl_object, midbufid * bufsize, bufsize,
-			      buf, /* flags */ 0);
+		    buf, /* flags */ 0);
 		if (err != 0)
 			break;
 
