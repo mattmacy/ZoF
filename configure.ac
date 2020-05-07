@@ -233,6 +233,8 @@ AC_CONFIG_FILES([
 	tests/zfs-tests/cmd/stride_dd/Makefile
 	tests/zfs-tests/cmd/threadsappend/Makefile
 	tests/zfs-tests/cmd/user_ns_exec/Makefile
+	tests/zfs-tests/cmd/ubop_aio_test/Makefile
+	tests/zfs-tests/cmd/ubop_io_uring_test/Makefile
 	tests/zfs-tests/cmd/xattrtest/Makefile
 	tests/zfs-tests/include/Makefile
 	tests/zfs-tests/tests/Makefile

@@ -50,6 +50,34 @@ typedef enum uio_seg {
 #endif
 } uio_seg_t;
 
+enum uio_bio_cmd {
+	UIO_BIO_READ,
+	UIO_BIO_WRITE,
+	UIO_BIO_SYNC
+};
+
+enum uio_bio_flags {
+	UIO_BIO_ERROR = 1 << 0,
+	UIO_BIO_SPARSE = 1 << 1,
+	UIO_BIO_USER = 1 << 2,
+	UIO_BIO_PREEMPTED = 1 << 3,
+	UIO_BIO_SG = 1 << 4,
+};
+
+typedef struct uio_bio {
+	uint8_t		uio_cmd;		/* operation */
+	uint8_t		uio_error;		/* Errno for UIO_BIO_ERROR. */
+	uint16_t	uio_flags;		/* General flags */
+	uint16_t	uio_bv_cnt;		/* scatter/gather list length */
+	off_t		uio_bv_offset;		/* offset in to page list */
+	offset_t	uio_loffset;		/* offset in target object */
+	ssize_t		uio_resid;		/* remaining bytes to process */
+	struct cred *uio_cred;
+	void	(*uio_bio_done)(struct uio_bio *);
+	void	*uio_arg;
+	struct	bio_vec *uio_bvec;		/* user buffer's pages */
+} uio_bio_t;
+
 typedef struct uio {
 	union {
 		const struct iovec	*uio_iov;
@@ -162,5 +190,18 @@ uio_iov_iter_init(uio_t *uio, struct iov_iter *iter, offset_t offset,
 	uio->uio_skip = skip;
 }
 #endif
+
+static inline offset_t
+uio_bio_index_at_offset(uio_bio_t *ubio, offset_t off, uint_t *vec_idx)
+{
+	*vec_idx = 0;
+	while (*vec_idx < ubio->uio_bv_cnt &&
+	    off >= ubio->uio_bvec[*vec_idx].bv_len) {
+		off -= ubio->uio_bvec[*vec_idx].bv_len;
+		(*vec_idx)++;
+	}
+
+	return (off);
+}
 
 #endif /* SPL_UIO_H */
