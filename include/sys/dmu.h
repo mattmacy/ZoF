@@ -1046,7 +1046,7 @@ int dmu_write_uio_dnode(dnode_t *dn, struct uio *uio, uint64_t size,
 int dmu_read_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
     void *buf, uint32_t flags, dmu_ctx_cb_t done_cb);
 int dmu_write_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
-    void *buf, uint32_t flags, dmu_tx_t *tx, dmu_ctx_cb_t done_cb);
+    void *buf, dmu_tx_t *tx, dmu_ctx_cb_t done_cb);
 
 
 struct arc_buf *dmu_request_arcbuf(dmu_buf_t *handle, int size);

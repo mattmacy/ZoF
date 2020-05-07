@@ -1862,16 +1862,16 @@ dmu_read_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset, ui
 {
 
 	return (dmu_async_impl(dc, /* dnode */NULL, os, object, offset, size,
-				buf, flags|DMU_CTX_FLAG_READ, NULL, done_cb));
+	    buf, flags|DMU_CTX_FLAG_READ, NULL, done_cb));
 }
 
 int
 dmu_write_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
-    void *buf, uint32_t flags, dmu_tx_t *tx, dmu_ctx_cb_t done_cb)
+    void *buf, dmu_tx_t *tx, dmu_ctx_cb_t done_cb)
 {
 
 	return (dmu_async_impl(dc, /* dnode */NULL, os, object, offset, size,
-				buf, flags, tx, done_cb));
+	    buf, /* flags */ 0, tx, done_cb));
 }
 
 static int
