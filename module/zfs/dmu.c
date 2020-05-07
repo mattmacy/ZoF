@@ -2138,6 +2138,17 @@ xuio_stat_wbuf_nocopy(void)
 }
 
 #ifdef _KERNEL
+
+#if 1
+int
+dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
+{
+
+	return (dmu_read_impl(dn, NULL, 0, uio->uio_loffset, size, uio,
+                DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_NO_HOLD));
+}
+#else
+
 /*
  * XXX
  * Restore this code until we can figure out why the dmu_ctx
@@ -2198,7 +2209,7 @@ dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 
 	return (err);
 }
-
+#endif
 int
 dmu_write_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size, dmu_tx_t *tx)
 {
@@ -2251,13 +2262,6 @@ dmu_write_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size, dmu_tx_t *tx)
 }
 #else
 
-int
-dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
-{
-
-	return (dmu_read_impl(dn, NULL, 0, uio->uio_loffset, size, uio,
-                DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_NO_HOLD));
-}
 
 #endif /* !_KERNEL */
 
