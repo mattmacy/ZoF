@@ -148,8 +148,8 @@ extern void taskq_dispatch_ent(taskq_t *, task_func_t, void *, uint_t,
 extern int taskq_empty_ent(taskq_ent_t *);
 extern void taskq_init_ent(taskq_ent_t *);
 extern taskq_t *taskq_create(const char *, int, pri_t, int, int, uint_t);
-extern taskq_t *taskq_create_with_callbacks(const char *, int, pri_t, int, int, uint_t,
-    taskq_callback_fn, taskq_callback_fn);
+extern taskq_t *taskq_create_with_callbacks(const char *, int, pri_t, int,
+    int, uint_t, taskq_callback_fn, taskq_callback_fn);
 extern void taskq_destroy(taskq_t *);
 extern void taskq_wait_id(taskq_t *, taskqid_t);
 extern void taskq_wait_outstanding(taskq_t *, taskqid_t);
@@ -158,10 +158,11 @@ extern int taskq_cancel_id(taskq_t *, taskqid_t);
 extern int taskq_member(taskq_t *, kthread_t *);
 extern taskq_t *taskq_of_curthread(void);
 
-#define	taskq_create_proc(name, nthreads, pri, min, max, proc, flags,	\
-    ctor, dtor)											\
-    taskq_create_with_callbacks(name, nthreads, pri, min, max, flags, ctor, dtor)
-#define	taskq_create_sysdc(name, nthreads, min, max, proc, dc, flags) \
+#define	taskq_create_proc(name, nthreads, pri, min, max, proc, flags, \
+    ctor, dtor) \
+    taskq_create_with_callbacks(name, nthreads, pri, min, max, flags, \
+    ctor, dtor)
+#define	taskq_create_sysdc(name, nthreads, min, max, proc, dc, flags)	\
     taskq_create(name, nthreads, maxclsyspri, min, max, flags)
 
 int spl_taskq_init(void);

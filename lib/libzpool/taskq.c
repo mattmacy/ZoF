@@ -320,7 +320,7 @@ taskq_create(const char *name, int nthreads, pri_t pri,
 {
 
 	return (taskq_create_with_callbacks(name, nthreads, pri, minalloc,
-										maxalloc, flags, NULL, NULL));
+	    maxalloc, flags, NULL, NULL));
 }
 
 void
