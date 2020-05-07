@@ -256,23 +256,8 @@ dmu_tx_count_write(dmu_tx_hold_t *txh, uint64_t off, uint64_t len)
 
 		/* first level-0 block */
 		uint64_t start = off >> dn->dn_datablkshift;
-		if (P2PHASE(off, dn->dn_datablksz) || len < dn->dn_datablksz) {
-			err = dmu_tx_check_ioerr(zio, dn, 0, start);
-			if (err != 0) {
-				txh->txh_tx->tx_err = err;
-			}
-		}
-
 		/* last level-0 block */
 		uint64_t end = (off + len - 1) >> dn->dn_datablkshift;
-		if (end != start && end <= dn->dn_maxblkid &&
-		    P2PHASE(off + len, dn->dn_datablksz)) {
-			err = dmu_tx_check_ioerr(zio, dn, 0, end);
-			if (err != 0) {
-				txh->txh_tx->tx_err = err;
-			}
-		}
-
 		/* level-1 blocks */
 		if (dn->dn_nlevels > 1) {
 			int shft = dn->dn_indblkshift - SPA_BLKPTRSHIFT;
