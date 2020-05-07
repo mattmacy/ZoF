@@ -605,18 +605,109 @@ zvol_geom_bio_check_zilog(struct bio *bp)
 }
 
 static void
+zvol_done(struct bio *bp, int err)
+{
+	if (bp->bio_to)
+		g_io_deliver(bp, err);
+	else
+		biofinish(bp, NULL, err);
+}
+
+static int
+zvol_geom_bio_delete(zvol_state_t *zv, struct bio *bp)
+{
+	zfs_locked_range_t *lr;
+	uint64_t off, volsize;
+	boolean_t sync;
+	size_t resid;
+	int error = 0;
+
+	sync = (zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS);
+	off = bp->bio_offset;
+	resid = bp->bio_length;
+	volsize = zv->zv_volsize;
+	/*
+	 * There must be no buffer changes when doing a dmu_sync() because
+	 * we can't change the data whilst calculating the checksum.
+	 */
+	lr = zfs_rangelock_enter(&zv->zv_rangelock, off, resid,
+	    RL_WRITER);
+
+	dmu_tx_t *tx = dmu_tx_create(zv->zv_objset);
+	error = dmu_tx_assign(tx, TXG_WAIT);
+	if (error != 0) {
+		dmu_tx_abort(tx);
+	} else {
+		zvol_log_truncate(zv, tx, off, resid, sync);
+		dmu_tx_commit(tx);
+		error = dmu_free_long_range(zv->zv_objset, ZVOL_OBJ,
+		    off, resid);
+		resid = 0;
+	}
+	zfs_rangelock_exit(lr);
+
+	bp->bio_completed = bp->bio_length - resid;
+	if (bp->bio_completed < bp->bio_length && off > volsize)
+		error = EINVAL;
+
+	if  (sync)
+		zil_commit(zv->zv_zilog, ZVOL_OBJ);
+	return (error);
+}
+
+/*
+ * Use another layer on top of zvol_dmu_state_t to provide additional
+ * context specific to zvol_freebsd_strategy(), namely, the bio and the done
+ * callback, which calls zvol_dmu_done, as is done for zvol_dmu_state_t.
+ */
+typedef struct zvol_strategy_state {
+	zvol_dmu_state_t zds;
+	struct bio *bp;
+} zvol_strategy_state_t;
+
+static void
+zvol_strategy_dmu_done(dmu_ctx_t *dc)
+{
+	zvol_strategy_state_t *zss = (zvol_strategy_state_t *)dc;
+
+	zvol_dmu_done(dc);
+	zss->bp->bio_completed = dc->dc_completed_size;
+
+	zvol_done(zss->bp, dc->dc_err);
+	kmem_free(zss, sizeof (zvol_strategy_state_t));
+}
+
+static void
+zvol_geom_bio_readwrite(zvol_state_t *zv, struct bio *bp)
+{
+	zvol_strategy_state_t *zss;
+	int error = 0;
+	uint32_t dmu_flags = DMU_CTX_FLAG_ASYNC;
+
+	if (bp->bio_cmd == BIO_READ)
+		dmu_flags |= DMU_CTX_FLAG_READ;
+
+	zss = kmem_zalloc(sizeof (zvol_strategy_state_t), KM_SLEEP);
+	zss->bp = bp;
+	zss->zds.zds_zv = zv;
+
+	error = zvol_dmu_ctx_init(&zss->zds, bp->bio_data, bp->bio_offset,
+	    bp->bio_length, dmu_flags, zvol_strategy_dmu_done);
+	if (error) {
+		kmem_free(zss, sizeof (zvol_strategy_state_t));
+		zvol_done(bp, ENXIO);
+		return;
+	}
+
+	/* Errors are reported via the callback. */
+	zvol_dmu_issue(&zss->zds);
+}
+
+static void
 zvol_geom_bio_strategy(struct bio *bp)
 {
 	zvol_state_t *zv;
-	uint64_t off, volsize;
-	size_t resid;
-	char *addr;
-	objset_t *os;
-	zfs_locked_range_t *lr;
-	int error = 0;
-	boolean_t doread = 0;
-	boolean_t is_dumpified;
-	boolean_t sync;
+	int error = EOPNOTSUPP;
 
 	if (bp->bio_to)
 		zv = bp->bio_to->private;
@@ -624,110 +715,34 @@ zvol_geom_bio_strategy(struct bio *bp)
 		zv = bp->bio_dev->si_drv2;
 
 	if (zv == NULL) {
-		error = SET_ERROR(ENXIO);
-		goto out;
+		zvol_done(bp, SET_ERROR(ENXIO));
+		return;
 	}
 
-	if (bp->bio_cmd != BIO_READ && (zv->zv_flags & ZVOL_RDONLY)) {
-		error = SET_ERROR(EROFS);
-		goto out;
+	if ((bp->bio_cmd != BIO_READ) &&
+		(zv->zv_flags & ZVOL_RDONLY)) {
+		zvol_done(bp, SET_ERROR(EROFS));
+		return;
 	}
 
 	switch (bp->bio_cmd) {
-	case BIO_FLUSH:
-		goto sync;
 	case BIO_READ:
-		doread = 1;
 	case BIO_WRITE:
+		zvol_geom_bio_readwrite(zv, bp);
+		/* ASYNC */
+		return;
+		break;
 	case BIO_DELETE:
+		error = zvol_geom_bio_delete(zv, bp);
+		break;
+	case BIO_FLUSH:
+		zil_commit(zv->zv_zilog, ZVOL_OBJ);
+		error = 0;
 		break;
 	default:
-		error = EOPNOTSUPP;
-		goto out;
+		;
 	}
-
-	off = bp->bio_offset;
-	volsize = zv->zv_volsize;
-
-	os = zv->zv_objset;
-	ASSERT(os != NULL);
-
-	addr = bp->bio_data;
-	resid = bp->bio_length;
-
-	if (resid > 0 && (off < 0 || off >= volsize)) {
-		error = SET_ERROR(EIO);
-		goto out;
-	}
-
-	is_dumpified = B_FALSE;
-	sync = !doread && !is_dumpified &&
-	    zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS;
-
-	/*
-	 * There must be no buffer changes when doing a dmu_sync() because
-	 * we can't change the data whilst calculating the checksum.
-	 */
-	lr = zfs_rangelock_enter(&zv->zv_rangelock, off, resid,
-	    doread ? RL_READER : RL_WRITER);
-
-	if (bp->bio_cmd == BIO_DELETE) {
-		dmu_tx_t *tx = dmu_tx_create(zv->zv_objset);
-		error = dmu_tx_assign(tx, TXG_WAIT);
-		if (error != 0) {
-			dmu_tx_abort(tx);
-		} else {
-			zvol_log_truncate(zv, tx, off, resid, sync);
-			dmu_tx_commit(tx);
-			error = dmu_free_long_range(zv->zv_objset, ZVOL_OBJ,
-			    off, resid);
-			resid = 0;
-		}
-		goto unlock;
-	}
-	while (resid != 0 && off < volsize) {
-		size_t size = MIN(resid, zvol_maxphys);
-		if (doread) {
-			error = dmu_read(os, ZVOL_OBJ, off, size, addr,
-			    DMU_READ_PREFETCH);
-		} else {
-			dmu_tx_t *tx = dmu_tx_create(os);
-			dmu_tx_hold_write_by_dnode(tx, zv->zv_dn, off, size);
-			error = dmu_tx_assign(tx, TXG_WAIT);
-			if (error) {
-				dmu_tx_abort(tx);
-			} else {
-				dmu_write(os, ZVOL_OBJ, off, size, addr, tx);
-				zvol_log_write(zv, tx, off, size, sync);
-				dmu_tx_commit(tx);
-			}
-		}
-		if (error) {
-			/* convert checksum errors into IO errors */
-			if (error == ECKSUM)
-				error = SET_ERROR(EIO);
-			break;
-		}
-		off += size;
-		addr += size;
-		resid -= size;
-	}
-unlock:
-	zfs_rangelock_exit(lr);
-
-	bp->bio_completed = bp->bio_length - resid;
-	if (bp->bio_completed < bp->bio_length && off > volsize)
-		error = EINVAL;
-
-	if (sync) {
-sync:
-		zil_commit(zv->zv_zilog, ZVOL_OBJ);
-	}
-out:
-	if (bp->bio_to)
-		g_io_deliver(bp, error);
-	else
-		biofinish(bp, NULL, error);
+	zvol_done(bp, error);
 }
 
 /*
