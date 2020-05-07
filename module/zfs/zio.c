@@ -1570,8 +1570,8 @@ zio_write_bp_init(zio_t *zio)
 		blkptr_t *bp = zio->io_bp;
 		zio_prop_t *zp = &zio->io_prop;
 
-		ASSERT(bp->blk_birth != zio->io_txg);
-		ASSERT(BP_GET_DEDUP(zio->io_bp_override) == 0);
+		ASSERT3U(bp->blk_birth, !=, zio->io_txg);
+		ASSERT0(BP_GET_DEDUP(zio->io_bp_override));
 
 		*bp = *zio->io_bp_override;
 		zio->io_pipeline = ZIO_INTERLOCK_PIPELINE;
@@ -2144,7 +2144,7 @@ __zio_execute(zio_t *zio)
 			boolean_t cut = (stage == ZIO_STAGE_VDEV_IO_START) ?
 			    zio_requeue_io_start_cut_in_line : B_FALSE;
 			zio_taskq_dispatch(zio, ZIO_TASKQ_ISSUE, cut);
-			return;
+			goto done;
 		}
 
 		/*
@@ -2155,7 +2155,7 @@ __zio_execute(zio_t *zio)
 			boolean_t cut = (stage == ZIO_STAGE_VDEV_IO_START) ?
 			    zio_requeue_io_start_cut_in_line : B_FALSE;
 			zio_taskq_dispatch(zio, ZIO_TASKQ_ISSUE, cut);
-			return;
+			goto done;
 		}
 
 		zio->io_stage = stage;
@@ -2169,8 +2169,12 @@ __zio_execute(zio_t *zio)
 		zio = zio_pipeline[highbit64(stage) - 1](zio);
 
 		if (zio == NULL)
-			return;
+			goto done;
 	}
+
+done:
+	/* Process any deferred events placed on this thread's list. */
+	dmu_thread_context_process();
 }
 
 
