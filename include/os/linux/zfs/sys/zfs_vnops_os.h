@@ -33,6 +33,11 @@
 #include <sys/pathname.h>
 #include <sys/zpl.h>
 #include <sys/zfs_file.h>
+#include <linux/version.h>
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 1, 0)
+#define	WANT_ASYNC
+#endif
 
 #ifdef	__cplusplus
 extern "C" {
