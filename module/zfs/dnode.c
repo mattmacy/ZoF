@@ -125,7 +125,7 @@ dnode_cons(void *arg, void *unused, int kmflag)
 	 * Every dbuf has a reference, and dropping a tracked reference is
 	 * O(number of references), so don't track dn_holds.
 	 */
-	zfs_refcount_create_untracked(&dn->dn_holds);
+	zfs_refcount_create(&dn->dn_holds);
 	zfs_refcount_create(&dn->dn_tx_holds);
 	list_link_init(&dn->dn_link);
 
@@ -1774,7 +1774,7 @@ dnode_set_blksz(dnode_t *dn, uint64_t size, int ibs, dmu_tx_t *tx)
 		goto fail;
 
 	/* resize the old block */
-	err = dbuf_hold_impl(dn, 0, 0, TRUE, FALSE, FTAG, &db);
+	err = dbuf_hold_impl(dn, 0, 0, TRUE, FALSE, FTAG, &db, NULL);
 	if (err == 0) {
 		dbuf_new_size(db, size, tx);
 	} else if (err != ENOENT) {
@@ -2092,7 +2092,7 @@ dnode_free_range(dnode_t *dn, uint64_t off, uint64_t len, dmu_tx_t *tx)
 			head = len;
 		rw_enter(&dn->dn_struct_rwlock, RW_READER);
 		res = dbuf_hold_impl(dn, 0, dbuf_whichblock(dn, 0, off),
-		    TRUE, FALSE, FTAG, &db);
+							 TRUE, FALSE, FTAG, &db, NULL);
 		rw_exit(&dn->dn_struct_rwlock);
 		if (res == 0) {
 			caddr_t data;
@@ -2137,7 +2137,7 @@ dnode_free_range(dnode_t *dn, uint64_t off, uint64_t len, dmu_tx_t *tx)
 			tail = len;
 		rw_enter(&dn->dn_struct_rwlock, RW_READER);
 		res = dbuf_hold_impl(dn, 0, dbuf_whichblock(dn, 0, off+len),
-		    TRUE, FALSE, FTAG, &db);
+		    TRUE, FALSE, FTAG, &db, NULL);
 		rw_exit(&dn->dn_struct_rwlock);
 		if (res == 0) {
 			boolean_t dirty;
@@ -2377,7 +2377,7 @@ dnode_next_offset_level(dnode_t *dn, int flags, uint64_t *offset,
 		data = dn->dn_phys->dn_blkptr;
 	} else {
 		uint64_t blkid = dbuf_whichblock(dn, lvl, *offset);
-		error = dbuf_hold_impl(dn, lvl, blkid, TRUE, FALSE, FTAG, &db);
+		error = dbuf_hold_impl(dn, lvl, blkid, TRUE, FALSE, FTAG, &db, NULL);
 		if (error) {
 			if (error != ENOENT)
 				return (error);
