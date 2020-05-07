@@ -4639,9 +4639,10 @@ ztest_dmu_async_done(dmu_ctx_t *dc)
 }
 
 static void
-ztest_dmu_ctx_init(ztest_dmu_ctx_t *zdc, volatile uint64_t *rc, kcondvar_t *cv, kmutex_t *lock)
+ztest_dmu_ctx_init(ztest_dmu_ctx_t *zdc, volatile uint64_t *rc, kcondvar_t *cv,
+    kmutex_t *lock)
 {
-	bzero(zdc, sizeof(*zdc));
+	bzero(zdc, sizeof (*zdc));
 	zdc->zdc_rc = rc;
 	zdc->zdc_cv = cv;
 	zdc->zdc_lock = lock;
@@ -4779,11 +4780,11 @@ ztest_dmu_async_read_write(ztest_ds_t *zd, uint64_t id)
 	 * Read the current contents of our objects.
 	 */
 	refcount = 0;
-	error = dmu_read_async(&zdc0.zdc_dc, os, packobj, packoff, packsize, packbuf,
-	    DMU_CTX_FLAG_PREFETCH, ztest_dmu_async_done);
+	error = dmu_read_async(&zdc0.zdc_dc, os, packobj, packoff, packsize,
+	    packbuf, DMU_CTX_FLAG_PREFETCH, ztest_dmu_async_done);
 	ASSERT0(error);
-	error = dmu_read_async(&zdc1.zdc_dc, os, bigobj, bigoff, bigsize, bigbuf,
-	    DMU_CTX_FLAG_PREFETCH, ztest_dmu_async_done);
+	error = dmu_read_async(&zdc1.zdc_dc, os, bigobj, bigoff, bigsize,
+	    bigbuf, DMU_CTX_FLAG_PREFETCH, ztest_dmu_async_done);
 	ASSERT0(error);
 	ztest_dmu_wait(&refcount, &zd_cv, &zd_lock, 2);
 
@@ -4871,7 +4872,8 @@ ztest_dmu_async_read_write(ztest_ds_t *zd, uint64_t id)
 	 * Now write them out.
 	 */
 	refcount = 0;
-	dmu_write_async(&zdc0.zdc_dc, os, packobj, packoff, packsize, packbuf, tx, ztest_dmu_async_done);
+	dmu_write_async(&zdc0.zdc_dc, os, packobj, packoff, packsize, packbuf,
+	    tx, ztest_dmu_async_done);
 
 	if (freeit) {
 		if (ztest_opts.zo_verbose >= 7) {
@@ -4891,7 +4893,8 @@ ztest_dmu_async_read_write(ztest_ds_t *zd, uint64_t id)
 			    (u_longlong_t)bigsize,
 			    (u_longlong_t)txg);
 		}
-		dmu_write_async(&zdc1.zdc_dc, os, bigobj, bigoff, bigsize, bigbuf, tx, ztest_dmu_async_done);
+		dmu_write_async(&zdc1.zdc_dc, os, bigobj, bigoff, bigsize,
+		    bigbuf, tx, ztest_dmu_async_done);
 		ztest_dmu_wait(&refcount, &zd_cv, &zd_lock, 2);
 	}
 
@@ -4904,11 +4907,12 @@ ztest_dmu_async_read_write(ztest_ds_t *zd, uint64_t id)
 		void *packcheck = umem_alloc(packsize, UMEM_NOFAIL);
 		void *bigcheck = umem_alloc(bigsize, UMEM_NOFAIL);
 		refcount = 0;
-		VERIFY(0 == dmu_read_async(&zdc0.zdc_dc, os, packobj, packoff,
-								   packsize, packcheck, DMU_CTX_FLAG_PREFETCH, ztest_dmu_async_done));
-		VERIFY(0 == dmu_read_async(&zdc1.zdc_dc, os, bigobj, bigoff,
-								   bigsize, bigcheck, DMU_CTX_FLAG_PREFETCH, ztest_dmu_async_done));
-
+		VERIFY0(dmu_read_async(&zdc0.zdc_dc, os, packobj, packoff,
+		    packsize, packcheck, DMU_CTX_FLAG_PREFETCH,
+		    ztest_dmu_async_done));
+		VERIFY0(dmu_read_async(&zdc1.zdc_dc, os, bigobj, bigoff,
+		    bigsize, bigcheck, DMU_CTX_FLAG_PREFETCH,
+		    ztest_dmu_async_done));
 		ztest_dmu_wait(&refcount, &zd_cv, &zd_lock, 2);
 		ASSERT(bcmp(packbuf, packcheck, packsize) == 0);
 		ASSERT(bcmp(bigbuf, bigcheck, bigsize) == 0);
@@ -4920,7 +4924,7 @@ ztest_dmu_async_read_write(ztest_ds_t *zd, uint64_t id)
 	umem_free(packbuf, packsize);
 	umem_free(bigbuf, bigsize);
 	umem_free(od, size);
- done:
+done:
 	cv_destroy(&zd_cv);
 	mutex_destroy(&zd_lock);
 }

@@ -2167,7 +2167,7 @@ __zio_execute(zio_t *zio)
 			goto done;
 	}
 
- done:
+done:
 	/* Process any deferred events placed on this thread's list. */
 	dmu_thread_context_process();
 }

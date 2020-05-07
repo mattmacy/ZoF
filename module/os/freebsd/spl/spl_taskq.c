@@ -179,7 +179,7 @@ taskq_dtor(void *context)
 static taskq_t *
 taskq_create_with_init(const char *name, int nthreads, pri_t pri,
     int minalloc __unused, int maxalloc __unused, uint_t flags,
-    taskq_callback_fn ctor , taskq_callback_fn dtor)
+    taskq_callback_fn ctor, taskq_callback_fn dtor)
 {
 	taskq_t *tq;
 
@@ -213,7 +213,7 @@ taskq_create(const char *name, int nthreads, pri_t pri, int minalloc __unused,
 taskq_t *
 taskq_create_proc(const char *name, int nthreads, pri_t pri, int minalloc,
     int maxalloc, proc_t *proc __unused, uint_t flags,
-    taskq_callback_fn ctor , taskq_callback_fn dtor)
+    taskq_callback_fn ctor, taskq_callback_fn dtor)
 {
 
 	return (taskq_create_with_init(name, nthreads, pri, minalloc, maxalloc,

@@ -1695,7 +1695,7 @@ zvol_register_ops(const zvol_platform_ops_t *zvol_ops)
 
 static void
 zvol_dmu_buf_set_transfer_write(dmu_buf_set_t *dbs)
- {
+{
 	zvol_dmu_state_t *zds = (zvol_dmu_state_t *)dbs->dbs_dc;
 	zvol_state_t *zv = zds->zds_zv;
 	dmu_tx_t *tx = dmu_buf_set_tx(dbs);
@@ -1731,7 +1731,7 @@ zvol_dmu_ctx_init(zvol_dmu_state_t *zds, void *data, uint64_t off,
 	/* Truncate I/Os to the end of the volume, if needed. */
 	io_size = MIN(io_size, zv->zv_volsize - off);
 
-	error = dmu_ctx_init(&zds->zds_dc, /*dnode*/NULL, zv->zv_objset,
+	error = dmu_ctx_init(&zds->zds_dc, /* dnode */ NULL, zv->zv_objset,
 	    ZVOL_OBJ, off, io_size, data, FTAG, dmu_flags);
 	if (error)
 		return (error);
@@ -1770,7 +1770,8 @@ zvol_dmu_uio(zvol_dmu_state_t *zds, uio_t *uio, uint32_t dmu_flags)
 
 	/* Don't allow I/Os that are not within the volume. */
 	if (uio->uio_resid > 0 &&
-	    (uio->uio_loffset < 0 || uio->uio_loffset >= zds->zds_zv->zv_volsize))
+	    (uio->uio_loffset < 0 ||
+	    uio->uio_loffset >= zds->zds_zv->zv_volsize))
 		return (SET_ERROR(EIO));
 
 	err = zvol_dmu_ctx_init(zds, uio, uio->uio_loffset,
