@@ -182,21 +182,21 @@ static xuio_stats_t xuio_stats = {
 #define	XUIOSTAT_BUMP(stat)	XUIOSTAT_INCR(stat, 1)
 
 #ifdef _KERNEL
-#define DPRINTF(...)
+#define	DPRINTF(...)
 #else
-#define DPRINTF printf
+#define	DPRINTF printf
 #endif
 
 #ifdef ZFS_DEBUG
-#define DEBUG_REFCOUNT(a, b, c) uint32_t b
-#define DEBUG_COUNTER_U(a, b, c) uint64_t b
-#define DEBUG_REFCOUNT_ADD(b) atomic_inc_32(&(b))
-#define DEBUG_REFCOUNT_DEC(b) atomic_dec_32(&(b))
+#define	DEBUG_REFCOUNT(a, b, c) uint32_t b
+#define	DEBUG_COUNTER_U(a, b, c) uint64_t b
+#define	DEBUG_REFCOUNT_ADD(b) atomic_inc_32(&(b))
+#define	DEBUG_REFCOUNT_DEC(b) atomic_dec_32(&(b))
 #else
-#define DEBUG_REFCOUNT(a, b, c)
-#define DEBUG_COUNTER_U(a, b, c)
-#define DEBUG_REFCOUNT_ADD(b)
-#define DEBUG_REFCOUNT_DEC(b)
+#define	DEBUG_REFCOUNT(a, b, c)
+#define	DEBUG_COUNTER_U(a, b, c)
+#define	DEBUG_REFCOUNT_ADD(b)
+#define	DEBUG_REFCOUNT_DEC(b)
 #endif
 
 
@@ -207,10 +207,10 @@ DEBUG_REFCOUNT(_vfs_zfs_dmu, dmu_ctx_in_flight, "DMU contexts in flight");
 DEBUG_REFCOUNT(_vfs_zfs_dmu, buf_set_in_flight, "Buffer sets in flight");
 
 #if defined(_KERNEL) && defined(__FreeBSD__)
-#define dmu_uiomove(data, sz, dir, uio)			\
+#define	dmu_uiomove(data, sz, dir, uio)			\
 	vn_io_fault_uiomove((data), (sz), (uio))
 #else
-#define dmu_uiomove(data, sz, dir, uio)			\
+#define	dmu_uiomove(data, sz, dir, uio)			\
 	uiomove((data), (sz), (dir), (uio))
 #endif
 int
@@ -628,7 +628,7 @@ dmu_buf_hold_array_by_dnode(dnode_t *dn, uint64_t offset, uint64_t length,
 			dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbp[i];
 			mutex_enter(&db->db_mtx);
 			while (db->db_state == DB_READ ||
-				   db->db_state == DB_FILL)
+			    db->db_state == DB_FILL)
 				cv_wait(&db->db_changed, &db->db_mtx);
 			if (db->db_state == DB_UNCACHED)
 				err = SET_ERROR(EIO);
@@ -1036,7 +1036,7 @@ uint_t zfs_async_io_key;
 void
 dmu_buf_set_node_add(list_t *list, dmu_buf_set_t *dbs)
 {
-	dmu_buf_set_node_t *dbsn = kmem_zalloc(sizeof(dmu_buf_set_node_t),
+	dmu_buf_set_node_t *dbsn = kmem_zalloc(sizeof (dmu_buf_set_node_t),
 	    KM_SLEEP);
 	list_link_init(&dbsn->dbsn_link);
 	dbsn->dbsn_dbs = dbs;
@@ -1048,7 +1048,7 @@ void
 dmu_buf_set_node_remove(list_t *list, dmu_buf_set_node_t *dbsn)
 {
 	list_remove(list, dbsn);
-	kmem_free(dbsn, sizeof(dmu_buf_set_node_t));
+	kmem_free(dbsn, sizeof (dmu_buf_set_node_t));
 	ASSERT(dbsn_in_flight > 0);
 	DEBUG_REFCOUNT_DEC(dbsn_in_flight);
 }
@@ -1212,10 +1212,10 @@ dmu_buf_set_transfer_write_tx(dmu_buf_set_t *dbs)
 	dmu_tx_commit(dbs->dbs_tx);
 }
 
-/**
- * \brief Release a DMU context hold, cleaning up if no holds remain.
+/*
+ * Release a DMU context hold, cleaning up if no holds remain.
  *
- * \param dmu_ctx	DMU context to release.
+ * - dmu_ctx	DMU context to release.
  */
 void
 dmu_ctx_rele(dmu_ctx_t *dmu_ctx)
@@ -1228,7 +1228,8 @@ dmu_ctx_rele(dmu_ctx_t *dmu_ctx)
 	ASSERT(dmu_ctx_in_flight > 0);
 	DEBUG_REFCOUNT_DEC(dmu_ctx_in_flight);
 
-	if ((dmu_ctx->dc_flags & DMU_CTX_FLAG_NO_HOLD) == 0 && dmu_ctx->dc_dn != NULL)
+	if ((dmu_ctx->dc_flags & DMU_CTX_FLAG_NO_HOLD) == 0 &&
+	    (dmu_ctx->dc_dn != NULL))
 		dnode_rele(dmu_ctx->dc_dn, dmu_ctx->dc_tag);
 
 	/* At this point, there are no buffer sets left.  Call back. */
@@ -1277,7 +1278,7 @@ dmu_thread_context_create(void)
 	/* This function should never be called more than once in a thread. */
 	ASSERT3P(tsd_get(zfs_async_io_key), ==, NULL);
 	/* Called with taskqueue mutex held. */
-	dcs = kmem_zalloc(sizeof(dmu_cb_state_t), KM_SLEEP);
+	dcs = kmem_zalloc(sizeof (dmu_cb_state_t), KM_SLEEP);
 	list_create(&dcs->dcs_io_list, sizeof (dmu_buf_set_node_t),
 	    offsetof(dmu_buf_set_node_t, dbsn_link));
 
@@ -1307,7 +1308,7 @@ dmu_thread_context_destroy(void *context __maybe_unused)
 	 */
 	ASSERT(list_is_empty(&dcs->dcs_io_list));
 
-	kmem_free(dcs, sizeof(dmu_cb_state_t));
+	kmem_free(dcs, sizeof (dmu_cb_state_t));
 	VERIFY(tsd_set(zfs_async_io_key, NULL) == 0);
 }
 
@@ -1332,13 +1333,13 @@ dmu_thread_context_process(void)
 	}
 }
 
-/**
- * \brief Release a buffer set for a given dbuf.
+/*
+ * Release a buffer set for a given dbuf.
  *
- * \param buf_set	Buffer set to release.
- * \param err		Whether an error occurred.
+ * - buf_set	Buffer set to release.
+ * - err		Whether an error occurred.
  *
- * \invariant		If specified, the dbuf's mutex must be held.
+ * invariant:		If specified, the dbuf's mutex must be held.
  */
 void
 dmu_buf_set_rele(dmu_buf_set_t *dbs, int err)
@@ -1368,13 +1369,13 @@ dmu_buf_set_rele(dmu_buf_set_t *dbs, int err)
 	}
 }
 
-/**
- * \brief Set up the buffers for a given set.
+/*
+ * Set up the buffers for a given set.
  *
- * \param buf_set	Buffer set to set up buffers for.
+ * - buf_set	Buffer set to set up buffers for.
  *
- * \retval errno	If any buffer could not be held for this buffer set.
- * \retval 0		Success.
+ * returns: errno	If any buffer could not be held for this buffer set.
+ *          0		Success.
  */
 static int
 dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
@@ -1398,13 +1399,14 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 	 */
 	for (i = 0; i < dbs->dbs_count; i++) {
 		dmu_buf_impl_t *db = NULL;
-		int err = dbuf_hold_impl(dn, /*level*/0, blkid + i,
-			/*fail_sparse*/FALSE, /*fail_uncached*/FALSE, dmu_ctx->dc_tag, &db, dbs);
 		uint64_t bufoff, bufsiz;
+		int err = dbuf_hold_impl(dn, /* level */ 0, blkid + i,
+		    /* fail_sparse */ FALSE, /* fail_uncached */ FALSE,
+		    dmu_ctx->dc_tag, &db, dbs);
 		if (db == NULL) {
 			/* Only include counts for the processed buffers. */
 			dbs->dbs_count = i;
-			/*initiator*/
+			/* initiator */
 			zfs_refcount_destroy(&dbs->dbs_holds);
 			zfs_refcount_create_untracked(&dbs->dbs_holds);
 			zfs_refcount_add_many(&dbs->dbs_holds, i + 1, NULL);
@@ -1429,12 +1431,12 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 	return (0);
 }
 
-/**
- * \brief Set up a new transaction for the DMU context.
+/*
+ * Set up a new transaction for the DMU context.
  *
- * \param dmu_ctx	DMU context to set up new transaction for.
- * \param txp		Address to store dmu_tx_t pointer.
- * \param dnp		Address to store dnode_t pointer for new dnode.
+ * - dmu_ctx	DMU context to set up new transaction for.
+ * - txp		Address to store dmu_tx_t pointer.
+ * - dnp		Address to store dnode_t pointer for new dnode.
  */
 static int
 dmu_ctx_setup_tx(dmu_ctx_t *dmu_ctx, dmu_tx_t **txp, dnode_t **dnp,
@@ -1447,7 +1449,8 @@ dmu_ctx_setup_tx(dmu_ctx_t *dmu_ctx, dmu_tx_t **txp, dnode_t **dnp,
 		return (0);
 
 	*txp = dmu_tx_create(dmu_ctx->dc_os);
-	dmu_tx_hold_write(*txp, dmu_ctx->dc_object, dmu_ctx->dc_dn_offset, size);
+	dmu_tx_hold_write(*txp, dmu_ctx->dc_object,
+	    dmu_ctx->dc_dn_offset, size);
 	err = dmu_tx_assign(*txp, TXG_WAIT);
 	if (err)
 		goto out;
@@ -1456,7 +1459,8 @@ dmu_ctx_setup_tx(dmu_ctx_t *dmu_ctx, dmu_tx_t **txp, dnode_t **dnp,
 	 * Writer without caller TX: dnode hold is done here rather
 	 * than in dmu_ctx_init().
 	 */
-	err = dnode_hold(dmu_ctx->dc_os, dmu_ctx->dc_object, dmu_ctx->dc_tag, dnp);
+	err = dnode_hold(dmu_ctx->dc_os, dmu_ctx->dc_object,
+	    dmu_ctx->dc_tag, dnp);
 	if (err)
 		goto out;
 	dmu_ctx->dc_dn = *dnp;
@@ -1469,15 +1473,15 @@ out:
 	return (err);
 }
 
-/**
- * \brief Initialize a buffer set of a certain size.
+/*
+ * Initialize a buffer set of a certain size.
  *
- * \param dmu_ctx	DMU context to associate the buffer set with.
- * \param buf_set_p	Pointer to set to the new buffer set's address.
- * \param size		Requested size of the buffer set.
+ * - dmu_ctx	DMU context to associate the buffer set with.
+ * - buf_set_p	Pointer to set to the new buffer set's address.
+ * - size		Requested size of the buffer set.
  *
- * \retval 0		Success.
- * \retval EIO		I/O error: tried to access past the end of the dnode,
+ * returns: 0		Success.
+ *          EIO		I/O error: tried to access past the end of the dnode,
  * 			or dmu_buf_set_setup_buffers() failed.
  */
 static int
@@ -1506,7 +1510,8 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 
 	/* Figure out how many blocks are needed for the requested size. */
 	if (dn->dn_datablkshift) {
-		nblks = P2ROUNDUP(dmu_ctx->dc_dn_offset + size, dn->dn_datablksz);
+		nblks = P2ROUNDUP(dmu_ctx->dc_dn_offset + size,
+		    dn->dn_datablksz);
 		nblks -= P2ALIGN(dmu_ctx->dc_dn_offset, dn->dn_datablksz);
 		nblks >>= dn->dn_datablkshift;
 	} else {
@@ -1525,7 +1530,7 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	}
 
 	/* Create the new buffer set. */
-	set_size = sizeof(dmu_buf_set_t) + nblks * sizeof(dmu_buf_t *);
+	set_size = sizeof (dmu_buf_set_t) + nblks * sizeof (dmu_buf_t *);
 	dbs = kmem_zalloc(set_size, KM_SLEEP);
 
 	/* Initialize a new buffer set. */
@@ -1582,13 +1587,13 @@ out:
 	return (err);
 }
 
-/**
- * \brief Process the I/Os queued for a given buffer set.
+/*
+ * Process the I/Os queued for a given buffer set.
  *
- * \param buf_set	Buffer set to process I/Os for.
+ * - buf_set	Buffer set to process I/Os for.
  *
- * \retval errno	Errors from zio_wait or a buffer went UNCACHED.
- * \retval 0		Success.
+ * returns: errno	Errors from zio_wait or a buffer went UNCACHED.
+ *          0		Success.
  */
 static int
 dmu_buf_set_process_io(dmu_buf_set_t *dbs)
@@ -1624,8 +1629,8 @@ dmu_buf_set_process_io(dmu_buf_set_t *dbs)
 	for (i = 0; i < dbs->dbs_count; i++) {
 		dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbs->dbs_dbp[i];
 		mutex_enter(&db->db_mtx);
-			while (db->db_state == DB_READ ||
-				   db->db_state == DB_FILL)
+		while (db->db_state == DB_READ ||
+		    db->db_state == DB_FILL)
 			cv_wait(&db->db_changed, &db->db_mtx);
 		if (db->db_state == DB_UNCACHED)
 			err = SET_ERROR(EIO);
@@ -1636,15 +1641,15 @@ dmu_buf_set_process_io(dmu_buf_set_t *dbs)
 	return (0);
 }
 
-/**
- * \brief Issue the I/O specified in the given DMU context.
+/*
+ * Issue the I/O specified in the given DMU context.
  *
- * \param dmu_ctx	The DMU context.
+ * - dmu_ctx	The DMU context.
  *
- * \return errno	Errors executing I/O chunks.
- * \return 0		If a DMU callback is specified; the callback
+ * returns: errno	Errors executing I/O chunks.
+ *          0		If a DMU callback is specified; the callback
  *			receives any errors.
- * \return 0		If no DMU callback is specified: Success.
+ *          0		If no DMU callback is specified: Success.
  */
 int
 dmu_issue(dmu_ctx_t *dc)
@@ -1677,21 +1682,11 @@ dmu_issue(dmu_ctx_t *dc)
 		dprintf("%s(%p@%lu+%lu) chunk %lu\n", __func__, dc,
 		    dc->dc_dn_offset, dc->dc_resid, io_size);
 		err = dmu_buf_set_init(dc, &dbs, io_size);
-		if (zfs_refcount_count(&dbs->dbs_holds) > 1)
-			DPRINTF("pre dc_holds=%lu dbs_holds=%lu\n", zfs_refcount_count(&dc->dc_holds),
-					zfs_refcount_count(&dbs->dbs_holds));
-
-		ASSERT0(err);
 		/* Process the I/O requests, if the initialization passed. */
 		if (err == 0)
 			err = dmu_buf_set_process_io(dbs);
-		ASSERT0(err);
 
 		dmu_buf_set_rele(dbs, err);
-		if (zfs_refcount_count(&dbs->dbs_holds) > 0)
-			DPRINTF("post dc_holds=%lu dbs_holds=%lu\n", zfs_refcount_count(&dc->dc_holds),
-					zfs_refcount_count(&dbs->dbs_holds));
-
 	}
 	/*
 	 * At this point, either this I/O is async, or all buffer sets
@@ -1710,18 +1705,18 @@ dmu_issue(dmu_ctx_t *dc)
 	return (dc->dc_err);
 }
 
-/**
- * \brief Set up a DMU context.
+/*
+ * Set up a DMU context.
  *
- * \param dmu_ctx	The DMU context.
- * \param dn		A held dnode to associate with the context, or NULL.
- * \param os		The object set associated with the context.
- * \param object	The object ID associated with the context.
- * \param size		Size of the I/O to be performed.
- * \param offset	Offset into the dnode to perform the I/O.
- * \param data_buf	Data buffer to perform I/O transfers with.
- * \param tag		Hold tag to use.
- * \param flags		DMU context flags.
+ * - dmu_ctx	The DMU context.
+ * - dn		A held dnode to associate with the context, or NULL.
+ * - os		The object set associated with the context.
+ * - object	The object ID associated with the context.
+ * - size		Size of the I/O to be performed.
+ * - offset	Offset into the dnode to perform the I/O.
+ * - data_buf	Data buffer to perform I/O transfers with.
+ * - tag		Hold tag to use.
+ * - flags		DMU context flags.
  *
  * \note	The dnode must not be NULL, unless this is a writer.
  * \note	The dnode, if specified, must be held, unless the
@@ -1764,7 +1759,7 @@ dmu_ctx_init(dmu_ctx_t *dmu_ctx, struct dnode *dn, objset_t *os,
 	}
 
 	/* All set, actually initialize the context! */
-	bzero(dmu_ctx, sizeof(dmu_ctx_t));
+	bzero(dmu_ctx, sizeof (dmu_ctx_t));
 	mutex_init(&dmu_ctx->dc_mtx, "context lock", MUTEX_DEFAULT, NULL);
 	dmu_ctx->dc_dn = dn;
 	dmu_ctx->dc_os = os;
@@ -1784,8 +1779,8 @@ dmu_ctx_init(dmu_ctx_t *dmu_ctx, struct dnode *dn, objset_t *os,
 		} else
 #endif
 		{
-			dmu_ctx->dc_data_transfer_cb = reader ? dmu_buf_read_uio :
-			    dmu_buf_write_uio;
+			dmu_ctx->dc_data_transfer_cb = reader ?
+			    dmu_buf_read_uio : dmu_buf_write_uio;
 		}
 #if defined(_KERNEL) && !defined(__linux__)
 	} else if (dmu_ctx->dc_flags & DMU_CTX_FLAG_SUN_PAGES) {
@@ -1799,7 +1794,8 @@ dmu_ctx_init(dmu_ctx_t *dmu_ctx, struct dnode *dn, objset_t *os,
 	dmu_ctx->dc_buf_set_transfer_cb = reader ? dmu_buf_set_transfer :
 	    dmu_buf_set_transfer_write_tx;
 	if ((dmu_ctx->dc_flags & DMU_CTX_FLAG_NOFILL) == 0) {
-		dmu_ctx->dc_buf_transfer_cb = reader ? dmu_ctx->dc_data_transfer_cb :
+		dmu_ctx->dc_buf_transfer_cb = reader ?
+		    dmu_ctx->dc_data_transfer_cb :
 		    dmu_buf_transfer_write;
 	} else
 		dmu_ctx->dc_buf_transfer_cb = dmu_buf_transfer_nofill;
@@ -1810,13 +1806,13 @@ dmu_ctx_init(dmu_ctx_t *dmu_ctx, struct dnode *dn, objset_t *os,
 	return (0);
 }
 
-/**
- * \brief Update a DMU context for the next call.
+/*
+ * Update a DMU context for the next call.
  *
- * \param dmu_ctx	The DMU context.
- * \param data_buf	The updated destination data buffer.
- * \param offset	The offset into the dnode.
- * \param size		The size of the next call.
+ * - dmu_ctx	The DMU context.
+ * - data_buf	The updated destination data buffer.
+ * - offset	The offset into the dnode.
+ * - size		The size of the next call.
  */
 void
 dmu_ctx_seek(dmu_ctx_t *dmu_ctx, uint64_t offset, uint64_t size,
@@ -1856,8 +1852,9 @@ dmu_ctx_seek(dmu_ctx_t *dmu_ctx, uint64_t offset, uint64_t size,
 
 
 static int
-dmu_async_impl(dmu_ctx_t *dc, dnode_t *dn, objset_t *os, uint64_t object, uint64_t offset,
-    uint64_t size, void *buf, uint32_t flags, dmu_tx_t *tx, dmu_ctx_cb_t done_cb)
+dmu_async_impl(dmu_ctx_t *dc, dnode_t *dn, objset_t *os, uint64_t object,
+    uint64_t offset, uint64_t size, void *buf, uint32_t flags, dmu_tx_t *tx,
+    dmu_ctx_cb_t done_cb)
 {
 	int err;
 
@@ -1876,8 +1873,8 @@ dmu_async_impl(dmu_ctx_t *dc, dnode_t *dn, objset_t *os, uint64_t object, uint64
 }
 
 int
-dmu_read_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
-    void *buf, uint32_t flags, dmu_ctx_cb_t done_cb)
+dmu_read_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset,
+    uint64_t size, void *buf, uint32_t flags, dmu_ctx_cb_t done_cb)
 {
 
 	return (dmu_async_impl(dc, /* dnode */NULL, os, object, offset, size,
@@ -1885,8 +1882,8 @@ dmu_read_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset, ui
 }
 
 int
-dmu_write_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
-    void *buf, dmu_tx_t *tx, dmu_ctx_cb_t done_cb)
+dmu_write_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset,
+    uint64_t size, void *buf, dmu_tx_t *tx, dmu_ctx_cb_t done_cb)
 {
 
 	return (dmu_async_impl(dc, /* dnode */NULL, os, object, offset, size,
@@ -1894,8 +1891,8 @@ dmu_write_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset, u
 }
 
 static int
-dmu_read_impl(dnode_t *dn, objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
-    void *buf, uint32_t flags)
+dmu_read_impl(dnode_t *dn, objset_t *os, uint64_t object, uint64_t offset,
+    uint64_t size, void *buf, uint32_t flags)
 {
 	int err;
 	dmu_ctx_t dmu_ctx;
@@ -1917,7 +1914,7 @@ dmu_read(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 {
 
 	return (dmu_read_impl(/* dnode */NULL, os, object, offset, size,
-				buf, flags));
+	    buf, flags));
 }
 
 int
@@ -1926,12 +1923,12 @@ dmu_read_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size, void *buf,
 {
 
 	return (dmu_read_impl(dn, dn->dn_objset, dn->dn_object, offset, size,
-		       buf, flags|DMU_CTX_FLAG_NO_HOLD));
+	    buf, flags|DMU_CTX_FLAG_NO_HOLD));
 }
 
 static int
-dmu_write_impl(dnode_t *dn, objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
-    const void *buf, dmu_tx_t *tx, uint32_t flags)
+dmu_write_impl(dnode_t *dn, objset_t *os, uint64_t object, uint64_t offset,
+    uint64_t size, const void *buf, dmu_tx_t *tx, uint32_t flags)
 {
 	void *bufp = (void *)(uintptr_t)buf;
 	dmu_ctx_t dmu_ctx;
@@ -1952,7 +1949,7 @@ void
 dmu_write(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
     const void *buf, dmu_tx_t *tx)
 {
-	dmu_write_impl(/*dnode*/NULL, os, object, offset, size, buf, tx, 0);
+	dmu_write_impl(/* dnode */ NULL, os, object, offset, size, buf, tx, 0);
 }
 
 void
@@ -1960,7 +1957,8 @@ dmu_write_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size,
     const void *buf, dmu_tx_t *tx)
 {
 
-	dmu_write_impl(dn, dn->dn_objset, dn->dn_object, offset, size, buf, tx, 0);
+	dmu_write_impl(dn, dn->dn_objset, dn->dn_object, offset, size, buf,
+	    tx, 0);
 }
 
 int
@@ -2145,7 +2143,7 @@ dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 {
 
 	return (dmu_read_impl(dn, NULL, 0, uio->uio_loffset, size, uio,
-                DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_NO_HOLD));
+	    DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_NO_HOLD));
 }
 #else
 
@@ -2349,8 +2347,8 @@ dmu_write_uio(objset_t *os, uint64_t object, uio_t *uio, uint64_t size,
 
 	if (size == 0)
 		return (0);
-	return (dmu_write_impl(NULL, os, object, uio->uio_loffset, size, uio, tx,
-	    DMU_CTX_FLAG_UIO));
+	return (dmu_write_impl(NULL, os, object, uio->uio_loffset, size,
+	    uio, tx, DMU_CTX_FLAG_UIO));
 }
 
 /*
