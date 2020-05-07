@@ -1421,8 +1421,6 @@ uiomove_iov(void *p, size_t n, enum uio_rw rw, struct uio *uio)
 			else
 				bcopy(iov->iov_base, p, cnt);
 			break;
-		case UIO_USERSPACE:
-		case UIO_USERISPACE:
 		default:
 			ASSERT(0);
 		}
