@@ -1550,7 +1550,8 @@ receive_object(struct receive_writer_arg *rwa, struct drr_object *drro,
 		uint64_t offset = rwa->or_firstobj * DNODE_MIN_SIZE;
 
 		err = dmu_buf_hold_by_dnode(DMU_META_DNODE(rwa->os),
-		    offset, FTAG, &db, DMU_CTX_FLAG_PREFETCH | DMU_CTX_FLAG_NODECRYPT);
+		    offset, FTAG, &db, DMU_CTX_FLAG_PREFETCH |
+		    DMU_CTX_FLAG_NODECRYPT);
 		if (err != 0) {
 			dmu_tx_commit(tx);
 			return (SET_ERROR(EINVAL));
