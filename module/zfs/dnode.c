@@ -2092,7 +2092,7 @@ dnode_free_range(dnode_t *dn, uint64_t off, uint64_t len, dmu_tx_t *tx)
 			head = len;
 		rw_enter(&dn->dn_struct_rwlock, RW_READER);
 		res = dbuf_hold_impl(dn, 0, dbuf_whichblock(dn, 0, off),
-							 TRUE, FALSE, FTAG, &db, NULL);
+		    TRUE, FALSE, FTAG, &db, NULL);
 		rw_exit(&dn->dn_struct_rwlock);
 		if (res == 0) {
 			caddr_t data;
@@ -2377,7 +2377,8 @@ dnode_next_offset_level(dnode_t *dn, int flags, uint64_t *offset,
 		data = dn->dn_phys->dn_blkptr;
 	} else {
 		uint64_t blkid = dbuf_whichblock(dn, lvl, *offset);
-		error = dbuf_hold_impl(dn, lvl, blkid, TRUE, FALSE, FTAG, &db, NULL);
+		error = dbuf_hold_impl(dn, lvl, blkid, TRUE, FALSE, FTAG,
+		    &db, NULL);
 		if (error) {
 			if (error != ENOENT)
 				return (error);
