@@ -2134,10 +2134,6 @@ xuio_stat_wbuf_nocopy(void)
 {
 	XUIOSTAT_BUMP(xuiostat_wbuf_nocopy);
 }
-
-#ifdef _KERNEL
-
-#if 1
 int
 dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 {
@@ -2145,8 +2141,11 @@ dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 	return (dmu_read_impl(dn, NULL, 0, uio->uio_loffset, size, uio,
 	    DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_NO_HOLD));
 }
-#else
 
+
+#ifdef _KERNEL
+
+#if 0
 /*
  * XXX
  * Restore this code until we can figure out why the dmu_ctx
