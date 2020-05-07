@@ -3759,7 +3759,7 @@ zfs_fillpage(struct inode *ip, struct page *pl[], int nr_pages)
 		cur_pp = pl[page_idx++];
 		va = kmap(cur_pp);
 		err = dmu_read(os, zp->z_id, io_off, PAGESIZE, va,
-		    DMU_READ_PREFETCH);
+		    DMU_CTX_FLAG_PREFETCH);
 		kunmap(cur_pp);
 		if (err) {
 			/* convert checksum errors into IO errors */
