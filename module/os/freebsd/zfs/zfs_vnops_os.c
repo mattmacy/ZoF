@@ -68,7 +68,9 @@
 #include <sys/zap.h>
 #include <sys/sa.h>
 #include <sys/policy.h>
+#include <sys/resourcevar.h>
 #include <sys/sunddi.h>
+#include <sys/signalvar.h>
 #include <sys/filio.h>
 #include <sys/sid.h>
 #include <sys/zfs_ctldir.h>
@@ -87,6 +89,7 @@
 #include <sys/zfs_vnops.h>
 
 #include <vm/vm_object.h>
+#include <vm/vm_radix.h>
 
 #include <sys/extattr.h>
 #include <sys/priv.h>
@@ -311,9 +314,8 @@ zfs_ioctl(vnode_t *vp, ulong_t com, intptr_t data, int flag, cred_t *cred,
 }
 
 static vm_page_t
-page_busy(vnode_t *vp, int64_t start, int64_t off, int64_t nbytes)
+page_busy(vm_object_t obj, int64_t start, int64_t off, int64_t nbytes)
 {
-	vm_object_t obj;
 	vm_page_t pp;
 	int64_t end;
 
@@ -331,7 +333,6 @@ page_busy(vnode_t *vp, int64_t start, int64_t off, int64_t nbytes)
 	off = roundup2(off, DEV_BSIZE);
 	nbytes = end - off;
 
-	obj = vp->v_object;
 	zfs_vmobject_assert_wlocked_12(obj);
 #if __FreeBSD_version < 1300050
 	for (;;) {
@@ -486,12 +487,12 @@ update_pages(znode_t *zp, int64_t start, int len, objset_t *os)
 		vm_page_t pp;
 		int nbytes = imin(PAGESIZE - off, len);
 
-		if ((pp = page_busy(vp, start, off, nbytes)) != NULL) {
+		if ((pp = page_busy(obj, start, off, nbytes)) != NULL) {
 			zfs_vmobject_wunlock_12(obj);
 
 			va = zfs_map_page(pp, &sf);
 			(void) dmu_read(os, zp->z_id, start + off, nbytes,
-			    va + off, DMU_READ_PREFETCH);
+			    va + off, DMU_CTX_FLAG_PREFETCH);
 			zfs_unmap_page(sf);
 
 			zfs_vmobject_wlock_12(obj);
@@ -506,6 +507,44 @@ update_pages(znode_t *zp, int64_t start, int len, objset_t *os)
 	vm_object_pip_wakeupn(obj, 0);
 #endif
 	zfs_vmobject_wunlock_12(obj);
+}
+
+typedef struct update_pages_async_state {
+	dmu_ctx_t	upas_dc;
+	struct uio_bio *upas_uio;
+	vm_object_t upas_obj;
+	callback_fn upas_cb;
+	void *upas_arg;
+	boolean_t upas_yielded;
+} update_pages_async_state_t;
+
+
+static void
+update_pages_async_epilogue(update_pages_async_state_t *state)
+{
+	int page_count = state->upas_uio->uio_bv_cnt;
+	struct bio_vec *bv, *bvec = state->upas_uio->uio_bvec;
+	vm_object_t obj = state->upas_obj;
+	callback_fn cb = state->upas_cb;
+	void *arg = state->upas_arg;
+	boolean_t yielded = state->upas_yielded;
+
+	kmem_free(state->upas_uio, sizeof (struct uio_bio));
+	kmem_free(state, sizeof (*state));
+	zfs_vmobject_wlock_12(obj);
+	bv = bvec;
+	for (int i = 0; i < page_count; i++, bv++)
+		if (bv->bv_page != NULL)
+			page_unbusy(bv->bv_page);
+#if __FreeBSD_version >= 1300041
+	vm_object_pip_wakeup(obj);
+#else
+	vm_object_pip_wakeupn(obj, 0);
+#endif
+	zfs_vmobject_wunlock_12(obj);
+	kmem_free(bvec, page_count * sizeof (*bvec));
+	if (yielded)
+		cb(arg);
 }
 
 /*
@@ -546,7 +585,7 @@ mappedread_sf(znode_t *zp, int nbytes, uio_t *uio)
 			zfs_vmobject_wunlock_12(obj);
 			va = zfs_map_page(pp, &sf);
 			error = dmu_read(os, zp->z_id, start, bytes, va,
-			    DMU_READ_PREFETCH);
+			    DMU_CTX_FLAG_PREFETCH);
 			if (bytes != PAGESIZE && error == 0)
 				bzero(va + bytes, PAGESIZE - bytes);
 			zfs_unmap_page(sf);
@@ -647,6 +686,258 @@ mappedread(znode_t *zp, int nbytes, uio_t *uio)
 	zfs_vmobject_wunlock_12(obj);
 	return (error);
 }
+
+#ifdef HAVE_UBOP
+int
+update_pages_async(znode_t *zp, int64_t start_, int len_, dnode_t *dn,
+    objset_t *os, uint64_t oid, callback_fn cb, void *arg)
+{
+	vm_object_t obj;
+	update_pages_async_state_t *state;
+	struct uio_bio *uio;
+	struct bio_vec *bv, *bvec;
+	int64_t start = start_;
+	off_t pend, pstart;
+	int off, page_count, len = len_;
+	int error, flags, uio_flags;
+
+	ASSERT(ZTOV(zp)->v_mount != NULL);
+	obj = ZTOV(zp)->v_object;
+	ASSERT(obj != NULL);
+	pstart = start &= PAGEMASK;
+	pend = (start + len + PAGEOFFSET) & PAGEMASK;
+	page_count = OFF_TO_IDX(pend - pstart);
+	state = kmem_zalloc(sizeof (*state), KM_SLEEP);
+	state->upas_obj = obj;
+	state->upas_cb = cb;
+	state->upas_arg = arg;
+
+	uio_flags = 0;
+	uio = kmem_zalloc(sizeof (*uio), KM_SLEEP);
+	state->upas_uio = uio;
+	bv = bvec = kmem_zalloc(page_count*sizeof (*bvec),
+	    KM_SLEEP);
+	uio->uio_bvec = bvec;
+	uio->uio_bv_cnt = page_count;
+	zfs_vmobject_wlock_12(obj);
+#if __FreeBSD_version >= 1300041
+	vm_object_pip_add(obj, 1);
+#endif
+	for (start &= PAGEMASK; len > 0; start += PAGESIZE, bv++) {
+		int nbytes = imin(PAGESIZE - off, len);
+
+		bv->bv_page = page_busy(obj, start, off, nbytes);
+		if (bv->bv_page == NULL)
+			uio_flags |= UIO_BIO_SPARSE;
+		bv->bv_len = nbytes;
+		bv->bv_offset = off;
+		len -= nbytes;
+		off = 0;
+	}
+	zfs_vmobject_wunlock_12(obj);
+
+	flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_ASYNC |
+	    DMU_CTX_FLAG_NO_HOLD | DMU_CTX_FLAG_PREFETCH;
+	uio->uio_flags = uio_flags;
+	error = dmu_ctx_init(&state->upas_dc, dn, os, oid, start_, len_,
+	    uio, FTAG, flags);
+	if (error)
+		goto out;
+	state->upas_dc.dc_data_transfer_cb = dmu_physmove;
+	dmu_ctx_set_complete_cb(&state->upas_dc,
+	    (dmu_ctx_cb_t)update_pages_async_epilogue);
+	error = dmu_issue(&state->upas_dc);
+	dmu_ctx_rele(&state->upas_dc);
+	if (error == 0 || error == EINPROGRESS) {
+		state->upas_yielded = B_TRUE;
+		return (EINPROGRESS);
+	}
+out:
+	update_pages_async_epilogue(state);
+	return (error);
+}
+
+boolean_t
+zp_has_cached_in_range(znode_t *zp, off_t start, ssize_t len)
+{
+	vnode_t *vp = ZTOV(zp);
+	vm_object_t obj;
+	vm_page_t pp;
+	boolean_t cached;
+
+	if (len == 0 || !vn_has_cached_data(vp))
+		return (B_FALSE);
+
+	obj = vp->v_object;
+	zfs_vmobject_rlock(obj);
+	pp = vm_radix_lookup_ge(&obj->rtree, OFF_TO_IDX(start));
+	cached = (pp != NULL) && (pp->pindex < OFF_TO_IDX(start + len));
+	zfs_vmobject_runlock(obj);
+	return (cached);
+}
+
+static void
+zfs_readholes_async_resume(void *arg)
+{
+	zfs_read_state_t *state = arg;
+	dnode_t		*dn = state->zrs_dn;
+	znode_t *zp = state->zrs_zp;
+	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	struct uio_bio *uiotmp, *uio = state->zrs_uio;
+	struct iovec *iov;
+	off_t offset;
+	int error, flags, index = 0;
+
+	if (state->zrs_dc.dc_err ||
+	    state->zrs_hole_index == state->zrs_hole_count) {
+		int free_size = ((uio->uio_bv_cnt + 1)/2) *
+		    sizeof (struct iovec);
+		kmem_free(state->zrs_holes, free_size);
+		kmem_free(state->zrs_uio_tmp, sizeof (*uio));
+		zfs_read_async_epilogue(state, state->zrs_dc.dc_err);
+		return;
+	}
+	uiotmp = state->zrs_uio_tmp;
+	if (uiotmp == NULL)  {
+		uiotmp = kmem_alloc(sizeof (*uio), KM_SLEEP);
+		state->zrs_uio_tmp = uiotmp;
+	}
+	memcpy(uiotmp, uio, sizeof (*uio));
+	iov = &state->zrs_holes[state->zrs_hole_index];
+	offset = (vm_offset_t)iov->iov_base;
+	index  = OFF_TO_IDX(offset - uio->uio_loffset);
+	uiotmp->uio_bvec = uio->uio_bvec + index;
+	uiotmp->uio_resid = iov->iov_len;
+	flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_ASYNC |
+	    DMU_CTX_FLAG_NO_HOLD | DMU_CTX_FLAG_PREFETCH;
+	error = dmu_ctx_init(&state->zrs_dc, dn, zfsvfs->z_os, zp->z_id,
+	    offset, uiotmp->uio_resid, uiotmp, FTAG, flags);
+	if (error)
+		goto out;
+	state->zrs_dc.dc_data_transfer_cb = dmu_physmove;
+	dmu_ctx_set_complete_cb(&state->zrs_dc,
+	    (dmu_ctx_cb_t)zfs_readholes_async_resume);
+	state->zrs_hole_index++;
+	error = dmu_issue(&state->zrs_dc);
+	dmu_ctx_rele(&state->zrs_dc);
+	if (error == 0 || error == EINPROGRESS)
+		return;
+out:
+	kmem_free(state->zrs_holes, ((uio->uio_bv_cnt + 1)/2) * sizeof (*iov));
+	if (state->zrs_uio_tmp)
+		kmem_free(state->zrs_uio_tmp, sizeof (*uio));
+	zfs_read_async_epilogue(state, error);
+}
+
+void
+zfs_mappedread_async(zfs_read_state_t *state)
+{
+	znode_t		*zp = state->zrs_zp;
+	struct uio_bio *uio = state->zrs_uio;
+	vnode_t *vp = ZTOV(zp);
+	vm_object_t *obj __maybe_unused = &vp->v_object;
+	struct sf_buf	*sf_src, *sf_dst;
+	struct iovec *holes;
+	int i, len, bytes, page_count, dstbytes;
+	int error, hole_count, hole_start, holes_size;
+	int src_off, dst_off;
+	int64_t start, pstart, pend;
+	struct bio_vec *bv;
+	caddr_t src, dst;
+	vm_page_t *ma;
+
+	ASSERT(vp->v_mount != NULL);
+
+	start = uio->uio_loffset;
+	len = MIN(uio->uio_resid, zp->z_size - start);
+	pstart = OFF_TO_IDX(start);
+	pend = OFF_TO_IDX((start + len + PAGEOFFSET) & PAGEMASK);
+	page_count = pend - pstart;
+	ma = kmem_zalloc(page_count*sizeof (vm_page_t), KM_SLEEP);
+	holes_size = ((uio->uio_bv_cnt + 1)/2) * sizeof (*holes);
+	holes = kmem_zalloc(holes_size, KM_SLEEP);
+	bv = uio->uio_bvec;
+	zfs_vmobject_wlock_12(obj);
+	for (i = 0; i < page_count; i++)
+		ma[i] = page_hold(vp, IDX_TO_OFF(pstart + i));
+	zfs_vmobject_wunlock_12(obj);
+	hole_count = i = 0;
+	src_off = start & PAGEOFFSET;
+	dst_off = 0;
+	hole_start = -1;
+	for (start &= PAGEMASK; len > 0; start += PAGESIZE, i++) {
+		bytes = MIN(PAGESIZE - src_off, len);
+		if (ma[i] == NULL) {
+			if (hole_start == -1) {
+				hole_start = i;
+				hole_count++;
+			}
+			holes[hole_count-1].iov_len += bytes;
+			if (hole_start == i)
+				holes[hole_count-1].iov_base = (caddr_t)start;
+			len -= bytes;
+			src_off = 0;
+			continue;
+		}
+		hole_start = -1;
+		dst = zfs_map_page(bv->bv_page, &sf_dst);
+		dst += (bv->bv_offset + dst_off);
+		src = zfs_map_page(ma[i], &sf_src) + src_off;
+		dstbytes = MIN(bytes, bv->bv_len - bv->bv_offset - dst_off);
+		ASSERT(dstbytes > 0);
+		memcpy(dst, src, dstbytes);
+		zfs_unmap_page(sf_dst);
+		if (bv->bv_offset + dst_off + dstbytes == bv->bv_len)
+			bv++;
+		dst_off = 0;
+		if (bytes > dstbytes) {
+			dst = zfs_map_page(bv->bv_page, &sf_dst);
+			dst += bv->bv_offset;
+			dst_off = bytes - dstbytes;
+			memcpy(dst, src + dstbytes, dst_off);
+			zfs_unmap_page(sf_dst);
+		}
+		zfs_unmap_page(sf_src);
+		len -= bytes;
+		src_off = 0;
+
+	}
+	zfs_vmobject_wlock_12(obj);
+	for (i = 0; i < page_count; i++) {
+		if (ma[i] != NULL)
+			page_unhold(ma[i]);
+	}
+	zfs_vmobject_wunlock_12(obj);
+	kmem_free(ma, sizeof (vm_page_t)*page_count);
+	if (hole_count == 0) {
+		kmem_free(holes, holes_size);
+		error = 0;
+		goto out;
+	}
+	state->zrs_holes = holes;
+	state->zrs_hole_count = hole_count;
+	zfs_readholes_async_resume(state);
+	return;
+out:
+	zfs_read_async_epilogue(state, error);
+}
+
+#ifndef _SYS_SYSPROTO_H_
+struct vop_ubop {
+	struct vop_generic_args a_gen;
+	struct vnode *a_vp;
+	struct uio_bio *a_uio;
+	int a_ioflag;
+};
+#endif
+
+static int
+zfs_freebsd_ubop(struct vop_ubop_args *ap)
+{
+
+	return (zfs_ubop(VTOZ(ap->a_vp), ap->a_uio, ap->a_ioflag));
+}
+#endif /* HAVE_UBOP */
 
 int
 zfs_write_simple(znode_t *zp, const void *data, size_t len,
@@ -5819,6 +6110,9 @@ struct vop_vector zfs_vnodeops = {
 #ifdef DIAGNOSTIC
 	.vop_lock1 =		zfs_lock,
 #endif
+#endif
+#ifdef HAVE_UBOP
+	.vop_ubop =	zfs_freebsd_ubop,
 #endif
 };
 VFS_VOP_VECTOR_REGISTER(zfs_vnodeops);
