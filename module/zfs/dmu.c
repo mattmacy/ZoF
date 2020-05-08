@@ -1640,10 +1640,8 @@ dmu_buf_set_process_io(dmu_buf_set_t *dbs)
 
 	/* Wait for async i/o. */
 	err = zio_wait(dbs->dbs_zio);
-	if (err) {
-		// dmu_buf_set_rele_array(dbs);
+	if (err)
 		return (err);
-	}
 	/* wait for other io to complete */
 	for (i = 0; i < dbs->dbs_count; i++) {
 		dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbs->dbs_dbp[i];
