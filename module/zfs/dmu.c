@@ -1710,7 +1710,7 @@ dmu_issue(dmu_ctx_t *dc)
 	 * At this point, either this I/O is async, or all buffer sets
 	 * have finished processing.
 	 */
-	ASSERT((dc->dc_flags & DMU_CTX_FLAG_ASYNC) ||
+	VERIFY((dc->dc_flags & DMU_CTX_FLAG_ASYNC) ||
 	    zfs_refcount_count(&dc->dc_holds) == 1);
 
 	/*
