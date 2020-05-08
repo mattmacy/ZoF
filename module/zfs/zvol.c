@@ -1755,33 +1755,6 @@ zvol_dmu_issue(zvol_dmu_state_t *zds)
 	dmu_ctx_rele(&zds->zds_dc);
 }
 
-int
-zvol_dmu_uio(zvol_dmu_state_t *zds, uio_t *uio, uint32_t dmu_flags)
-{
-	int err;
-
-	if (zds->zds_zv == NULL)
-		return (SET_ERROR(ENXIO));
-
-#if 0
-	if (zds->zv->zv_flags & ZVOL_DUMPIFIED)
-		return (zvol_physio(zds->zv, uio));
-#endif
-
-	/* Don't allow I/Os that are not within the volume. */
-	if (uio->uio_resid > 0 &&
-	    (uio->uio_loffset < 0 ||
-	    uio->uio_loffset >= zds->zds_zv->zv_volsize))
-		return (SET_ERROR(EIO));
-
-	err = zvol_dmu_ctx_init(zds, uio, uio->uio_loffset,
-	    uio->uio_resid, dmu_flags|DMU_CTX_FLAG_UIO, zvol_dmu_done);
-	if (err)
-		return (err);
-	zvol_dmu_issue(zds);
-	return (zds->zds_dc.dc_err);
-}
-
 void
 zvol_dmu_done(dmu_ctx_t *dc)
 {
@@ -1795,7 +1768,11 @@ zvol_dmu_done(dmu_ctx_t *dc)
 	    dc->dc_dn_offset > zv->zv_volsize)
 		dc->dc_err = zio_worst_error(dc->dc_err, SET_ERROR(EINVAL));
 
-	zfs_rangelock_exit(zds->zds_lr);
+	/*
+	 * Initialization failed
+	 */
+	if (zds->zds_lr != NULL)
+		zfs_rangelock_exit(zds->zds_lr);
 	rw_exit(&zv->zv_suspend_lock);
 }
 
