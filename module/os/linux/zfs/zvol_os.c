@@ -321,7 +321,7 @@ zvol_strategy_dmu_done(dmu_ctx_t *dc)
 	err = dc->dc_err;
 	reader = !!(dc->dc_flags & DMU_CTX_FLAG_READ);
 
-	if  (reader) {
+	if (reader) {
 		dataset_kstats_update_read_kstats(&zv->zv_zso->zvo_kstat, len);
 		task_io_account_read(len);
 	} else {

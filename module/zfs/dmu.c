@@ -709,7 +709,8 @@ dmu_buf_set_rele_array(dmu_buf_set_t *dbs)
 
 	for (i = 0; i < dbs->dbs_count; i++) {
 		if (dbs->dbs_dbp[i])
-			dbuf_rele((dmu_buf_impl_t *)dbs->dbs_dbp[i], dbs->dbs_dc->dc_tag);
+			dbuf_rele((dmu_buf_impl_t *)dbs->dbs_dbp[i],
+			    dbs->dbs_dc->dc_tag);
 	}
 
 }
