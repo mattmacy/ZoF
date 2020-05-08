@@ -104,7 +104,9 @@ dmu_buf_write_pages(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
 typedef struct dmu_read_pages_ctx {
 	dmu_ctx_t dc;
 	int *rahead;
-} dmu_read_pages_ctx;
+	int *rbehind;
+	int count;
+} dmu_read_pages_ctx_t;
 
 int
 dmu_write_pages(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
@@ -136,15 +138,19 @@ dmu_read_pages_buf_set_transfer(dmu_buf_set_t *dbs)
 	dmu_buf_t **dbp;
 	dmu_buf_t *db;
 	caddr_t va;
-	uint32_t dmu_flags;
 	int numbufs, i;
 	int bufoff, pgoff, tocpy;
-	int mi, di;
-	int err;
+	int mi, di, count;
+	int *rahead, *rbehind;
 	dmu_read_pages_ctx_t *drpc;
 
 	ma = (vm_page_t *)dbs->dbs_dc->dc_data_buf;
 	drpc = (dmu_read_pages_ctx_t *)dbs->dbs_dc;
+	rahead = drpc->rahead;
+	rbehind = drpc->rbehind;
+	count = drpc->count;
+	numbufs = dbs->dbs_count;
+	dbp = dbs->dbs_dbp;
 
 #ifdef DEBUG
 	if (dbp[0]->db_offset != 0 || numbufs > 1) {
@@ -309,7 +315,7 @@ dmu_read_pages_buf_set_transfer(dmu_buf_set_t *dbs)
 		dmu_page_unlock(m);
 		vm_page_do_sunbusy(m);
 	}
-	*drpc->rahead = i;
+	*rahead = i;
 	zfs_vmobject_wunlock_12(vmobj);
 }
 
@@ -317,7 +323,7 @@ int
 dmu_read_pages(objset_t *os, uint64_t object, vm_page_t *ma, int count,
     int *rbehind, int *rahead, int last_size)
 {
-	dmu_read_pages_ctx drpc;
+	dmu_read_pages_ctx_t drpc;
 	uint32_t dmu_flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_UIO;
 	int err;
 
@@ -326,6 +332,9 @@ dmu_read_pages(objset_t *os, uint64_t object, vm_page_t *ma, int count,
 #ifdef DEBUG
 	IMPLY(last_size < PAGE_SIZE, *rahead == 0);
 #endif
+	drpc.rbehind = rbehind;
+	drpc.rahead = rahead;
+	drpc.count = count;
 	err = dmu_ctx_init(&drpc.dc, /* dnode */ NULL, os,
 	    object, IDX_TO_OFF(ma[0]->pindex), IDX_TO_OFF(count -1) + last_size,
 	    ma, FTAG, dmu_flags);
@@ -335,5 +344,5 @@ dmu_read_pages(objset_t *os, uint64_t object, vm_page_t *ma, int count,
 	    dmu_read_pages_buf_set_transfer);
 	dmu_issue(&drpc.dc);
 	dmu_ctx_rele(&drpc.dc);
-	return (drpc.dc->dc_err);
+	return (drpc.dc.dc_err);
 }
