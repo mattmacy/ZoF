@@ -773,21 +773,6 @@ void dmu_buf_rele(dmu_buf_t *db, void *tag);
 uint64_t dmu_buf_refcount(dmu_buf_t *db);
 uint64_t dmu_buf_user_refcount(dmu_buf_t *db);
 
-/*
- * dmu_buf_hold_array holds the DMU buffers which contain all bytes in a
- * range of an object.  A pointer to an array of dmu_buf_t*'s is
- * returned (in *dbpp).
- *
- * dmu_buf_rele_array releases the hold on an array of dmu_buf_t*'s, and
- * frees the array.  The hold on the array of buffers MUST be released
- * with dmu_buf_rele_array.  You can NOT release the hold on each buffer
- * individually with dmu_buf_rele.
- */
-int dmu_buf_hold_array_by_bonus(dmu_buf_t *db, uint64_t offset,
-    uint64_t length, boolean_t read, void *tag,
-    int *numbufsp, dmu_buf_t ***dbpp);
-void dmu_buf_rele_array(dmu_buf_t **, int numbufs, void *tag);
-
 void dmu_buf_write_pages(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
 	uint64_t sz);
 
