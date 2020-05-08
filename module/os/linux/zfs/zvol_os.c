@@ -295,6 +295,73 @@ zvol_read(void *arg)
 	BIO_END_IO(bio, -error);
 	kmem_free(zvr, sizeof (zv_request_t));
 }
+/*
+ * Use another layer on top of zvol_dmu_state_t to provide additional
+ * context specific to zvol_freebsd_strategy(), namely, the bio and the done
+ * callback, which calls zvol_dmu_done, as is done for zvol_dmu_state_t.
+ */
+typedef struct zvol_strategy_state {
+	zvol_dmu_state_t zds;
+	zv_request_t *zr;
+	unsigned long start_jif;
+} zvol_strategy_state_t;
+
+static void
+zvol_strategy_dmu_done(dmu_ctx_t *dc)
+{
+	zvol_strategy_state_t *zss = (zvol_strategy_state_t *)dc;
+	zv_request_t *zr = zss->zr;
+	zvol_state_t *zv = zr->zv;
+	int64_t len;
+	int err;
+	boolean_t reader;
+
+	len = dc->dc_completed_size;
+	err = dc->dc_err;
+	reader = !!(dc->dc_flags & DMU_CTX_FLAG_READ);
+
+	if  (reader) {
+		dataset_kstats_update_read_kstats(&zv->zv_zso->zvo_kstat, len);
+		task_io_account_read(len);
+	} else {
+		dataset_kstats_update_write_kstats(&zv->zv_zso->zvo_kstat, len);
+		task_io_account_write(len);
+
+	}
+	zvol_dmu_done(dc);
+
+	blk_generic_end_io_acct(zv->zv_zso->zvo_queue, reader ? READ : WRITE,
+	    &zv->zv_zso->zvo_disk->part0, zss->start_jif);
+	BIO_END_IO(zr->bio, -err);
+	kmem_free(zr, sizeof (zv_request_t));
+	kmem_free(zss, sizeof (zvol_strategy_state_t));
+}
+
+static void
+zvol_strategy(zv_request_t *zr)
+{
+	zvol_strategy_state_t *zss;
+	uio_t uio = { { 0 }, 0 };
+	uint32_t dmu_flags = DMU_CTX_FLAG_ASYNC | DMU_CTX_FLAG_UIO;
+	int error;
+
+	uio_from_bio(&uio, zr->bio);
+	zss = kmem_zalloc(sizeof (zvol_strategy_state_t), KM_SLEEP);
+	zss->zr = zr;
+	zss->start_jif = jiffies;
+	zss->zds.zds_zv = zr->zv;
+
+	error = zvol_dmu_ctx_init(&zss->zds, &uio, uio.uio_loffset,
+	    uio.uio_resid, dmu_flags, zvol_strategy_dmu_done);
+	if (error) {
+		zss->zds.zds_dc.dc_err = error;
+		zvol_strategy_dmu_done(&zss->zds.zds_dc);
+		return;
+	}
+
+	/* Errors are reported via the callback. */
+	zvol_dmu_issue(&zss->zds);
+}
 
 static MAKE_REQUEST_FN_RET
 zvol_request(struct request_queue *q, struct bio *bio)
@@ -393,8 +460,7 @@ zvol_request(struct request_queue *q, struct bio *bio)
 			if (zvol_request_sync) {
 				zvol_write(zvr);
 			} else {
-				taskq_dispatch_ent(zvol_taskq,
-				    zvol_write, zvr, 0, &zvr->ent);
+				zvol_strategy(zvr);
 			}
 		}
 	} else {
@@ -419,8 +485,7 @@ zvol_request(struct request_queue *q, struct bio *bio)
 		if (zvol_request_sync) {
 			zvol_read(zvr);
 		} else {
-			taskq_dispatch_ent(zvol_taskq,
-			    zvol_read, zvr, 0, &zvr->ent);
+			zvol_strategy(zvr);
 		}
 	}
 
