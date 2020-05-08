@@ -768,7 +768,7 @@ dbuf_process_buf_sets_(dmu_buf_impl_t *db, int err, const char *function)
 	dmu_buf_set_node_t *dbsn, *next;
 	int count = 0;
 
-	ASSERT(db->db_buf != NULL || err);
+	//ASSERT(db->db_buf != NULL || err);
 	for (dbsn = list_head(&db->db_buf_sets); dbsn != NULL; dbsn = next) {
 		next = list_next(&db->db_buf_sets, dbsn);
 		dmu_buf_set_rele(dbsn->dbsn_dbs, err);
@@ -1317,9 +1317,10 @@ dbuf_read_bonus(dmu_buf_impl_t *db, dnode_t *dn, uint32_t flags)
 	int bonuslen, max_bonuslen, err;
 
 	err = dbuf_read_verify_dnode_crypt(db, flags);
-	if (err)
+	if (err) {
+		dbuf_process_buf_sets(db, /* err */ err);
 		return (err);
-
+	}
 	bonuslen = MIN(dn->dn_bonuslen, dn->dn_phys->dn_bonuslen);
 	max_bonuslen = DN_SLOTS_TO_BONUSLEN(dn->dn_num_slots);
 	ASSERT(MUTEX_HELD(&db->db_mtx));
