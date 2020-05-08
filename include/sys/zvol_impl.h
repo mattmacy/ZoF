@@ -99,7 +99,6 @@ int zvol_get_data(void *arg, lr_write_t *lr, char *buf, struct lwb *lwb,
 int zvol_dmu_ctx_init(zvol_dmu_state_t *zds, void *data, uint64_t off,
     uint64_t io_size, uint32_t dmu_flags, dmu_ctx_cb_t done_cb);
 void zvol_dmu_issue(zvol_dmu_state_t *zds);
-int zvol_dmu_uio(zvol_dmu_state_t *zds, uio_t *uio, uint32_t dmu_flags);
 void zvol_dmu_done(dmu_ctx_t *dmu_ctx);
 int zvol_init_impl(void);
 void zvol_fini_impl(void);
