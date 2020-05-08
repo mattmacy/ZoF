@@ -768,7 +768,7 @@ dbuf_process_buf_sets_(dmu_buf_impl_t *db, int err, const char *function)
 	dmu_buf_set_node_t *dbsn, *next;
 	int count = 0;
 
-	//ASSERT(db->db_buf != NULL || err);
+	// ASSERT(db->db_buf != NULL || err);
 	for (dbsn = list_head(&db->db_buf_sets); dbsn != NULL; dbsn = next) {
 		next = list_next(&db->db_buf_sets, dbsn);
 		dmu_buf_set_rele(dbsn->dbsn_dbs, err);
