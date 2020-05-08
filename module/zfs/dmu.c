@@ -699,6 +699,22 @@ dmu_buf_rele_array(dmu_buf_t **dbp_fake, int numbufs, void *tag)
 	kmem_free(dbp, sizeof (dmu_buf_t *) * numbufs);
 }
 
+void
+dmu_buf_set_rele_array(dmu_buf_set_t *dbs)
+{
+	int i;
+
+	if (dbs->dbs_count == 0)
+		return;
+
+	for (i = 0; i < dbs->dbs_count; i++) {
+		if (dbs->dbs_dbp[i])
+			dbuf_rele((dmu_buf_impl_t *)dbs->dbs_dbp[i], dbs->dbs_dc->dc_tag);
+	}
+
+}
+
+
 /*
  * Issue prefetch i/os for the given blocks.  If level is greater than 0, the
  * indirect blocks prefetched will be those that point to the blocks containing
@@ -1347,6 +1363,8 @@ dmu_buf_set_rele(dmu_buf_set_t *dbs, int err)
 	dmu_ctx_t *dmu_ctx = dbs->dbs_dc;
 	dmu_cb_state_t *dcs;
 
+	if (dbs == NULL)
+		return;
 	/* Report an error, if any. */
 	if (err)
 		dmu_buf_set_set_error(dbs, err);
@@ -1564,7 +1582,6 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	if (err  == 0) {
 		*buf_set_p = dbs;
 	} else {
-		ASSERT(0);
 		if (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ)
 			zfs_refcount_destroy_many(&dbs->dbs_holds, nblks + 1);
 		else
@@ -1622,9 +1639,10 @@ dmu_buf_set_process_io(dmu_buf_set_t *dbs)
 
 	/* Wait for async i/o. */
 	err = zio_wait(dbs->dbs_zio);
-	if (err)
+	if (err) {
+		dmu_buf_set_rele_array(dbs);
 		return (err);
-
+	}
 	/* wait for other io to complete */
 	for (i = 0; i < dbs->dbs_count; i++) {
 		dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbs->dbs_dbp[i];
@@ -1683,10 +1701,10 @@ dmu_issue(dmu_ctx_t *dc)
 		    dc->dc_dn_offset, dc->dc_resid, io_size);
 		err = dmu_buf_set_init(dc, &dbs, io_size);
 		/* Process the I/O requests, if the initialization passed. */
-		if (err == 0)
+		if (err == 0) {
 			err = dmu_buf_set_process_io(dbs);
-
-		dmu_buf_set_rele(dbs, err);
+			dmu_buf_set_rele(dbs, err);
+		}
 	}
 	/*
 	 * At this point, either this I/O is async, or all buffer sets
