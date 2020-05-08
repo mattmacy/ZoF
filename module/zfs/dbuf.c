@@ -1267,6 +1267,7 @@ dbuf_read_done(zio_t *zio, const zbookmark_phys_t *zb, const blkptr_t *bp,
     arc_buf_t *buf, void *vdb)
 {
 	dmu_buf_impl_t *db = vdb;
+	int err = 0;
 
 	mutex_enter(&db->db_mtx);
 	ASSERT3U(db->db_state, ==, DB_READ);
@@ -1283,6 +1284,7 @@ dbuf_read_done(zio_t *zio, const zbookmark_phys_t *zb, const blkptr_t *bp,
 		ASSERT3P(db->db_buf, ==, NULL);
 		db->db_state = DB_UNCACHED;
 		DTRACE_SET_STATE(db, "i/o error");
+		err = EIO;
 	} else if (db->db_level == 0 && db->db_freed_in_flight) {
 		/* freed in flight */
 		ASSERT(zio == NULL || zio->io_error == 0);
@@ -1292,16 +1294,15 @@ dbuf_read_done(zio_t *zio, const zbookmark_phys_t *zb, const blkptr_t *bp,
 		db->db_freed_in_flight = FALSE;
 		dbuf_set_data(db, buf);
 		db->db_state = DB_CACHED;
-		dbuf_process_buf_sets(db, /* err */ 0);
 		DTRACE_SET_STATE(db, "freed in flight");
 	} else {
 		/* success */
 		ASSERT(zio == NULL || zio->io_error == 0);
 		dbuf_set_data(db, buf);
 		db->db_state = DB_CACHED;
-		dbuf_process_buf_sets(db, /* err */ 0);
 		DTRACE_SET_STATE(db, "successful read");
 	}
+	dbuf_process_buf_sets(db, err);
 	cv_broadcast(&db->db_changed);
 	dbuf_rele_and_unlock(db, NULL, B_FALSE);
 }
@@ -1332,7 +1333,6 @@ dbuf_read_bonus(dmu_buf_impl_t *db, dnode_t *dn, uint32_t flags)
 		bcopy(DN_BONUS(dn->dn_phys), db->db.db_data, bonuslen);
 	db->db_state = DB_CACHED;
 	/* XXX does this belong here ? */
-	dbuf_process_buf_sets(db, /* err */ 0);
 	DTRACE_SET_STATE(db, "bonus buffer filled");
 	return (0);
 }
@@ -1547,7 +1547,7 @@ dbuf_read_impl(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags,
 	return (err);
 early_unlock:
 	DB_DNODE_EXIT(db);
-	dbuf_process_buf_sets(db, err);
+	dbuf_process_buf_sets(db, err ? err : -1);
 	mutex_exit(&db->db_mtx);
 	dmu_buf_unlock_parent(db, dblt, tag);
 	return (err);
