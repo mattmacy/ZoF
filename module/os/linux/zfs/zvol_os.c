@@ -303,6 +303,7 @@ typedef struct zvol_strategy_state {
 	zvol_dmu_state_t zds;
 	zv_request_t *zr;
 	unsigned long start_jif;
+	uio_t uio;
 } zvol_strategy_state_t;
 
 static void
@@ -340,18 +341,39 @@ static void
 zvol_strategy(zv_request_t *zr)
 {
 	zvol_strategy_state_t *zss;
-	uio_t uio = { { 0 }, 0 };
+	zvol_state_t *zv = zr->zv;
+	uio_t *uio;
 	uint32_t dmu_flags = DMU_CTX_FLAG_ASYNC | DMU_CTX_FLAG_UIO;
-	int error;
+	struct bio *bio = zr->bio;
+	int rw, error;
 
-	uio_from_bio(&uio, zr->bio);
+	if (bio_is_flush(bio))
+		zil_commit(zv->zv_zilog, ZVOL_OBJ);
+
+	/* Some requests are just for flush and nothing else. */
+	if (BIO_BI_SIZE(bio) == 0) {
+		rw_exit(&zv->zv_suspend_lock);
+		BIO_END_IO(bio, 0);
+		kmem_free(zr,  sizeof (zv_request_t));
+		return;
+	}
+
+	rw = bio_data_dir(bio);
+	if (rw == READ)
+		dmu_flags |= DMU_CTX_FLAG_READ;
+
+	blk_generic_start_io_acct(zv->zv_zso->zvo_queue, rw,
+	    bio_sectors(bio), &zv->zv_zso->zvo_disk->part0);
+
 	zss = kmem_zalloc(sizeof (zvol_strategy_state_t), KM_SLEEP);
 	zss->zr = zr;
 	zss->start_jif = jiffies;
 	zss->zds.zds_zv = zr->zv;
+	uio = &zss->uio;
+	uio_from_bio(uio, zr->bio);
 
-	error = zvol_dmu_ctx_init(&zss->zds, &uio, uio.uio_loffset,
-	    uio.uio_resid, dmu_flags, zvol_strategy_dmu_done);
+	error = zvol_dmu_ctx_init(&zss->zds, uio, uio->uio_loffset,
+	    uio->uio_resid, dmu_flags, zvol_strategy_dmu_done);
 	if (error) {
 		zss->zds.zds_dc.dc_err = error;
 		zvol_strategy_dmu_done(&zss->zds.zds_dc);
