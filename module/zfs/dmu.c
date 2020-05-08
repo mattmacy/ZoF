@@ -546,177 +546,6 @@ dmu_spill_hold_by_bonus(dmu_buf_t *bonus, uint32_t flags, void *tag,
 }
 
 /*
- * Note: longer-term, we should modify all of the dmu_buf_*() interfaces
- * to take a held dnode rather than <os, object> -- the lookup is wasteful,
- * and can induce severe lock contention when writing to several files
- * whose dnodes are in the same block.
- */
-int
-dmu_buf_hold_array_by_dnode(dnode_t *dn, uint64_t offset, uint64_t length,
-    boolean_t read, void *tag, int *numbufsp, dmu_buf_t ***dbpp, uint32_t flags)
-{
-	dmu_buf_t **dbp;
-	uint64_t blkid, nblks, i;
-	uint32_t dbuf_flags;
-	int err;
-	zio_t *zio;
-
-	ASSERT(length <= DMU_MAX_ACCESS);
-
-	/*
-	 * Note: We directly notify the prefetch code of this read, so that
-	 * we can tell it about the multi-block read.  dbuf_read() only knows
-	 * about the one block it is accessing.
-	 */
-	dbuf_flags = DB_RF_CANFAIL | DB_RF_NEVERWAIT | DB_RF_HAVESTRUCT |
-	    DB_RF_NOPREFETCH;
-
-	rw_enter(&dn->dn_struct_rwlock, RW_READER);
-	if (dn->dn_datablkshift) {
-		int blkshift = dn->dn_datablkshift;
-		nblks = (P2ROUNDUP(offset + length, 1ULL << blkshift) -
-		    P2ALIGN(offset, 1ULL << blkshift)) >> blkshift;
-	} else {
-		if (offset + length > dn->dn_datablksz) {
-			zfs_panic_recover("zfs: accessing past end of object "
-			    "%llx/%llx (size=%u access=%llu+%llu)",
-			    (longlong_t)dn->dn_objset->
-			    os_dsl_dataset->ds_object,
-			    (longlong_t)dn->dn_object, dn->dn_datablksz,
-			    (longlong_t)offset, (longlong_t)length);
-			rw_exit(&dn->dn_struct_rwlock);
-			return (SET_ERROR(EIO));
-		}
-		nblks = 1;
-	}
-	dbp = kmem_zalloc(sizeof (dmu_buf_t *) * nblks, KM_SLEEP);
-
-	zio = zio_root(dn->dn_objset->os_spa, NULL, NULL, ZIO_FLAG_CANFAIL);
-	blkid = dbuf_whichblock(dn, 0, offset);
-	for (i = 0; i < nblks; i++) {
-		dmu_buf_impl_t *db = dbuf_hold(dn, blkid + i, tag);
-		if (db == NULL) {
-			rw_exit(&dn->dn_struct_rwlock);
-			dmu_buf_rele_array(dbp, nblks, tag);
-			zio_nowait(zio);
-			return (SET_ERROR(EIO));
-		}
-
-		/* initiate async i/o */
-		if (read)
-			(void) dbuf_read(db, zio, dbuf_flags);
-		dbp[i] = &db->db;
-	}
-
-	if ((flags & DMU_CTX_FLAG_PREFETCH) &&
-	    DNODE_META_IS_CACHEABLE(dn) && length <= zfetch_array_rd_sz) {
-		dmu_zfetch(&dn->dn_zfetch, blkid, nblks,
-		    read && DNODE_IS_CACHEABLE(dn), B_TRUE);
-	}
-	rw_exit(&dn->dn_struct_rwlock);
-
-	/* wait for async i/o */
-	err = zio_wait(zio);
-	if (err) {
-		dmu_buf_rele_array(dbp, nblks, tag);
-		return (err);
-	}
-
-	/* wait for other io to complete */
-	if (read) {
-		for (i = 0; i < nblks; i++) {
-			dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbp[i];
-			mutex_enter(&db->db_mtx);
-			while (db->db_state == DB_READ ||
-			    db->db_state == DB_FILL)
-				cv_wait(&db->db_changed, &db->db_mtx);
-			if (db->db_state == DB_UNCACHED)
-				err = SET_ERROR(EIO);
-			mutex_exit(&db->db_mtx);
-			if (err) {
-				dmu_buf_rele_array(dbp, nblks, tag);
-				return (err);
-			}
-		}
-	}
-
-	*numbufsp = nblks;
-	*dbpp = dbp;
-	return (0);
-}
-
-static int
-dmu_buf_hold_array(objset_t *os, uint64_t object, uint64_t offset,
-    uint64_t length, int read, void *tag, int *numbufsp, dmu_buf_t ***dbpp)
-{
-	dnode_t *dn;
-	int err;
-
-	err = dnode_hold(os, object, FTAG, &dn);
-	if (err)
-		return (err);
-
-	err = dmu_buf_hold_array_by_dnode(dn, offset, length, read, tag,
-	    numbufsp, dbpp, DMU_CTX_FLAG_PREFETCH);
-
-	dnode_rele(dn, FTAG);
-
-	return (err);
-}
-
-int
-dmu_buf_hold_array_by_bonus(dmu_buf_t *db_fake, uint64_t offset,
-    uint64_t length, boolean_t read, void *tag, int *numbufsp,
-    dmu_buf_t ***dbpp)
-{
-	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
-	dnode_t *dn;
-	int err;
-
-	DB_DNODE_ENTER(db);
-	dn = DB_DNODE(db);
-	err = dmu_buf_hold_array_by_dnode(dn, offset, length, read, tag,
-	    numbufsp, dbpp, DMU_CTX_FLAG_PREFETCH);
-	DB_DNODE_EXIT(db);
-
-	return (err);
-}
-
-void
-dmu_buf_rele_array(dmu_buf_t **dbp_fake, int numbufs, void *tag)
-{
-	int i;
-	dmu_buf_impl_t **dbp = (dmu_buf_impl_t **)dbp_fake;
-
-	if (numbufs == 0)
-		return;
-
-	for (i = 0; i < numbufs; i++) {
-		if (dbp[i])
-			dbuf_rele(dbp[i], tag);
-	}
-
-	kmem_free(dbp, sizeof (dmu_buf_t *) * numbufs);
-}
-
-void
-dmu_buf_set_rele_array(dmu_buf_set_t *dbs)
-{
-	int i;
-
-	if (dbs->dbs_count == 0)
-		return;
-
-	for (i = 0; i < dbs->dbs_count; i++) {
-		if (dbs->dbs_dbp[i])
-			dbuf_rele((dmu_buf_impl_t *)dbs->dbs_dbp[i],
-			    dbs->dbs_dc->dc_tag);
-	}
-
-}
-
-
-/*
  * Issue prefetch i/os for the given blocks.  If level is greater than 0, the
  * indirect blocks prefetched will be those that point to the blocks containing
  * the data starting at offset, and continuing to offset + len.
@@ -2018,18 +1847,39 @@ dmu_write_embedded(objset_t *os, uint64_t object, uint64_t offset,
 	dmu_buf_rele(db, FTAG);
 }
 
+typedef struct dmu_redact_cb_ctx {
+	dmu_ctx_t dc;
+	dmu_tx_t *tx;
+} dmu_redact_cb_ctx_t;
+
+static void
+dmu_redact_cb(dmu_buf_set_t *dbs)
+{
+	dmu_buf_t **dbp;
+	int numbufs, i;
+	dmu_redact_cb_ctx_t *ctx;
+
+	dbp = dbs->dbs_dbp;
+	numbufs = dbs->dbs_count;
+	ctx = (dmu_redact_cb_ctx_t *)dbs->dbs_dc;
+
+	for (i = 0; i < numbufs; i++)
+		dmu_buf_redact(dbp[i], ctx->tx);
+}
+
 void
 dmu_redact(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
     dmu_tx_t *tx)
 {
-	int numbufs, i;
-	dmu_buf_t **dbp;
+	dmu_redact_cb_ctx_t ctx;
+	uint32_t dmu_flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_UIO;
 
-	VERIFY0(dmu_buf_hold_array(os, object, offset, size, FALSE, FTAG,
-	    &numbufs, &dbp));
-	for (i = 0; i < numbufs; i++)
-		dmu_buf_redact(dbp[i], tx);
-	dmu_buf_rele_array(dbp, numbufs, FTAG);
+	ctx.tx = tx;
+	VERIFY0(dmu_ctx_init(&ctx.dc, /* dnode */ NULL, os,
+	    object, offset, size, NULL, FTAG, dmu_flags));
+	dmu_ctx_set_buf_set_transfer_cb(&ctx.dc, dmu_redact_cb);
+	dmu_issue(&ctx.dc);
+	dmu_ctx_rele(&ctx.dc);
 }
 
 #ifdef HAVE_UIO_ZEROCOPY
@@ -2159,127 +2009,6 @@ dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 	    DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_NO_HOLD));
 }
 
-
-#ifdef _KERNEL
-
-#if 0
-/*
- * XXX
- * Restore this code until we can figure out why the dmu_ctx
- * read path doesn't always yield the right result.
- */
-
-int
-dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
-{
-	dmu_buf_t **dbp;
-	int numbufs, i, err;
-#ifdef HAVE_UIO_ZEROCOPY
-	xuio_t *xuio = NULL;
-#endif
-
-	/*
-	 * NB: we could do this block-at-a-time, but it's nice
-	 * to be reading in parallel.
-	 */
-	err = dmu_buf_hold_array_by_dnode(dn, uio_offset(uio), size,
-	    TRUE, FTAG, &numbufs, &dbp, 0);
-	if (err)
-		return (err);
-
-	for (i = 0; i < numbufs; i++) {
-		uint64_t tocpy;
-		int64_t bufoff;
-		dmu_buf_t *db = dbp[i];
-
-		ASSERT(size > 0);
-
-		bufoff = uio_offset(uio) - db->db_offset;
-		tocpy = MIN(db->db_size - bufoff, size);
-
-#ifdef HAVE_UIO_ZEROCOPY
-		if (xuio) {
-			dmu_buf_impl_t *dbi = (dmu_buf_impl_t *)db;
-			arc_buf_t *dbuf_abuf = dbi->db_buf;
-			arc_buf_t *abuf = dbuf_loan_arcbuf(dbi);
-			err = dmu_xuio_add(xuio, abuf, bufoff, tocpy);
-			if (!err)
-				uio_advance(uio, tocpy);
-
-			if (abuf == dbuf_abuf)
-				XUIOSTAT_BUMP(xuiostat_rbuf_nocopy);
-			else
-				XUIOSTAT_BUMP(xuiostat_rbuf_copied);
-		} else
-#endif
-			err = dmu_uiomove((char *)db->db_data + bufoff, tocpy,
-			    UIO_READ, uio);
-		if (err)
-			break;
-
-		size -= tocpy;
-	}
-	dmu_buf_rele_array(dbp, numbufs, FTAG);
-
-	return (err);
-}
-#endif
-int
-dmu_write_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size, dmu_tx_t *tx)
-{
-	dmu_buf_t **dbp;
-	int numbufs;
-	int err = 0;
-	int i;
-
-	err = dmu_buf_hold_array_by_dnode(dn, uio_offset(uio), size,
-	    FALSE, FTAG, &numbufs, &dbp, DMU_CTX_FLAG_PREFETCH);
-	if (err)
-		return (err);
-
-	for (i = 0; i < numbufs; i++) {
-		uint64_t tocpy;
-		int64_t bufoff;
-		dmu_buf_t *db = dbp[i];
-
-		ASSERT(size > 0);
-
-		bufoff = uio_offset(uio) - db->db_offset;
-		tocpy = MIN(db->db_size - bufoff, size);
-
-		ASSERT(i == 0 || i == numbufs-1 || tocpy == db->db_size);
-
-		if (tocpy == db->db_size)
-			dmu_buf_will_fill(db, tx);
-		else
-			dmu_buf_will_dirty(db, tx);
-
-		/*
-		 * XXX uiomove could block forever (eg.nfs-backed
-		 * pages).  There needs to be a uiolockdown() function
-		 * to lock the pages in memory, so that uiomove won't
-		 * block.
-		 */
-		err = dmu_uiomove((char *)db->db_data + bufoff, tocpy,
-		    UIO_WRITE, uio);
-		if (tocpy == db->db_size)
-			dmu_buf_fill_done(db, tx);
-
-		if (err)
-			break;
-
-		size -= tocpy;
-	}
-
-	dmu_buf_rele_array(dbp, numbufs, FTAG);
-	return (err);
-}
-#else
-
-
-#endif /* !_KERNEL */
-
-
 /*
  * Read 'size' bytes into the uio buffer.
  * From object zdb->db_object.
@@ -2323,6 +2052,16 @@ dmu_read_uio(objset_t *os, uint64_t object, uio_t *uio, uint64_t size)
 	    DMU_CTX_FLAG_UIO));
 }
 
+int
+dmu_write_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size, dmu_tx_t *tx)
+{
+
+	if (size == 0)
+		return (0);
+
+	return (dmu_write_impl(dn, NULL, 0, uio->uio_loffset, size, uio, tx,
+	    DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_NO_HOLD));
+}
 /*
  * Write 'size' bytes from the uio buffer.
  * To object zdb->db_object.
@@ -3261,8 +3000,6 @@ dmu_fini(void)
 
 EXPORT_SYMBOL(dmu_bonus_hold);
 EXPORT_SYMBOL(dmu_bonus_hold_by_dnode);
-EXPORT_SYMBOL(dmu_buf_hold_array_by_bonus);
-EXPORT_SYMBOL(dmu_buf_rele_array);
 EXPORT_SYMBOL(dmu_prefetch);
 EXPORT_SYMBOL(dmu_free_range);
 EXPORT_SYMBOL(dmu_free_long_range);
