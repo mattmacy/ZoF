@@ -1796,6 +1796,7 @@ zvol_dmu_done(dmu_ctx_t *dc)
 		dc->dc_err = zio_worst_error(dc->dc_err, SET_ERROR(EINVAL));
 
 	zfs_rangelock_exit(zds->zds_lr);
+	rw_exit(&zv->zv_suspend_lock);
 }
 
 int
