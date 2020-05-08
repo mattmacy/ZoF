@@ -487,7 +487,25 @@ zvol_geom_worker(void *arg)
 			continue;
 		}
 		mtx_unlock(&zsg->zsg_queue_mtx);
-		zvol_geom_bio_strategy(bp);
+		rw_enter(&zv->zv_suspend_lock, ZVOL_RW_READER);
+		zvol_geom_bio_check_zilog(bp);
+		switch (bp->bio_cmd) {
+			case BIO_FLUSH:
+				zil_commit(zv->zv_zilog, ZVOL_OBJ);
+				g_io_deliver(bp, 0);
+				break;
+			case BIO_READ:
+			case BIO_WRITE:
+				zvol_geom_bio_readwrite(zv, bp);
+				break;
+			case BIO_DELETE:
+				zvol_geom_bio_delete(zv, bp);
+				break;
+			default:
+				g_io_deliver(bp, EOPNOTSUPP);
+				break;
+		}
+		rw_exit(&zv->zv_suspend_lock);
 	}
 }
 
@@ -674,10 +692,12 @@ zvol_geom_bio_readwrite(zvol_state_t *zv, struct bio *bp)
 	zss->bp = bp;
 	zss->zds.zds_zv = zv;
 
+	rw_enter(&zv->zv_suspend_lock, ZVOL_RW_READER);
 	error = zvol_dmu_ctx_init(&zss->zds, bp->bio_data, bp->bio_offset,
 	    bp->bio_length, dmu_flags, zvol_strategy_dmu_done);
 	if (error) {
 		kmem_free(zss, sizeof (zvol_strategy_state_t));
+		rw_exit(&zv->zv_suspend_lock);
 		zvol_done(bp, ENXIO);
 		return;
 	}
