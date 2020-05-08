@@ -75,25 +75,6 @@ __FBSDID("$FreeBSD$");
 #define	dmu_page_unlock(m)
 #endif
 
-static int
-dmu_buf_hold_array(objset_t *os, uint64_t object, uint64_t offset,
-    uint64_t length, int read, void *tag, int *numbufsp, dmu_buf_t ***dbpp)
-{
-	dnode_t *dn;
-	int err;
-
-	err = dnode_hold(os, object, FTAG, &dn);
-	if (err)
-		return (err);
-
-	err = dmu_buf_hold_array_by_dnode(dn, offset, length, read, tag,
-	    numbufsp, dbpp, DMU_CTX_FLAG_PREFETCH);
-
-	dnode_rele(dn, FTAG);
-
-	return (err);
-}
-
 void
 dmu_buf_write_pages(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
     uint64_t sz)
@@ -120,6 +101,11 @@ dmu_buf_write_pages(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
 	}
 }
 
+typedef struct dmu_read_pages_ctx {
+	dmu_ctx_t dc;
+	int *rahead;
+} dmu_read_pages_ctx;
+
 int
 dmu_write_pages(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
     vm_page_t *ma, dmu_tx_t *tx)
@@ -141,32 +127,26 @@ dmu_write_pages(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 	return (err);
 }
 
-
-int
-dmu_read_pages(objset_t *os, uint64_t object, vm_page_t *ma, int count,
-    int *rbehind, int *rahead, int last_size)
+static void
+dmu_read_pages_buf_set_transfer(dmu_buf_set_t *dbs)
 {
 	struct sf_buf *sf;
 	vm_object_t vmobj;
-	vm_page_t m;
+	vm_page_t m, *ma;
 	dmu_buf_t **dbp;
 	dmu_buf_t *db;
 	caddr_t va;
+	uint32_t dmu_flags;
 	int numbufs, i;
 	int bufoff, pgoff, tocpy;
 	int mi, di;
 	int err;
+	dmu_read_pages_ctx_t *drpc;
 
-	ASSERT3U(ma[0]->pindex + count - 1, ==, ma[count - 1]->pindex);
-	ASSERT(last_size <= PAGE_SIZE);
-
-	err = dmu_buf_hold_array(os, object, IDX_TO_OFF(ma[0]->pindex),
-	    IDX_TO_OFF(count - 1) + last_size, TRUE, FTAG, &numbufs, &dbp);
-	if (err != 0)
-		return (err);
+	ma = (vm_page_t *)dbs->dbs_dc->dc_data_buf;
+	drpc = (dmu_read_pages_ctx_t *)dbs->dbs_dc;
 
 #ifdef DEBUG
-	IMPLY(last_size < PAGE_SIZE, *rahead == 0);
 	if (dbp[0]->db_offset != 0 || numbufs > 1) {
 		for (i = 0; i < numbufs; i++) {
 			ASSERT(ISP2(dbp[i]->db_size));
@@ -329,9 +309,31 @@ dmu_read_pages(objset_t *os, uint64_t object, vm_page_t *ma, int count,
 		dmu_page_unlock(m);
 		vm_page_do_sunbusy(m);
 	}
-	*rahead = i;
+	*drpc->rahead = i;
 	zfs_vmobject_wunlock_12(vmobj);
+}
 
-	dmu_buf_rele_array(dbp, numbufs, FTAG);
-	return (0);
+int
+dmu_read_pages(objset_t *os, uint64_t object, vm_page_t *ma, int count,
+    int *rbehind, int *rahead, int last_size)
+{
+	dmu_read_pages_ctx drpc;
+	uint32_t dmu_flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_UIO;
+	int err;
+
+	ASSERT3U(ma[0]->pindex + count - 1, ==, ma[count - 1]->pindex);
+	ASSERT(last_size <= PAGE_SIZE);
+#ifdef DEBUG
+	IMPLY(last_size < PAGE_SIZE, *rahead == 0);
+#endif
+	err = dmu_ctx_init(&drpc.dc, /* dnode */ NULL, os,
+	    object, IDX_TO_OFF(ma[0]->pindex), IDX_TO_OFF(count -1) + last_size,
+	    ma, FTAG, dmu_flags);
+	if (err != 0)
+		return (err);
+	dmu_ctx_set_buf_set_transfer_cb(&drpc.dc,
+	    dmu_read_pages_buf_set_transfer);
+	dmu_issue(&drpc.dc);
+	dmu_ctx_rele(&drpc.dc);
+	return (drpc.dc->dc_err);
 }
