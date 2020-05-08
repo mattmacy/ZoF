@@ -1547,7 +1547,8 @@ dbuf_read_impl(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags,
 	return (err);
 early_unlock:
 	DB_DNODE_EXIT(db);
-	dbuf_process_buf_sets(db, err ? err : -1);
+	if (err || db->db_buf != NULL)
+		dbuf_process_buf_sets(db, err);
 	mutex_exit(&db->db_mtx);
 	dmu_buf_unlock_parent(db, dblt, tag);
 	return (err);
