@@ -1332,6 +1332,8 @@ dbuf_read_bonus(dmu_buf_impl_t *db, dnode_t *dn, uint32_t flags)
 	if (bonuslen)
 		bcopy(DN_BONUS(dn->dn_phys), db->db.db_data, bonuslen);
 	db->db_state = DB_CACHED;
+	/* XXX does this belong here ? */
+	dbuf_process_buf_sets(db, /* err */ 0);
 	DTRACE_SET_STATE(db, "bonus buffer filled");
 	return (0);
 }
