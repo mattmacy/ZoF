@@ -163,6 +163,7 @@ SYSCTL_INT(_vfs_zfs_vol, OID_AUTO, unmap_enabled, CTLFLAG_RWTUN,
 int zvol_maxphys = DMU_MAX_ACCESS / 2;
 
 static void zvol_ensure_zilog(zvol_state_t *zv);
+static void zvol_ensure_zilog_async(zvol_state_t *zv);
 
 static d_open_t		zvol_cdev_open;
 static d_close_t	zvol_cdev_close;
@@ -464,11 +465,21 @@ zvol_geom_access(struct g_provider *pp, int acr, int acw, int ace)
 }
 
 static void
+zvol_done(struct bio *bp, int err)
+{
+	if (bp->bio_to)
+		g_io_deliver(bp, err);
+	else
+		biofinish(bp, NULL, err);
+}
+
+static void
 zvol_geom_worker(void *arg)
 {
 	zvol_state_t *zv = arg;
 	struct zvol_state_geom *zsg = &zv->zv_zso->zso_geom;
 	struct bio *bp;
+	int err;
 
 	ASSERT(zv->zv_zso->zso_volmode == ZFS_VOLMODE_GEOM);
 
@@ -491,25 +502,30 @@ zvol_geom_worker(void *arg)
 			continue;
 		}
 		mtx_unlock(&zsg->zsg_queue_mtx);
-		rw_enter(&zv->zv_suspend_lock, ZVOL_RW_READER);
-		zvol_geom_bio_check_zilog(bp);
 		switch (bp->bio_cmd) {
-			case BIO_FLUSH:
-				zil_commit(zv->zv_zilog, ZVOL_OBJ);
-				g_io_deliver(bp, 0);
-				break;
 			case BIO_READ:
 			case BIO_WRITE:
 				zvol_geom_bio_readwrite(zv, bp);
+				continue;
+			default:
+				break;
+		}
+		rw_enter(&zv->zv_suspend_lock, ZVOL_RW_READER);
+		zvol_geom_bio_check_zilog(bp);
+		err = 0;
+		switch (bp->bio_cmd) {
+			case BIO_FLUSH:
+				zil_commit(zv->zv_zilog, ZVOL_OBJ);
 				break;
 			case BIO_DELETE:
-				zvol_geom_bio_delete(zv, bp);
+				err = zvol_geom_bio_delete(zv, bp);
 				break;
 			default:
-				g_io_deliver(bp, EOPNOTSUPP);
+				err = EOPNOTSUPP;
 				break;
 		}
 		rw_exit(&zv->zv_suspend_lock);
+		zvol_done(bp, err);
 	}
 }
 
@@ -519,6 +535,7 @@ zvol_geom_bio_start(struct bio *bp)
 	zvol_state_t *zv = bp->bio_to->private;
 	struct zvol_state_geom *zsg = &zv->zv_zso->zso_geom;
 	boolean_t first;
+	int err = 0;
 
 	if (bp->bio_cmd == BIO_GETATTR) {
 		if (zvol_geom_bio_getattr(bp))
@@ -535,8 +552,30 @@ zvol_geom_bio_start(struct bio *bp)
 			wakeup_one(&zsg->zsg_queue);
 		return;
 	}
+	switch (bp->bio_cmd) {
+	case BIO_READ:
+	case BIO_WRITE:
+		zvol_geom_bio_readwrite(zv, bp);
+		return;
+	default:
+		;
+	}
+	rw_enter(&zv->zv_suspend_lock, ZVOL_RW_READER);
+	zvol_geom_bio_check_zilog(bp);
+	switch (bp->bio_cmd) {
+	case BIO_FLUSH:
+		zil_commit(zv->zv_zilog, ZVOL_OBJ);
+		break;
+	case BIO_DELETE:
+		err = zvol_geom_bio_delete(zv, bp);
+		break;
+	default:
+		err = EOPNOTSUPP;
+		break;
+	}
+	rw_exit(&zv->zv_suspend_lock);
+	g_io_deliver(bp, err);
 
-	zvol_geom_bio_strategy(bp);
 }
 
 static int
@@ -592,15 +631,6 @@ zvol_geom_bio_check_zilog(struct bio *bp)
 	default:
 		break;
 	}
-}
-
-static void
-zvol_done(struct bio *bp, int err)
-{
-	if (bp->bio_to)
-		g_io_deliver(bp, err);
-	else
-		biofinish(bp, NULL, err);
 }
 
 static int
@@ -696,12 +726,12 @@ zvol_geom_bio_readwrite(zvol_state_t *zv, struct bio *bp)
 	zss->bp = bp;
 	zss->zds.zds_zv = zv;
 
-	rw_enter(&zv->zv_suspend_lock, ZVOL_RW_READER);
+	zvol_ensure_zilog_async(zv);
 	error = zvol_dmu_ctx_init(&zss->zds, bp->bio_data, bp->bio_offset,
 	    bp->bio_length, dmu_flags, zvol_strategy_dmu_done);
 	if (error) {
 		kmem_free(zss, sizeof (zvol_strategy_state_t));
-		rw_exit(&zv->zv_suspend_lock);
+		atomic_dec(&zv->zv_suspend_ref);
 		zvol_done(bp, ENXIO);
 		return;
 	}
@@ -731,24 +761,26 @@ zvol_geom_bio_strategy(struct bio *bp)
 		zvol_done(bp, SET_ERROR(EROFS));
 		return;
 	}
-
 	switch (bp->bio_cmd) {
 	case BIO_READ:
 	case BIO_WRITE:
 		zvol_geom_bio_readwrite(zv, bp);
-		/* ASYNC */
 		return;
-		break;
+	default:
+			;
+	}
+	rw_enter(&zv->zv_suspend_lock, ZVOL_RW_READER);
+	switch (bp->bio_cmd) {
 	case BIO_DELETE:
 		error = zvol_geom_bio_delete(zv, bp);
 		break;
 	case BIO_FLUSH:
 		zil_commit(zv->zv_zilog, ZVOL_OBJ);
-		error = 0;
 		break;
 	default:
-		;
+		error = EOPNOTSUPP;
 	}
+	rw_exit(&zv->zv_suspend_lock);
 	zvol_done(bp, error);
 }
 
@@ -1155,6 +1187,20 @@ zvol_ensure_zilog(zvol_state_t *zv)
 			zv->zv_flags |= ZVOL_WRITTEN_TO;
 		}
 		rw_downgrade(&zv->zv_suspend_lock);
+	}
+}
+
+static void
+zvol_ensure_zilog_async(zvol_state_t *zv)
+{
+	if (zv->zv_zilog == NULL) {
+		rw_enter(&zv->zv_suspend_lock, RW_WRITER);
+		if (zv->zv_zilog == NULL) {
+			zv->zv_zilog = zil_open(zv->zv_objset,
+			    zvol_get_data);
+			zv->zv_flags |= ZVOL_WRITTEN_TO;
+		}
+		rw_exit(&zv->zv_suspend_lock);
 	}
 }
 
