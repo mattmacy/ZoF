@@ -399,6 +399,7 @@ typedef struct spa_discard_cb_ctx {
 	dmu_ctx_t dc;
 	spa_t *spa;
 	vdev_t *vd;
+	dmu_buf_impl_t *db;
 } spa_discard_cb_ctx_t;
 
 static void
@@ -407,6 +408,7 @@ spa_discard_cb(dmu_buf_set_t *dbs)
 	spa_discard_cb_ctx_t *ctx;
 
 	ctx = (spa_discard_cb_ctx_t *)dbs->dbs_dc;
+	DB_DNODE_EXIT(ctx->db);
 
 	VERIFY0(dsl_sync_task(ctx->spa->spa_name, NULL,
 	    spa_checkpoint_discard_thread_sync, ctx->vd,
@@ -418,13 +420,12 @@ spa_checkpoint_discard_thread(void *arg, zthr_t *zthr)
 {
 	spa_t *spa = arg;
 	vdev_t *rvd = spa->spa_root_vdev;
-	uint32_t dmu_flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_NO_HOLD |
-	    DMU_CTX_FLAG_NOFILL;
+	dmu_ctx_flag_t dmu_flags = DMU_CTX_FLAG_READ |
+	    DMU_CTX_FLAG_NO_HOLD | DMU_CTX_FLAG_NOFILL;
 	spa_discard_cb_ctx_t ctx;
 
 	for (uint64_t c = 0; c < rvd->vdev_children; c++) {
 		vdev_t *vd = rvd->vdev_child[c];
-		dmu_buf_impl_t *db;
 
 		while (vd->vdev_checkpoint_sm != NULL) {
 			space_map_t *checkpoint_sm = vd->vdev_checkpoint_sm;
@@ -447,18 +448,17 @@ spa_checkpoint_discard_thread(void *arg, zthr_t *zthr)
 			 */
 			ctx.vd = vd;
 			ctx.spa = spa;
-			db = (dmu_buf_impl_t *)checkpoint_sm->sm_dbuf;
+			ctx.db = (dmu_buf_impl_t *)checkpoint_sm->sm_dbuf;
 
-			DB_DNODE_ENTER(db);
-			dn = DB_DNODE(db);
-			VERIFY0(dmu_ctx_init(&ctx.dc, /* dnode */ NULL,
-			    dn->dn_objset, dn->dn_object, offset, size, NULL,
+			DB_DNODE_ENTER(ctx.db);
+			dn = DB_DNODE(ctx.db);
+			VERIFY0(dmu_ctx_init(&ctx.dc, dn, dn->dn_objset,
+			    dn->dn_object, offset, size, NULL,
 			    FTAG, dmu_flags));
 			dmu_ctx_set_buf_set_transfer_cb(&ctx.dc,
 			    spa_discard_cb);
 			dmu_issue(&ctx.dc);
 			dmu_ctx_rele(&ctx.dc);
-			DB_DNODE_EXIT(db);
 			if (ctx.dc.dc_err != 0) {
 				zfs_panic_recover("zfs: error %d was returned "
 				    "while prefetching checkpoint space map "
