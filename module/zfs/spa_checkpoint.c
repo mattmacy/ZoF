@@ -418,11 +418,13 @@ spa_checkpoint_discard_thread(void *arg, zthr_t *zthr)
 {
 	spa_t *spa = arg;
 	vdev_t *rvd = spa->spa_root_vdev;
-	uint32_t dmu_flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_UIO | DMU_CTX_FLAG_NO_HOLD;
+	uint32_t dmu_flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_UIO |
+	    DMU_CTX_FLAG_NO_HOLD;
 	spa_discard_cb_ctx_t ctx;
 
 	for (uint64_t c = 0; c < rvd->vdev_children; c++) {
 		vdev_t *vd = rvd->vdev_child[c];
+		dmu_buf_impl_t *db;
 
 		while (vd->vdev_checkpoint_sm != NULL) {
 			space_map_t *checkpoint_sm = vd->vdev_checkpoint_sm;
@@ -445,13 +447,15 @@ spa_checkpoint_discard_thread(void *arg, zthr_t *zthr)
 			 */
 			ctx.vd = vd;
 			ctx.spa = spa;
-			dmu_buf_impl_t *db = (dmu_buf_impl_t *)checkpoint_sm->sm_dbuf;
+			db = (dmu_buf_impl_t *)checkpoint_sm->sm_dbuf;
 
 			DB_DNODE_ENTER(db);
 			dn = DB_DNODE(db);
-			VERIFY0(dmu_ctx_init(&ctx.dc, /* dnode */ NULL, dn->dn_objset,
-			    dn->dn_object, offset, size, NULL, FTAG, dmu_flags));
-			dmu_ctx_set_buf_set_transfer_cb(&ctx.dc, spa_discard_cb);
+			VERIFY0(dmu_ctx_init(&ctx.dc, /* dnode */ NULL,
+			    dn->dn_objset, dn->dn_object, offset, size, NULL,
+			    FTAG, dmu_flags));
+			dmu_ctx_set_buf_set_transfer_cb(&ctx.dc,
+			    spa_discard_cb);
 			dmu_issue(&ctx.dc);
 			dmu_ctx_rele(&ctx.dc);
 			DB_DNODE_EXIT(db);
