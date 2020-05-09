@@ -151,36 +151,6 @@ const dmu_object_byteswap_info_t dmu_ot_byteswap[DMU_BSWAP_NUMFUNCS] = {
 	{	zfs_acl_byteswap,	"acl"		}
 };
 
-/*
- * DMU support for xuio
- */
-kstat_t *xuio_ksp = NULL;
-
-typedef struct xuio_stats {
-	/* loaned yet not returned arc_buf */
-	kstat_named_t xuiostat_onloan_rbuf;
-	kstat_named_t xuiostat_onloan_wbuf;
-	/* whether a copy is made when loaning out a read buffer */
-	kstat_named_t xuiostat_rbuf_copied;
-	kstat_named_t xuiostat_rbuf_nocopy;
-	/* whether a copy is made when assigning a write buffer */
-	kstat_named_t xuiostat_wbuf_copied;
-	kstat_named_t xuiostat_wbuf_nocopy;
-} xuio_stats_t;
-
-static xuio_stats_t xuio_stats = {
-	{ "onloan_read_buf",	KSTAT_DATA_UINT64 },
-	{ "onloan_write_buf",	KSTAT_DATA_UINT64 },
-	{ "read_buf_copied",	KSTAT_DATA_UINT64 },
-	{ "read_buf_nocopy",	KSTAT_DATA_UINT64 },
-	{ "write_buf_copied",	KSTAT_DATA_UINT64 },
-	{ "write_buf_nocopy",	KSTAT_DATA_UINT64 }
-};
-
-#define	XUIOSTAT_INCR(stat, val)        \
-	atomic_add_64(&xuio_stats.stat.value.ui64, (val))
-#define	XUIOSTAT_BUMP(stat)	XUIOSTAT_INCR(stat, 1)
-
 #ifdef _KERNEL
 #define	DPRINTF(...)
 #else
@@ -213,664 +183,8 @@ DEBUG_REFCOUNT(_vfs_zfs_dmu, buf_set_in_flight, "Buffer sets in flight");
 #define	dmu_uiomove(data, sz, dir, uio)			\
 	uiomove((data), (sz), (dir), (uio))
 #endif
-int
-dmu_buf_hold_noread_by_dnode(dnode_t *dn, uint64_t offset,
-    void *tag, dmu_buf_t **dbp)
-{
-	uint64_t blkid;
-	dmu_buf_impl_t *db;
 
-	rw_enter(&dn->dn_struct_rwlock, RW_READER);
-	blkid = dbuf_whichblock(dn, 0, offset);
-	db = dbuf_hold(dn, blkid, tag);
-	rw_exit(&dn->dn_struct_rwlock);
 
-	if (db == NULL) {
-		*dbp = NULL;
-		return (SET_ERROR(EIO));
-	}
-
-	*dbp = &db->db;
-	return (0);
-}
-int
-dmu_buf_hold_noread(objset_t *os, uint64_t object, uint64_t offset,
-    void *tag, dmu_buf_t **dbp)
-{
-	dnode_t *dn;
-	uint64_t blkid;
-	dmu_buf_impl_t *db;
-	int err;
-
-	err = dnode_hold(os, object, FTAG, &dn);
-	if (err)
-		return (err);
-	rw_enter(&dn->dn_struct_rwlock, RW_READER);
-	blkid = dbuf_whichblock(dn, 0, offset);
-	db = dbuf_hold(dn, blkid, tag);
-	rw_exit(&dn->dn_struct_rwlock);
-	dnode_rele(dn, FTAG);
-
-	if (db == NULL) {
-		*dbp = NULL;
-		return (SET_ERROR(EIO));
-	}
-
-	*dbp = &db->db;
-	return (err);
-}
-
-int
-dmu_buf_hold_by_dnode(dnode_t *dn, uint64_t offset,
-    void *tag, dmu_buf_t **dbp, int flags)
-{
-	int err;
-	int db_flags = DB_RF_CANFAIL;
-
-	if ((flags & DMU_CTX_FLAG_PREFETCH) == 0)
-		db_flags |= DB_RF_NOPREFETCH;
-	if (flags & DMU_CTX_FLAG_NODECRYPT)
-		db_flags |= DB_RF_NO_DECRYPT;
-
-	err = dmu_buf_hold_noread_by_dnode(dn, offset, tag, dbp);
-	if (err == 0) {
-		dmu_buf_impl_t *db = (dmu_buf_impl_t *)(*dbp);
-		err = dbuf_read(db, NULL, db_flags);
-		if (err != 0) {
-			dbuf_rele(db, tag);
-			*dbp = NULL;
-		}
-	}
-
-	return (err);
-}
-
-int
-dmu_buf_hold(objset_t *os, uint64_t object, uint64_t offset,
-    void *tag, dmu_buf_t **dbp, int flags)
-{
-	int err;
-	int db_flags = DB_RF_CANFAIL;
-
-	if ((flags & DMU_CTX_FLAG_PREFETCH) == 0)
-		db_flags |= DB_RF_NOPREFETCH;
-	if (flags & DMU_CTX_FLAG_NODECRYPT)
-		db_flags |= DB_RF_NO_DECRYPT;
-
-	err = dmu_buf_hold_noread(os, object, offset, tag, dbp);
-	if (err == 0) {
-		dmu_buf_impl_t *db = (dmu_buf_impl_t *)(*dbp);
-		err = dbuf_read(db, NULL, db_flags);
-		if (err != 0) {
-			dbuf_rele(db, tag);
-			*dbp = NULL;
-		}
-	}
-
-	return (err);
-}
-
-int
-dmu_bonus_max(void)
-{
-	return (DN_OLD_MAX_BONUSLEN);
-}
-
-int
-dmu_set_bonus(dmu_buf_t *db_fake, int newsize, dmu_tx_t *tx)
-{
-	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
-	dnode_t *dn;
-	int error;
-
-	DB_DNODE_ENTER(db);
-	dn = DB_DNODE(db);
-
-	if (dn->dn_bonus != db) {
-		error = SET_ERROR(EINVAL);
-	} else if (newsize < 0 || newsize > db_fake->db_size) {
-		error = SET_ERROR(EINVAL);
-	} else {
-		dnode_setbonuslen(dn, newsize, tx);
-		error = 0;
-	}
-
-	DB_DNODE_EXIT(db);
-	return (error);
-}
-
-int
-dmu_set_bonustype(dmu_buf_t *db_fake, dmu_object_type_t type, dmu_tx_t *tx)
-{
-	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
-	dnode_t *dn;
-	int error;
-
-	DB_DNODE_ENTER(db);
-	dn = DB_DNODE(db);
-
-	if (!DMU_OT_IS_VALID(type)) {
-		error = SET_ERROR(EINVAL);
-	} else if (dn->dn_bonus != db) {
-		error = SET_ERROR(EINVAL);
-	} else {
-		dnode_setbonus_type(dn, type, tx);
-		error = 0;
-	}
-
-	DB_DNODE_EXIT(db);
-	return (error);
-}
-
-dmu_object_type_t
-dmu_get_bonustype(dmu_buf_t *db_fake)
-{
-	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
-	dnode_t *dn;
-	dmu_object_type_t type;
-
-	DB_DNODE_ENTER(db);
-	dn = DB_DNODE(db);
-	type = dn->dn_bonustype;
-	DB_DNODE_EXIT(db);
-
-	return (type);
-}
-
-int
-dmu_rm_spill(objset_t *os, uint64_t object, dmu_tx_t *tx)
-{
-	dnode_t *dn;
-	int error;
-
-	error = dnode_hold(os, object, FTAG, &dn);
-	dbuf_rm_spill(dn, tx);
-	rw_enter(&dn->dn_struct_rwlock, RW_WRITER);
-	dnode_rm_spill(dn, tx);
-	rw_exit(&dn->dn_struct_rwlock);
-	dnode_rele(dn, FTAG);
-	return (error);
-}
-
-/*
- * Lookup and hold the bonus buffer for the provided dnode.  If the dnode
- * has not yet been allocated a new bonus dbuf a will be allocated.
- * Returns ENOENT, EIO, or 0.
- */
-int dmu_bonus_hold_by_dnode(dnode_t *dn, void *tag, dmu_buf_t **dbp,
-    uint32_t flags)
-{
-	dmu_buf_impl_t *db;
-	int error;
-	uint32_t db_flags = DB_RF_MUST_SUCCEED;
-
-	if ((flags & DMU_CTX_FLAG_PREFETCH) == 0)
-		db_flags |= DB_RF_NOPREFETCH;
-	if (flags & DMU_CTX_FLAG_NODECRYPT)
-		db_flags |= DB_RF_NO_DECRYPT;
-
-	rw_enter(&dn->dn_struct_rwlock, RW_READER);
-	if (dn->dn_bonus == NULL) {
-		rw_exit(&dn->dn_struct_rwlock);
-		rw_enter(&dn->dn_struct_rwlock, RW_WRITER);
-		if (dn->dn_bonus == NULL)
-			dbuf_create_bonus(dn);
-	}
-	db = dn->dn_bonus;
-
-	/* as long as the bonus buf is held, the dnode will be held */
-	if (zfs_refcount_add(&db->db_holds, tag) == 1) {
-		VERIFY(dnode_add_ref(dn, db));
-		atomic_inc_32(&dn->dn_dbufs_count);
-	}
-
-	/*
-	 * Wait to drop dn_struct_rwlock until after adding the bonus dbuf's
-	 * hold and incrementing the dbuf count to ensure that dnode_move() sees
-	 * a dnode hold for every dbuf.
-	 */
-	rw_exit(&dn->dn_struct_rwlock);
-
-	error = dbuf_read(db, NULL, db_flags);
-	if (error) {
-		dnode_evict_bonus(dn);
-		dbuf_rele(db, tag);
-		*dbp = NULL;
-		return (error);
-	}
-
-	*dbp = &db->db;
-	return (0);
-}
-
-int
-dmu_bonus_hold(objset_t *os, uint64_t object, void *tag, dmu_buf_t **dbp)
-{
-	dnode_t *dn;
-	int error;
-
-	error = dnode_hold(os, object, FTAG, &dn);
-	if (error)
-		return (error);
-
-	error = dmu_bonus_hold_by_dnode(dn, tag, dbp, 0);
-	dnode_rele(dn, FTAG);
-
-	return (error);
-}
-
-/*
- * returns ENOENT, EIO, or 0.
- *
- * This interface will allocate a blank spill dbuf when a spill blk
- * doesn't already exist on the dnode.
- *
- * if you only want to find an already existing spill db, then
- * dmu_spill_hold_existing() should be used.
- */
-int
-dmu_spill_hold_by_dnode(dnode_t *dn, uint32_t flags, void *tag, dmu_buf_t **dbp)
-{
-	dmu_buf_impl_t *db = NULL;
-	int err;
-
-	if ((flags & DB_RF_HAVESTRUCT) == 0)
-		rw_enter(&dn->dn_struct_rwlock, RW_READER);
-
-	db = dbuf_hold(dn, DMU_SPILL_BLKID, tag);
-
-	if ((flags & DB_RF_HAVESTRUCT) == 0)
-		rw_exit(&dn->dn_struct_rwlock);
-
-	if (db == NULL) {
-		*dbp = NULL;
-		return (SET_ERROR(EIO));
-	}
-	err = dbuf_read(db, NULL, flags);
-	if (err == 0)
-		*dbp = &db->db;
-	else {
-		dbuf_rele(db, tag);
-		*dbp = NULL;
-	}
-	return (err);
-}
-
-int
-dmu_spill_hold_existing(dmu_buf_t *bonus, void *tag, dmu_buf_t **dbp)
-{
-	dmu_buf_impl_t *db = (dmu_buf_impl_t *)bonus;
-	dnode_t *dn;
-	int err;
-
-	DB_DNODE_ENTER(db);
-	dn = DB_DNODE(db);
-
-	if (spa_version(dn->dn_objset->os_spa) < SPA_VERSION_SA) {
-		err = SET_ERROR(EINVAL);
-	} else {
-		rw_enter(&dn->dn_struct_rwlock, RW_READER);
-
-		if (!dn->dn_have_spill) {
-			err = SET_ERROR(ENOENT);
-		} else {
-			err = dmu_spill_hold_by_dnode(dn,
-			    DB_RF_HAVESTRUCT | DB_RF_CANFAIL, tag, dbp);
-		}
-
-		rw_exit(&dn->dn_struct_rwlock);
-	}
-
-	DB_DNODE_EXIT(db);
-	return (err);
-}
-
-int
-dmu_spill_hold_by_bonus(dmu_buf_t *bonus, uint32_t flags, void *tag,
-    dmu_buf_t **dbp)
-{
-	dmu_buf_impl_t *db = (dmu_buf_impl_t *)bonus;
-	dnode_t *dn;
-	int err;
-	uint32_t db_flags = DB_RF_CANFAIL;
-
-	if (flags & DMU_CTX_FLAG_NODECRYPT)
-		db_flags |= DB_RF_NO_DECRYPT;
-
-	DB_DNODE_ENTER(db);
-	dn = DB_DNODE(db);
-	err = dmu_spill_hold_by_dnode(dn, db_flags, tag, dbp);
-	DB_DNODE_EXIT(db);
-
-	return (err);
-}
-
-/*
- * Issue prefetch i/os for the given blocks.  If level is greater than 0, the
- * indirect blocks prefetched will be those that point to the blocks containing
- * the data starting at offset, and continuing to offset + len.
- *
- * Note that if the indirect blocks above the blocks being prefetched are not
- * in cache, they will be asynchronously read in.
- */
-void
-dmu_prefetch(objset_t *os, uint64_t object, int64_t level, uint64_t offset,
-    uint64_t len, zio_priority_t pri)
-{
-	dnode_t *dn;
-	uint64_t blkid;
-	int nblks, err;
-
-	if (len == 0) {  /* they're interested in the bonus buffer */
-		dn = DMU_META_DNODE(os);
-
-		if (object == 0 || object >= DN_MAX_OBJECT)
-			return;
-
-		rw_enter(&dn->dn_struct_rwlock, RW_READER);
-		blkid = dbuf_whichblock(dn, level,
-		    object * sizeof (dnode_phys_t));
-		dbuf_prefetch(dn, level, blkid, pri, 0);
-		rw_exit(&dn->dn_struct_rwlock);
-		return;
-	}
-
-	/*
-	 * See comment before the definition of dmu_prefetch_max.
-	 */
-	len = MIN(len, dmu_prefetch_max);
-
-	/*
-	 * XXX - Note, if the dnode for the requested object is not
-	 * already cached, we will do a *synchronous* read in the
-	 * dnode_hold() call.  The same is true for any indirects.
-	 */
-	err = dnode_hold(os, object, FTAG, &dn);
-	if (err != 0)
-		return;
-
-	/*
-	 * offset + len - 1 is the last byte we want to prefetch for, and offset
-	 * is the first.  Then dbuf_whichblk(dn, level, off + len - 1) is the
-	 * last block we want to prefetch, and dbuf_whichblock(dn, level,
-	 * offset)  is the first.  Then the number we need to prefetch is the
-	 * last - first + 1.
-	 */
-	rw_enter(&dn->dn_struct_rwlock, RW_READER);
-	if (level > 0 || dn->dn_datablkshift != 0) {
-		nblks = dbuf_whichblock(dn, level, offset + len - 1) -
-		    dbuf_whichblock(dn, level, offset) + 1;
-	} else {
-		nblks = (offset < dn->dn_datablksz);
-	}
-
-	if (nblks != 0) {
-		blkid = dbuf_whichblock(dn, level, offset);
-		for (int i = 0; i < nblks; i++)
-			dbuf_prefetch(dn, level, blkid + i, pri, 0);
-	}
-	rw_exit(&dn->dn_struct_rwlock);
-
-	dnode_rele(dn, FTAG);
-}
-
-/*
- * Get the next "chunk" of file data to free.  We traverse the file from
- * the end so that the file gets shorter over time (if we crashes in the
- * middle, this will leave us in a better state).  We find allocated file
- * data by simply searching the allocated level 1 indirects.
- *
- * On input, *start should be the first offset that does not need to be
- * freed (e.g. "offset + length").  On return, *start will be the first
- * offset that should be freed and l1blks is set to the number of level 1
- * indirect blocks found within the chunk.
- */
-static int
-get_next_chunk(dnode_t *dn, uint64_t *start, uint64_t minimum, uint64_t *l1blks)
-{
-	uint64_t blks;
-	uint64_t maxblks = DMU_MAX_ACCESS >> (dn->dn_indblkshift + 1);
-	/* bytes of data covered by a level-1 indirect block */
-	uint64_t iblkrange = (uint64_t)dn->dn_datablksz *
-	    EPB(dn->dn_indblkshift, SPA_BLKPTRSHIFT);
-
-	ASSERT3U(minimum, <=, *start);
-
-	/*
-	 * Check if we can free the entire range assuming that all of the
-	 * L1 blocks in this range have data. If we can, we use this
-	 * worst case value as an estimate so we can avoid having to look
-	 * at the object's actual data.
-	 */
-	uint64_t total_l1blks =
-	    (roundup(*start, iblkrange) - (minimum / iblkrange * iblkrange)) /
-	    iblkrange;
-	if (total_l1blks <= maxblks) {
-		*l1blks = total_l1blks;
-		*start = minimum;
-		return (0);
-	}
-	ASSERT(ISP2(iblkrange));
-
-	for (blks = 0; *start > minimum && blks < maxblks; blks++) {
-		int err;
-
-		/*
-		 * dnode_next_offset(BACKWARDS) will find an allocated L1
-		 * indirect block at or before the input offset.  We must
-		 * decrement *start so that it is at the end of the region
-		 * to search.
-		 */
-		(*start)--;
-
-		err = dnode_next_offset(dn,
-		    DNODE_FIND_BACKWARDS, start, 2, 1, 0);
-
-		/* if there are no indirect blocks before start, we are done */
-		if (err == ESRCH) {
-			*start = minimum;
-			break;
-		} else if (err != 0) {
-			*l1blks = blks;
-			return (err);
-		}
-
-		/* set start to the beginning of this L1 indirect */
-		*start = P2ALIGN(*start, iblkrange);
-	}
-	if (*start < minimum)
-		*start = minimum;
-	*l1blks = blks;
-
-	return (0);
-}
-
-/*
- * If this objset is of type OST_ZFS return true if vfs's unmounted flag is set,
- * otherwise return false.
- * Used below in dmu_free_long_range_impl() to enable abort when unmounting
- */
-/*ARGSUSED*/
-static boolean_t
-dmu_objset_zfs_unmounting(objset_t *os)
-{
-#ifdef _KERNEL
-	if (dmu_objset_type(os) == DMU_OST_ZFS)
-		return (zfs_get_vfs_flag_unmounted(os));
-#endif
-	return (B_FALSE);
-}
-
-static int
-dmu_free_long_range_impl(objset_t *os, dnode_t *dn, uint64_t offset,
-    uint64_t length)
-{
-	uint64_t object_size;
-	int err;
-	uint64_t dirty_frees_threshold;
-	dsl_pool_t *dp = dmu_objset_pool(os);
-
-	if (dn == NULL)
-		return (SET_ERROR(EINVAL));
-
-	object_size = (dn->dn_maxblkid + 1) * dn->dn_datablksz;
-	if (offset >= object_size)
-		return (0);
-
-	if (zfs_per_txg_dirty_frees_percent <= 100)
-		dirty_frees_threshold =
-		    zfs_per_txg_dirty_frees_percent * zfs_dirty_data_max / 100;
-	else
-		dirty_frees_threshold = zfs_dirty_data_max / 20;
-
-	if (length == DMU_OBJECT_END || offset + length > object_size)
-		length = object_size - offset;
-
-	while (length != 0) {
-		uint64_t chunk_end, chunk_begin, chunk_len;
-		uint64_t l1blks;
-		dmu_tx_t *tx;
-
-		if (dmu_objset_zfs_unmounting(dn->dn_objset))
-			return (SET_ERROR(EINTR));
-
-		chunk_end = chunk_begin = offset + length;
-
-		/* move chunk_begin backwards to the beginning of this chunk */
-		err = get_next_chunk(dn, &chunk_begin, offset, &l1blks);
-		if (err)
-			return (err);
-		ASSERT3U(chunk_begin, >=, offset);
-		ASSERT3U(chunk_begin, <=, chunk_end);
-
-		chunk_len = chunk_end - chunk_begin;
-
-		tx = dmu_tx_create(os);
-		dmu_tx_hold_free(tx, dn->dn_object, chunk_begin, chunk_len);
-
-		/*
-		 * Mark this transaction as typically resulting in a net
-		 * reduction in space used.
-		 */
-		dmu_tx_mark_netfree(tx);
-		err = dmu_tx_assign(tx, TXG_WAIT);
-		if (err) {
-			dmu_tx_abort(tx);
-			return (err);
-		}
-
-		uint64_t txg = dmu_tx_get_txg(tx);
-
-		mutex_enter(&dp->dp_lock);
-		uint64_t long_free_dirty =
-		    dp->dp_long_free_dirty_pertxg[txg & TXG_MASK];
-		mutex_exit(&dp->dp_lock);
-
-		/*
-		 * To avoid filling up a TXG with just frees, wait for
-		 * the next TXG to open before freeing more chunks if
-		 * we have reached the threshold of frees.
-		 */
-		if (dirty_frees_threshold != 0 &&
-		    long_free_dirty >= dirty_frees_threshold) {
-			DMU_TX_STAT_BUMP(dmu_tx_dirty_frees_delay);
-			dmu_tx_commit(tx);
-			txg_wait_open(dp, 0, B_TRUE);
-			continue;
-		}
-
-		/*
-		 * In order to prevent unnecessary write throttling, for each
-		 * TXG, we track the cumulative size of L1 blocks being dirtied
-		 * in dnode_free_range() below. We compare this number to a
-		 * tunable threshold, past which we prevent new L1 dirty freeing
-		 * blocks from being added into the open TXG. See
-		 * dmu_free_long_range_impl() for details. The threshold
-		 * prevents write throttle activation due to dirty freeing L1
-		 * blocks taking up a large percentage of zfs_dirty_data_max.
-		 */
-		mutex_enter(&dp->dp_lock);
-		dp->dp_long_free_dirty_pertxg[txg & TXG_MASK] +=
-		    l1blks << dn->dn_indblkshift;
-		mutex_exit(&dp->dp_lock);
-		DTRACE_PROBE3(free__long__range,
-		    uint64_t, long_free_dirty, uint64_t, chunk_len,
-		    uint64_t, txg);
-		dnode_free_range(dn, chunk_begin, chunk_len, tx);
-
-		dmu_tx_commit(tx);
-
-		length -= chunk_len;
-	}
-	return (0);
-}
-
-int
-dmu_free_long_range(objset_t *os, uint64_t object,
-    uint64_t offset, uint64_t length)
-{
-	dnode_t *dn;
-	int err;
-
-	err = dnode_hold(os, object, FTAG, &dn);
-	if (err != 0)
-		return (err);
-	err = dmu_free_long_range_impl(os, dn, offset, length);
-
-	/*
-	 * It is important to zero out the maxblkid when freeing the entire
-	 * file, so that (a) subsequent calls to dmu_free_long_range_impl()
-	 * will take the fast path, and (b) dnode_reallocate() can verify
-	 * that the entire file has been freed.
-	 */
-	if (err == 0 && offset == 0 && length == DMU_OBJECT_END)
-		dn->dn_maxblkid = 0;
-
-	dnode_rele(dn, FTAG);
-	return (err);
-}
-
-int
-dmu_free_long_object(objset_t *os, uint64_t object)
-{
-	dmu_tx_t *tx;
-	int err;
-
-	err = dmu_free_long_range(os, object, 0, DMU_OBJECT_END);
-	if (err != 0)
-		return (err);
-
-	tx = dmu_tx_create(os);
-	dmu_tx_hold_bonus(tx, object);
-	dmu_tx_hold_free(tx, object, 0, DMU_OBJECT_END);
-	dmu_tx_mark_netfree(tx);
-	err = dmu_tx_assign(tx, TXG_WAIT);
-	if (err == 0) {
-		if (err == 0)
-			err = dmu_object_free(os, object, tx);
-
-		dmu_tx_commit(tx);
-	} else {
-		dmu_tx_abort(tx);
-	}
-
-	return (err);
-}
-
-int
-dmu_free_range(objset_t *os, uint64_t object, uint64_t offset,
-    uint64_t size, dmu_tx_t *tx)
-{
-	dnode_t *dn;
-	int err = dnode_hold(os, object, FTAG, &dn);
-	if (err)
-		return (err);
-	ASSERT(offset < UINT64_MAX);
-	ASSERT(size == DMU_OBJECT_END || size <= UINT64_MAX - offset);
-	dnode_free_range(dn, offset, size, tx);
-	dnode_rele(dn, FTAG);
-	return (0);
-}
 
 /*
  * DMU Context based functions.
@@ -1696,7 +1010,6 @@ dmu_ctx_seek(dmu_ctx_t *dmu_ctx, uint64_t offset, uint64_t size,
 	dmu_ctx->dc_data_buf = data_buf;
 }
 
-
 static int
 dmu_async_impl(dmu_ctx_t *dc, dnode_t *dn, objset_t *os, uint64_t object,
     uint64_t offset, uint64_t size, void *buf, uint32_t flags, dmu_tx_t *tx,
@@ -1718,6 +1031,25 @@ dmu_async_impl(dmu_ctx_t *dc, dnode_t *dn, objset_t *os, uint64_t object,
 	return (err);
 }
 
+static int
+dmu_write_impl(dnode_t *dn, objset_t *os, uint64_t object, uint64_t offset,
+    uint64_t size, const void *buf, dmu_tx_t *tx, uint32_t flags)
+{
+	void *bufp = (void *)(uintptr_t)buf;
+	dmu_ctx_t dmu_ctx;
+	int err;
+
+	err = dmu_ctx_init(&dmu_ctx, dn, os, object, offset,
+	    size, bufp, FTAG, flags);
+	if (err == 0) {
+		dmu_ctx_set_dmu_tx(&dmu_ctx, tx);
+
+		err = dmu_issue(&dmu_ctx);
+		dmu_ctx_rele(&dmu_ctx);
+	}
+	return (err);
+}
+
 int
 dmu_read_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset,
     uint64_t size, void *buf, uint32_t flags, dmu_ctx_cb_t done_cb)
@@ -1734,6 +1066,665 @@ dmu_write_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset,
 
 	return (dmu_async_impl(dc, /* dnode */NULL, os, object, offset, size,
 	    buf, /* flags */ 0, tx, done_cb));
+}
+
+int
+dmu_buf_hold_noread_by_dnode(dnode_t *dn, uint64_t offset,
+    void *tag, dmu_buf_t **dbp)
+{
+	uint64_t blkid;
+	dmu_buf_impl_t *db;
+
+	rw_enter(&dn->dn_struct_rwlock, RW_READER);
+	blkid = dbuf_whichblock(dn, 0, offset);
+	db = dbuf_hold(dn, blkid, tag);
+	rw_exit(&dn->dn_struct_rwlock);
+
+	if (db == NULL) {
+		*dbp = NULL;
+		return (SET_ERROR(EIO));
+	}
+
+	*dbp = &db->db;
+	return (0);
+}
+int
+dmu_buf_hold_noread(objset_t *os, uint64_t object, uint64_t offset,
+    void *tag, dmu_buf_t **dbp)
+{
+	dnode_t *dn;
+	uint64_t blkid;
+	dmu_buf_impl_t *db;
+	int err;
+
+	err = dnode_hold(os, object, FTAG, &dn);
+	if (err)
+		return (err);
+	rw_enter(&dn->dn_struct_rwlock, RW_READER);
+	blkid = dbuf_whichblock(dn, 0, offset);
+	db = dbuf_hold(dn, blkid, tag);
+	rw_exit(&dn->dn_struct_rwlock);
+	dnode_rele(dn, FTAG);
+
+	if (db == NULL) {
+		*dbp = NULL;
+		return (SET_ERROR(EIO));
+	}
+
+	*dbp = &db->db;
+	return (err);
+}
+
+int
+dmu_buf_hold_by_dnode(dnode_t *dn, uint64_t offset,
+    void *tag, dmu_buf_t **dbp, int flags)
+{
+	int err;
+	int db_flags = DB_RF_CANFAIL;
+
+	if ((flags & DMU_CTX_FLAG_PREFETCH) == 0)
+		db_flags |= DB_RF_NOPREFETCH;
+	if (flags & DMU_CTX_FLAG_NODECRYPT)
+		db_flags |= DB_RF_NO_DECRYPT;
+
+	err = dmu_buf_hold_noread_by_dnode(dn, offset, tag, dbp);
+	if (err == 0) {
+		dmu_buf_impl_t *db = (dmu_buf_impl_t *)(*dbp);
+		err = dbuf_read(db, NULL, db_flags);
+		if (err != 0) {
+			dbuf_rele(db, tag);
+			*dbp = NULL;
+		}
+	}
+
+	return (err);
+}
+
+int
+dmu_buf_hold(objset_t *os, uint64_t object, uint64_t offset,
+    void *tag, dmu_buf_t **dbp, int flags)
+{
+	int err;
+	int db_flags = DB_RF_CANFAIL;
+
+	if ((flags & DMU_CTX_FLAG_PREFETCH) == 0)
+		db_flags |= DB_RF_NOPREFETCH;
+	if (flags & DMU_CTX_FLAG_NODECRYPT)
+		db_flags |= DB_RF_NO_DECRYPT;
+
+	err = dmu_buf_hold_noread(os, object, offset, tag, dbp);
+	if (err == 0) {
+		dmu_buf_impl_t *db = (dmu_buf_impl_t *)(*dbp);
+		err = dbuf_read(db, NULL, db_flags);
+		if (err != 0) {
+			dbuf_rele(db, tag);
+			*dbp = NULL;
+		}
+	}
+
+	return (err);
+}
+
+int
+dmu_bonus_max(void)
+{
+	return (DN_OLD_MAX_BONUSLEN);
+}
+
+int
+dmu_set_bonus(dmu_buf_t *db_fake, int newsize, dmu_tx_t *tx)
+{
+	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
+	dnode_t *dn;
+	int error;
+
+	DB_DNODE_ENTER(db);
+	dn = DB_DNODE(db);
+
+	if (dn->dn_bonus != db) {
+		error = SET_ERROR(EINVAL);
+	} else if (newsize < 0 || newsize > db_fake->db_size) {
+		error = SET_ERROR(EINVAL);
+	} else {
+		dnode_setbonuslen(dn, newsize, tx);
+		error = 0;
+	}
+
+	DB_DNODE_EXIT(db);
+	return (error);
+}
+
+int
+dmu_set_bonustype(dmu_buf_t *db_fake, dmu_object_type_t type, dmu_tx_t *tx)
+{
+	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
+	dnode_t *dn;
+	int error;
+
+	DB_DNODE_ENTER(db);
+	dn = DB_DNODE(db);
+
+	if (!DMU_OT_IS_VALID(type)) {
+		error = SET_ERROR(EINVAL);
+	} else if (dn->dn_bonus != db) {
+		error = SET_ERROR(EINVAL);
+	} else {
+		dnode_setbonus_type(dn, type, tx);
+		error = 0;
+	}
+
+	DB_DNODE_EXIT(db);
+	return (error);
+}
+
+dmu_object_type_t
+dmu_get_bonustype(dmu_buf_t *db_fake)
+{
+	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
+	dnode_t *dn;
+	dmu_object_type_t type;
+
+	DB_DNODE_ENTER(db);
+	dn = DB_DNODE(db);
+	type = dn->dn_bonustype;
+	DB_DNODE_EXIT(db);
+
+	return (type);
+}
+
+int
+dmu_rm_spill(objset_t *os, uint64_t object, dmu_tx_t *tx)
+{
+	dnode_t *dn;
+	int error;
+
+	error = dnode_hold(os, object, FTAG, &dn);
+	dbuf_rm_spill(dn, tx);
+	rw_enter(&dn->dn_struct_rwlock, RW_WRITER);
+	dnode_rm_spill(dn, tx);
+	rw_exit(&dn->dn_struct_rwlock);
+	dnode_rele(dn, FTAG);
+	return (error);
+}
+
+/*
+ * Lookup and hold the bonus buffer for the provided dnode.  If the dnode
+ * has not yet been allocated a new bonus dbuf a will be allocated.
+ * Returns ENOENT, EIO, or 0.
+ */
+int dmu_bonus_hold_by_dnode(dnode_t *dn, void *tag, dmu_buf_t **dbp,
+    uint32_t flags)
+{
+	dmu_buf_impl_t *db;
+	int error;
+	uint32_t db_flags = DB_RF_MUST_SUCCEED;
+
+	if ((flags & DMU_CTX_FLAG_PREFETCH) == 0)
+		db_flags |= DB_RF_NOPREFETCH;
+	if (flags & DMU_CTX_FLAG_NODECRYPT)
+		db_flags |= DB_RF_NO_DECRYPT;
+
+	rw_enter(&dn->dn_struct_rwlock, RW_READER);
+	if (dn->dn_bonus == NULL) {
+		rw_exit(&dn->dn_struct_rwlock);
+		rw_enter(&dn->dn_struct_rwlock, RW_WRITER);
+		if (dn->dn_bonus == NULL)
+			dbuf_create_bonus(dn);
+	}
+	db = dn->dn_bonus;
+
+	/* as long as the bonus buf is held, the dnode will be held */
+	if (zfs_refcount_add(&db->db_holds, tag) == 1) {
+		VERIFY(dnode_add_ref(dn, db));
+		atomic_inc_32(&dn->dn_dbufs_count);
+	}
+
+	/*
+	 * Wait to drop dn_struct_rwlock until after adding the bonus dbuf's
+	 * hold and incrementing the dbuf count to ensure that dnode_move() sees
+	 * a dnode hold for every dbuf.
+	 */
+	rw_exit(&dn->dn_struct_rwlock);
+
+	error = dbuf_read(db, NULL, db_flags);
+	if (error) {
+		dnode_evict_bonus(dn);
+		dbuf_rele(db, tag);
+		*dbp = NULL;
+		return (error);
+	}
+
+	*dbp = &db->db;
+	return (0);
+}
+
+int
+dmu_bonus_hold(objset_t *os, uint64_t object, void *tag, dmu_buf_t **dbp)
+{
+	dnode_t *dn;
+	int error;
+
+	error = dnode_hold(os, object, FTAG, &dn);
+	if (error)
+		return (error);
+
+	error = dmu_bonus_hold_by_dnode(dn, tag, dbp, 0);
+	dnode_rele(dn, FTAG);
+
+	return (error);
+}
+
+/*
+ * returns ENOENT, EIO, or 0.
+ *
+ * This interface will allocate a blank spill dbuf when a spill blk
+ * doesn't already exist on the dnode.
+ *
+ * if you only want to find an already existing spill db, then
+ * dmu_spill_hold_existing() should be used.
+ */
+int
+dmu_spill_hold_by_dnode(dnode_t *dn, uint32_t flags, void *tag, dmu_buf_t **dbp)
+{
+	dmu_buf_impl_t *db = NULL;
+	int err;
+
+	if ((flags & DB_RF_HAVESTRUCT) == 0)
+		rw_enter(&dn->dn_struct_rwlock, RW_READER);
+
+	db = dbuf_hold(dn, DMU_SPILL_BLKID, tag);
+
+	if ((flags & DB_RF_HAVESTRUCT) == 0)
+		rw_exit(&dn->dn_struct_rwlock);
+
+	if (db == NULL) {
+		*dbp = NULL;
+		return (SET_ERROR(EIO));
+	}
+	err = dbuf_read(db, NULL, flags);
+	if (err == 0)
+		*dbp = &db->db;
+	else {
+		dbuf_rele(db, tag);
+		*dbp = NULL;
+	}
+	return (err);
+}
+
+int
+dmu_spill_hold_existing(dmu_buf_t *bonus, void *tag, dmu_buf_t **dbp)
+{
+	dmu_buf_impl_t *db = (dmu_buf_impl_t *)bonus;
+	dnode_t *dn;
+	int err;
+
+	DB_DNODE_ENTER(db);
+	dn = DB_DNODE(db);
+
+	if (spa_version(dn->dn_objset->os_spa) < SPA_VERSION_SA) {
+		err = SET_ERROR(EINVAL);
+	} else {
+		rw_enter(&dn->dn_struct_rwlock, RW_READER);
+
+		if (!dn->dn_have_spill) {
+			err = SET_ERROR(ENOENT);
+		} else {
+			err = dmu_spill_hold_by_dnode(dn,
+			    DB_RF_HAVESTRUCT | DB_RF_CANFAIL, tag, dbp);
+		}
+
+		rw_exit(&dn->dn_struct_rwlock);
+	}
+
+	DB_DNODE_EXIT(db);
+	return (err);
+}
+
+int
+dmu_spill_hold_by_bonus(dmu_buf_t *bonus, uint32_t flags, void *tag,
+    dmu_buf_t **dbp)
+{
+	dmu_buf_impl_t *db = (dmu_buf_impl_t *)bonus;
+	dnode_t *dn;
+	int err;
+	uint32_t db_flags = DB_RF_CANFAIL;
+
+	if (flags & DMU_CTX_FLAG_NODECRYPT)
+		db_flags |= DB_RF_NO_DECRYPT;
+
+	DB_DNODE_ENTER(db);
+	dn = DB_DNODE(db);
+	err = dmu_spill_hold_by_dnode(dn, db_flags, tag, dbp);
+	DB_DNODE_EXIT(db);
+
+	return (err);
+}
+
+/*
+ * Issue prefetch i/os for the given blocks.  If level is greater than 0, the
+ * indirect blocks prefetched will be those that point to the blocks containing
+ * the data starting at offset, and continuing to offset + len.
+ *
+ * Note that if the indirect blocks above the blocks being prefetched are not
+ * in cache, they will be asynchronously read in.
+ */
+void
+dmu_prefetch(objset_t *os, uint64_t object, int64_t level, uint64_t offset,
+    uint64_t len, zio_priority_t pri)
+{
+	dnode_t *dn;
+	uint64_t blkid;
+	int nblks, err;
+
+	if (len == 0) {  /* they're interested in the bonus buffer */
+		dn = DMU_META_DNODE(os);
+
+		if (object == 0 || object >= DN_MAX_OBJECT)
+			return;
+
+		rw_enter(&dn->dn_struct_rwlock, RW_READER);
+		blkid = dbuf_whichblock(dn, level,
+		    object * sizeof (dnode_phys_t));
+		dbuf_prefetch(dn, level, blkid, pri, 0);
+		rw_exit(&dn->dn_struct_rwlock);
+		return;
+	}
+
+	/*
+	 * See comment before the definition of dmu_prefetch_max.
+	 */
+	len = MIN(len, dmu_prefetch_max);
+
+	/*
+	 * XXX - Note, if the dnode for the requested object is not
+	 * already cached, we will do a *synchronous* read in the
+	 * dnode_hold() call.  The same is true for any indirects.
+	 */
+	err = dnode_hold(os, object, FTAG, &dn);
+	if (err != 0)
+		return;
+
+	/*
+	 * offset + len - 1 is the last byte we want to prefetch for, and offset
+	 * is the first.  Then dbuf_whichblk(dn, level, off + len - 1) is the
+	 * last block we want to prefetch, and dbuf_whichblock(dn, level,
+	 * offset)  is the first.  Then the number we need to prefetch is the
+	 * last - first + 1.
+	 */
+	rw_enter(&dn->dn_struct_rwlock, RW_READER);
+	if (level > 0 || dn->dn_datablkshift != 0) {
+		nblks = dbuf_whichblock(dn, level, offset + len - 1) -
+		    dbuf_whichblock(dn, level, offset) + 1;
+	} else {
+		nblks = (offset < dn->dn_datablksz);
+	}
+
+	if (nblks != 0) {
+		blkid = dbuf_whichblock(dn, level, offset);
+		for (int i = 0; i < nblks; i++)
+			dbuf_prefetch(dn, level, blkid + i, pri, 0);
+	}
+	rw_exit(&dn->dn_struct_rwlock);
+
+	dnode_rele(dn, FTAG);
+}
+
+/*
+ * Get the next "chunk" of file data to free.  We traverse the file from
+ * the end so that the file gets shorter over time (if we crashes in the
+ * middle, this will leave us in a better state).  We find allocated file
+ * data by simply searching the allocated level 1 indirects.
+ *
+ * On input, *start should be the first offset that does not need to be
+ * freed (e.g. "offset + length").  On return, *start will be the first
+ * offset that should be freed and l1blks is set to the number of level 1
+ * indirect blocks found within the chunk.
+ */
+static int
+get_next_chunk(dnode_t *dn, uint64_t *start, uint64_t minimum, uint64_t *l1blks)
+{
+	uint64_t blks;
+	uint64_t maxblks = DMU_MAX_ACCESS >> (dn->dn_indblkshift + 1);
+	/* bytes of data covered by a level-1 indirect block */
+	uint64_t iblkrange = (uint64_t)dn->dn_datablksz *
+	    EPB(dn->dn_indblkshift, SPA_BLKPTRSHIFT);
+
+	ASSERT3U(minimum, <=, *start);
+
+	/*
+	 * Check if we can free the entire range assuming that all of the
+	 * L1 blocks in this range have data. If we can, we use this
+	 * worst case value as an estimate so we can avoid having to look
+	 * at the object's actual data.
+	 */
+	uint64_t total_l1blks =
+	    (roundup(*start, iblkrange) - (minimum / iblkrange * iblkrange)) /
+	    iblkrange;
+	if (total_l1blks <= maxblks) {
+		*l1blks = total_l1blks;
+		*start = minimum;
+		return (0);
+	}
+	ASSERT(ISP2(iblkrange));
+
+	for (blks = 0; *start > minimum && blks < maxblks; blks++) {
+		int err;
+
+		/*
+		 * dnode_next_offset(BACKWARDS) will find an allocated L1
+		 * indirect block at or before the input offset.  We must
+		 * decrement *start so that it is at the end of the region
+		 * to search.
+		 */
+		(*start)--;
+
+		err = dnode_next_offset(dn,
+		    DNODE_FIND_BACKWARDS, start, 2, 1, 0);
+
+		/* if there are no indirect blocks before start, we are done */
+		if (err == ESRCH) {
+			*start = minimum;
+			break;
+		} else if (err != 0) {
+			*l1blks = blks;
+			return (err);
+		}
+
+		/* set start to the beginning of this L1 indirect */
+		*start = P2ALIGN(*start, iblkrange);
+	}
+	if (*start < minimum)
+		*start = minimum;
+	*l1blks = blks;
+
+	return (0);
+}
+
+/*
+ * If this objset is of type OST_ZFS return true if vfs's unmounted flag is set,
+ * otherwise return false.
+ * Used below in dmu_free_long_range_impl() to enable abort when unmounting
+ */
+/*ARGSUSED*/
+static boolean_t
+dmu_objset_zfs_unmounting(objset_t *os)
+{
+#ifdef _KERNEL
+	if (dmu_objset_type(os) == DMU_OST_ZFS)
+		return (zfs_get_vfs_flag_unmounted(os));
+#endif
+	return (B_FALSE);
+}
+
+static int
+dmu_free_long_range_impl(objset_t *os, dnode_t *dn, uint64_t offset,
+    uint64_t length)
+{
+	uint64_t object_size;
+	int err;
+	uint64_t dirty_frees_threshold;
+	dsl_pool_t *dp = dmu_objset_pool(os);
+
+	if (dn == NULL)
+		return (SET_ERROR(EINVAL));
+
+	object_size = (dn->dn_maxblkid + 1) * dn->dn_datablksz;
+	if (offset >= object_size)
+		return (0);
+
+	if (zfs_per_txg_dirty_frees_percent <= 100)
+		dirty_frees_threshold =
+		    zfs_per_txg_dirty_frees_percent * zfs_dirty_data_max / 100;
+	else
+		dirty_frees_threshold = zfs_dirty_data_max / 20;
+
+	if (length == DMU_OBJECT_END || offset + length > object_size)
+		length = object_size - offset;
+
+	while (length != 0) {
+		uint64_t chunk_end, chunk_begin, chunk_len;
+		uint64_t l1blks;
+		dmu_tx_t *tx;
+
+		if (dmu_objset_zfs_unmounting(dn->dn_objset))
+			return (SET_ERROR(EINTR));
+
+		chunk_end = chunk_begin = offset + length;
+
+		/* move chunk_begin backwards to the beginning of this chunk */
+		err = get_next_chunk(dn, &chunk_begin, offset, &l1blks);
+		if (err)
+			return (err);
+		ASSERT3U(chunk_begin, >=, offset);
+		ASSERT3U(chunk_begin, <=, chunk_end);
+
+		chunk_len = chunk_end - chunk_begin;
+
+		tx = dmu_tx_create(os);
+		dmu_tx_hold_free(tx, dn->dn_object, chunk_begin, chunk_len);
+
+		/*
+		 * Mark this transaction as typically resulting in a net
+		 * reduction in space used.
+		 */
+		dmu_tx_mark_netfree(tx);
+		err = dmu_tx_assign(tx, TXG_WAIT);
+		if (err) {
+			dmu_tx_abort(tx);
+			return (err);
+		}
+
+		uint64_t txg = dmu_tx_get_txg(tx);
+
+		mutex_enter(&dp->dp_lock);
+		uint64_t long_free_dirty =
+		    dp->dp_long_free_dirty_pertxg[txg & TXG_MASK];
+		mutex_exit(&dp->dp_lock);
+
+		/*
+		 * To avoid filling up a TXG with just frees, wait for
+		 * the next TXG to open before freeing more chunks if
+		 * we have reached the threshold of frees.
+		 */
+		if (dirty_frees_threshold != 0 &&
+		    long_free_dirty >= dirty_frees_threshold) {
+			DMU_TX_STAT_BUMP(dmu_tx_dirty_frees_delay);
+			dmu_tx_commit(tx);
+			txg_wait_open(dp, 0, B_TRUE);
+			continue;
+		}
+
+		/*
+		 * In order to prevent unnecessary write throttling, for each
+		 * TXG, we track the cumulative size of L1 blocks being dirtied
+		 * in dnode_free_range() below. We compare this number to a
+		 * tunable threshold, past which we prevent new L1 dirty freeing
+		 * blocks from being added into the open TXG. See
+		 * dmu_free_long_range_impl() for details. The threshold
+		 * prevents write throttle activation due to dirty freeing L1
+		 * blocks taking up a large percentage of zfs_dirty_data_max.
+		 */
+		mutex_enter(&dp->dp_lock);
+		dp->dp_long_free_dirty_pertxg[txg & TXG_MASK] +=
+		    l1blks << dn->dn_indblkshift;
+		mutex_exit(&dp->dp_lock);
+		DTRACE_PROBE3(free__long__range,
+		    uint64_t, long_free_dirty, uint64_t, chunk_len,
+		    uint64_t, txg);
+		dnode_free_range(dn, chunk_begin, chunk_len, tx);
+
+		dmu_tx_commit(tx);
+
+		length -= chunk_len;
+	}
+	return (0);
+}
+
+int
+dmu_free_long_range(objset_t *os, uint64_t object,
+    uint64_t offset, uint64_t length)
+{
+	dnode_t *dn;
+	int err;
+
+	err = dnode_hold(os, object, FTAG, &dn);
+	if (err != 0)
+		return (err);
+	err = dmu_free_long_range_impl(os, dn, offset, length);
+
+	/*
+	 * It is important to zero out the maxblkid when freeing the entire
+	 * file, so that (a) subsequent calls to dmu_free_long_range_impl()
+	 * will take the fast path, and (b) dnode_reallocate() can verify
+	 * that the entire file has been freed.
+	 */
+	if (err == 0 && offset == 0 && length == DMU_OBJECT_END)
+		dn->dn_maxblkid = 0;
+
+	dnode_rele(dn, FTAG);
+	return (err);
+}
+
+int
+dmu_free_long_object(objset_t *os, uint64_t object)
+{
+	dmu_tx_t *tx;
+	int err;
+
+	err = dmu_free_long_range(os, object, 0, DMU_OBJECT_END);
+	if (err != 0)
+		return (err);
+
+	tx = dmu_tx_create(os);
+	dmu_tx_hold_bonus(tx, object);
+	dmu_tx_hold_free(tx, object, 0, DMU_OBJECT_END);
+	dmu_tx_mark_netfree(tx);
+	err = dmu_tx_assign(tx, TXG_WAIT);
+	if (err == 0) {
+		if (err == 0)
+			err = dmu_object_free(os, object, tx);
+
+		dmu_tx_commit(tx);
+	} else {
+		dmu_tx_abort(tx);
+	}
+
+	return (err);
+}
+
+int
+dmu_free_range(objset_t *os, uint64_t object, uint64_t offset,
+    uint64_t size, dmu_tx_t *tx)
+{
+	dnode_t *dn;
+	int err = dnode_hold(os, object, FTAG, &dn);
+	if (err)
+		return (err);
+	ASSERT(offset < UINT64_MAX);
+	ASSERT(size == DMU_OBJECT_END || size <= UINT64_MAX - offset);
+	dnode_free_range(dn, offset, size, tx);
+	dnode_rele(dn, FTAG);
+	return (0);
 }
 
 static int
@@ -1770,25 +1761,6 @@ dmu_read_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size, void *buf,
 
 	return (dmu_read_impl(dn, dn->dn_objset, dn->dn_object, offset, size,
 	    buf, flags|DMU_CTX_FLAG_NO_HOLD));
-}
-
-static int
-dmu_write_impl(dnode_t *dn, objset_t *os, uint64_t object, uint64_t offset,
-    uint64_t size, const void *buf, dmu_tx_t *tx, uint32_t flags)
-{
-	void *bufp = (void *)(uintptr_t)buf;
-	dmu_ctx_t dmu_ctx;
-	int err;
-
-	err = dmu_ctx_init(&dmu_ctx, dn, os, object, offset,
-	    size, bufp, FTAG, flags);
-	if (err == 0) {
-		dmu_ctx_set_dmu_tx(&dmu_ctx, tx);
-
-		err = dmu_issue(&dmu_ctx);
-		dmu_ctx_rele(&dmu_ctx);
-	}
-	return (err);
 }
 
 void
@@ -1881,6 +1853,36 @@ dmu_redact(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 	dmu_issue(&ctx.dc);
 	dmu_ctx_rele(&ctx.dc);
 }
+
+/*
+ * DMU support for xuio
+ */
+kstat_t *xuio_ksp = NULL;
+
+typedef struct xuio_stats {
+	/* loaned yet not returned arc_buf */
+	kstat_named_t xuiostat_onloan_rbuf;
+	kstat_named_t xuiostat_onloan_wbuf;
+	/* whether a copy is made when loaning out a read buffer */
+	kstat_named_t xuiostat_rbuf_copied;
+	kstat_named_t xuiostat_rbuf_nocopy;
+	/* whether a copy is made when assigning a write buffer */
+	kstat_named_t xuiostat_wbuf_copied;
+	kstat_named_t xuiostat_wbuf_nocopy;
+} xuio_stats_t;
+
+static xuio_stats_t xuio_stats = {
+	{ "onloan_read_buf",	KSTAT_DATA_UINT64 },
+	{ "onloan_write_buf",	KSTAT_DATA_UINT64 },
+	{ "read_buf_copied",	KSTAT_DATA_UINT64 },
+	{ "read_buf_nocopy",	KSTAT_DATA_UINT64 },
+	{ "write_buf_copied",	KSTAT_DATA_UINT64 },
+	{ "write_buf_nocopy",	KSTAT_DATA_UINT64 }
+};
+
+#define	XUIOSTAT_INCR(stat, val)        \
+	atomic_add_64(&xuio_stats.stat.value.ui64, (val))
+#define	XUIOSTAT_BUMP(stat)	XUIOSTAT_INCR(stat, 1)
 
 #ifdef HAVE_UIO_ZEROCOPY
 int
