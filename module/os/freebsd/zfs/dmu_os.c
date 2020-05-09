@@ -75,7 +75,7 @@ __FBSDID("$FreeBSD$");
 #define	dmu_page_unlock(m)
 #endif
 
-void
+uint64_t
 dmu_buf_write_pages(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
     uint64_t sz)
 {
@@ -99,6 +99,7 @@ dmu_buf_write_pages(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
 		pp += 1;
 		off += PAGESIZE;
 	}
+	return (sz);
 }
 
 typedef struct dmu_read_pages_ctx {

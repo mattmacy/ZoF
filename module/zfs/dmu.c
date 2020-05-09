@@ -260,73 +260,82 @@ dmu_buf_read_xuio(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
 }
 #endif
 
-static void
+static uint64_t
 dmu_buf_do_uio(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
     uint64_t sz, enum uio_rw dir)
 {
 	int err;
 	uio_t *uio = (uio_t *)dbs->dbs_dc->dc_data_buf;
+	uint64_t adv = uio->uio_resid;
 
 	err = dmu_uiomove((char *)db->db_data + off, sz, dir, uio);
 	if (err)
 		dmu_buf_set_set_error(dbs, err);
+	else
+		adv -= uio->uio_resid;
+
+	return (adv);
 }
 
-static void
+static uint64_t
 dmu_buf_read_uio(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
     uint64_t sz)
 {
-	dmu_buf_do_uio(dbs, db, off, sz, UIO_READ);
+	return (dmu_buf_do_uio(dbs, db, off, sz, UIO_READ));
 }
 
-static void
+static uint64_t
 dmu_buf_write_uio(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
     uint64_t sz)
 {
-	dmu_buf_do_uio(dbs, db, off, sz, UIO_WRITE);
+	return (dmu_buf_do_uio(dbs, db, off, sz, UIO_WRITE));
 }
 
-static void
+static uint64_t
 dmu_buf_read_char(dmu_buf_set_t *buf_set, dmu_buf_t *db, uint64_t off,
     uint64_t sz)
 {
 	char *data = (char *)buf_set->dbs_dc->dc_data_buf + db->db_offset -
 	    buf_set->dbs_dc->dc_dn_start + off;
 	bcopy((char *)db->db_data + off, data, sz);
+	return (sz);
 }
 
-static void
+static uint64_t
 dmu_buf_write_char(dmu_buf_set_t *buf_set, dmu_buf_t *db, uint64_t off,
     uint64_t sz)
 {
 	char *data = (char *)buf_set->dbs_dc->dc_data_buf + db->db_offset -
 	    buf_set->dbs_dc->dc_dn_start + off;
 	bcopy(data, (char *)db->db_data + off, sz);
+	return (sz);
 }
 
-static void
+static uint64_t
 dmu_buf_transfer_nofill(dmu_buf_set_t *buf_set, dmu_buf_t *db, uint64_t off,
     uint64_t sz)
 {
 	dmu_tx_t *tx = dmu_buf_set_tx(buf_set);
 	dmu_buf_will_not_fill(db, tx);
 	/* No need to do any more here. */
+	return (sz);
 }
-static void
+
+static uint64_t
 dmu_buf_transfer_write(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
     uint64_t sz)
 {
 	dmu_tx_t *tx = dmu_buf_set_tx(dbs);
+	uint64_t adv;
 
 	if (sz == db->db_size)
 		dmu_buf_will_fill(db, tx);
 	else
 		dmu_buf_will_dirty(db, tx);
-#ifdef notyet
-		dmu_buf_will_dirty_range(db, tx, off, sz);
-#endif
-	dbs->dbs_dc->dc_data_transfer_cb(dbs, db, off, sz);
+	// dmu_buf_will_dirty_range(db, tx, off, sz);
+	adv = dbs->dbs_dc->dc_data_transfer_cb(dbs, db, off, sz);
 	dmu_buf_fill_done(db, tx);
+	return (adv);
 }
 
 void
@@ -344,11 +353,14 @@ dmu_buf_set_transfer(dmu_buf_set_t *buf_set)
 		dmu_buf_t *db = buf_set->dbs_dbp[i];
 		uint64_t off = offset - db->db_offset;
 		uint64_t sz = MIN(db->db_size - off, size);
+		uint64_t adv;
 
 		ASSERT(size > 0);
-		dmu_ctx->dc_buf_transfer_cb(buf_set, db, off, sz);
-		offset += sz;
-		size -= sz;
+		adv = dmu_ctx->dc_buf_transfer_cb(buf_set, db, off, sz);
+		if (buf_set->dbs_err)
+			break;
+		offset += adv;
+		size -= adv;
 	}
 }
 

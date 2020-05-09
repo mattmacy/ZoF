@@ -359,7 +359,7 @@ struct dmu_buf_set;
 struct zio;
 typedef void (*dmu_ctx_cb_t)(struct dmu_ctx *);
 typedef void (*dmu_buf_set_cb_t)(struct dmu_buf_set *);
-typedef void (*dmu_buf_transfer_cb_t)(struct dmu_buf_set *, dmu_buf_t *,
+typedef uint64_t (*dmu_buf_transfer_cb_t)(struct dmu_buf_set *, dmu_buf_t *,
     uint64_t, uint64_t);
 
 typedef enum {
@@ -773,7 +773,7 @@ void dmu_buf_rele(dmu_buf_t *db, void *tag);
 uint64_t dmu_buf_refcount(dmu_buf_t *db);
 uint64_t dmu_buf_user_refcount(dmu_buf_t *db);
 
-void dmu_buf_write_pages(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
+uint64_t dmu_buf_write_pages(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
 	uint64_t sz);
 
 typedef void dmu_buf_evict_func_t(void *user_ptr);
