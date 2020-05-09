@@ -418,7 +418,8 @@ spa_checkpoint_discard_thread(void *arg, zthr_t *zthr)
 {
 	spa_t *spa = arg;
 	vdev_t *rvd = spa->spa_root_vdev;
-	uint32_t dmu_flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_NO_HOLD;
+	uint32_t dmu_flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_NO_HOLD |
+	    DMU_CTX_FLAG_NOFILL;
 	spa_discard_cb_ctx_t ctx;
 
 	for (uint64_t c = 0; c < rvd->vdev_children; c++) {
