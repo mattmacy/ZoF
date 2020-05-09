@@ -1718,6 +1718,7 @@ zvol_dmu_ctx_init(zvol_dmu_state_t *zds, void *data, uint64_t off,
 	int error;
 
 	ASSERT(zv->zv_objset != NULL);
+	atomic_inc(&zv->zv_suspend_ref);
 
 	if (reader)
 		dmu_flags |= DMU_CTX_FLAG_PREFETCH;
@@ -1773,7 +1774,7 @@ zvol_dmu_done(dmu_ctx_t *dc)
 	 */
 	if (zds->zds_lr != NULL)
 		zfs_rangelock_exit(zds->zds_lr);
-	rw_exit(&zv->zv_suspend_lock);
+	atomic_dec(&zv->zv_suspend_ref);
 }
 
 int
