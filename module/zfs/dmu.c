@@ -1854,11 +1854,11 @@ dmu_redact(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
     dmu_tx_t *tx)
 {
 	dmu_redact_cb_ctx_t ctx;
-	uint32_t dmu_flags = DMU_CTX_FLAG_READ;
+	uint32_t dmu_flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_NOFILL;
 
 	ctx.tx = tx;
 	VERIFY0(dmu_ctx_init(&ctx.dc, /* dnode */ NULL, os,
-	    object, offset, size, NULL, FTAG, dmu_flags));
+	    object, offset, size, /* data_buf */ NULL, FTAG, dmu_flags));
 	dmu_ctx_set_buf_set_transfer_cb(&ctx.dc, dmu_redact_cb);
 	dmu_issue(&ctx.dc);
 	dmu_ctx_rele(&ctx.dc);
