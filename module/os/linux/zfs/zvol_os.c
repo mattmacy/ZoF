@@ -330,6 +330,7 @@ zvol_strategy_dmu_done(dmu_ctx_t *dc)
 
 	}
 	zvol_dmu_done(dc);
+	rw_exit(&zv->zv_suspend_lock);
 
 	blk_generic_end_io_acct(zv->zv_zso->zvo_queue, reader ? READ : WRITE,
 	    &zv->zv_zso->zvo_disk->part0, zss->start_jif);
