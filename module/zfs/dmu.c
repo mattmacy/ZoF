@@ -274,8 +274,7 @@ dmu_buf_do_uio(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
 	err = dmu_uiomove((char *)db->db_data + off, sz, dir, uio);
 	if (err)
 		dmu_buf_set_set_error(dbs, err);
-	else
-		adv -= uio->uio_resid;
+	adv -= uio->uio_resid;
 
 	return (adv);
 }
@@ -337,6 +336,7 @@ dmu_buf_transfer_write(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
 		dmu_buf_will_dirty(db, tx);
 	// dmu_buf_will_dirty_range(db, tx, off, sz);
 	adv = dbs->dbs_dc->dc_data_transfer_cb(dbs, db, off, sz);
+	/* XXX -- need to handle error condition */
 	dmu_buf_fill_done(db, tx);
 	return (adv);
 }
