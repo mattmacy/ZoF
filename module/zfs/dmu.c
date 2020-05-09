@@ -545,13 +545,17 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 	dnode_t *dn = dmu_ctx->dc_dn;
 	uint64_t blkid;
 	int dbuf_flags;
+	boolean_t read, prefetch;
 	int i;
 
+	read = dmu_ctx->dc_flags & DMU_CTX_FLAG_READ;
+	prefetch = dmu_ctx->dc_flags & DMU_CTX_FLAG_PREFETCH;
 	dbuf_flags = DB_RF_CANFAIL | DB_RF_NEVERWAIT | DB_RF_HAVESTRUCT;
-	if ((dmu_ctx->dc_flags & DMU_CTX_FLAG_PREFETCH) == 0 ||
-	    dbs->dbs_size > zfetch_array_rd_sz)
+	if (!prefetch || dbs->dbs_size > zfetch_array_rd_sz)
 		dbuf_flags |= DB_RF_NOPREFETCH;
 
+	dbs->dbs_zio = zio_root(dn->dn_objset->os_spa, NULL, NULL,
+	    ZIO_FLAG_CANFAIL);
 	blkid = dbuf_whichblock(dn, 0, dmu_ctx->dc_dn_offset);
 	/*
 	 * Note that while this loop is running, any zio's set up for async
@@ -565,6 +569,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 		    /* fail_sparse */ FALSE, /* fail_uncached */ FALSE,
 		    dmu_ctx->dc_tag, &db, dbs);
 		if (db == NULL) {
+			VERIFY(err);
 			/* Only include counts for the processed buffers. */
 			dbs->dbs_count = i;
 			/* initiator */
@@ -574,6 +579,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 			zio_nowait(dbs->dbs_zio);
 			return (err);
 		}
+		VERIFY(err == 0);
 		/* initiate async i/o */
 		if (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ)
 			(void) dbuf_read(db, dbs->dbs_zio, dbuf_flags);
@@ -588,6 +594,12 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 		dmu_ctx->dc_resid -= bufsiz;
 		/* Put this dbuf in the buffer set's list. */
 		dbs->dbs_dbp[i] = &db->db;
+	}
+
+	if (prefetch && DNODE_META_IS_CACHEABLE(dn) &&
+	    dbs->dbs_size <= zfetch_array_rd_sz) {
+		dmu_zfetch(&dn->dn_zfetch, blkid, dbs->dbs_count,
+		    read && DNODE_IS_CACHEABLE(dn), B_TRUE);
 	}
 	return (0);
 }
@@ -717,9 +729,6 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	zfs_refcount_add(&dmu_ctx->dc_holds, NULL);
 	/* Either we're a reader or we have a transaction somewhere. */
 	ASSERT((dmu_ctx->dc_flags & DMU_CTX_FLAG_READ) || dmu_buf_set_tx(dbs));
-	dbs->dbs_zio = zio_root(dn->dn_objset->os_spa, NULL, NULL,
-	    ZIO_FLAG_CANFAIL);
-
 
 	err = dmu_buf_set_setup_buffers(dbs);
 	if (err  == 0) {
@@ -760,7 +769,6 @@ dmu_buf_set_process_io(dmu_buf_set_t *dbs)
 {
 	int err, i;
 	dsl_pool_t *dp = NULL;
-	hrtime_t start = 0;
 	dmu_ctx_t *dmu_ctx = dbs->dbs_dc;
 	dnode_t *dn = dmu_ctx->dc_dn;
 
@@ -777,8 +785,6 @@ dmu_buf_set_process_io(dmu_buf_set_t *dbs)
 	/* Time accounting for sync context. */
 	if (dn->dn_objset->os_dsl_dataset)
 		dp = dn->dn_objset->os_dsl_dataset->ds_dir->dd_pool;
-	if (dp && dsl_pool_sync_context(dp))
-		start = gethrtime();
 
 	/* Wait for async i/o. */
 	err = zio_wait(dbs->dbs_zio);
