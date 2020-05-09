@@ -776,7 +776,8 @@ dmu_buf_set_process_io(dmu_buf_set_t *dbs)
 	 * If the I/O is asynchronous, issue the I/O's without waiting.
 	 * Writes do not need to wait for any ZIOs.
 	 */
-	if (dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC) {
+	if ((dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC) ||
+	    (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ) == 0) {
 		zio_nowait(dbs->dbs_zio);
 		return (0);
 	}
