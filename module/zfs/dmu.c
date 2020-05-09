@@ -1843,7 +1843,7 @@ dmu_redact(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
     dmu_tx_t *tx)
 {
 	dmu_redact_cb_ctx_t ctx;
-	uint32_t dmu_flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_UIO;
+	uint32_t dmu_flags = DMU_CTX_FLAG_READ;
 
 	ctx.tx = tx;
 	VERIFY0(dmu_ctx_init(&ctx.dc, /* dnode */ NULL, os,

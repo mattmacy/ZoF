@@ -324,7 +324,7 @@ dmu_read_pages(objset_t *os, uint64_t object, vm_page_t *ma, int count,
     int *rbehind, int *rahead, int last_size)
 {
 	dmu_read_pages_ctx_t drpc;
-	uint32_t dmu_flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_UIO;
+	uint32_t dmu_flags = DMU_CTX_FLAG_READ;
 	int err;
 
 	ASSERT3U(ma[0]->pindex + count - 1, ==, ma[count - 1]->pindex);
