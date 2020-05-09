@@ -23,9 +23,11 @@
  * Copyright (c) 2011, 2020 by Delphix. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
  * Copyright (c) 2016, Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2015 by Chunwei Chen. All rights reserved.
  * Copyright (c) 2019 Datto Inc.
+ * Copyright (c) 2020 iXsystems Inc.
  */
 
 #include <sys/dmu.h>
