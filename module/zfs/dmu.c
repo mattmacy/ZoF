@@ -898,7 +898,7 @@ dmu_issue(dmu_ctx_t *dc)
 int
 dmu_ctx_init(dmu_ctx_t *dmu_ctx, struct dnode *dn, objset_t *os,
     uint64_t object, uint64_t offset, uint64_t size, void *data_buf, void *tag,
-    uint32_t flags)
+    dmu_ctx_flag_t flags)
 {
 	boolean_t reader = (flags & DMU_CTX_FLAG_READ) != 0;
 	int err;
