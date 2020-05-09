@@ -751,8 +751,7 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 out:
 	if (err && tx != NULL)
 		dmu_tx_abort(tx);
-	if (dn != NULL)
-		rw_exit(&dn->dn_struct_rwlock);
+	rw_exit(&dn->dn_struct_rwlock);
 	return (err);
 }
 
@@ -768,23 +767,16 @@ static int
 dmu_buf_set_process_io(dmu_buf_set_t *dbs)
 {
 	int err, i;
-	dsl_pool_t *dp = NULL;
 	dmu_ctx_t *dmu_ctx = dbs->dbs_dc;
-	dnode_t *dn = dmu_ctx->dc_dn;
 
 	/*
 	 * If the I/O is asynchronous, issue the I/O's without waiting.
 	 * Writes do not need to wait for any ZIOs.
 	 */
-	if ((dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC) ||
-	    (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ) == 0) {
+	if (dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC) {
 		zio_nowait(dbs->dbs_zio);
 		return (0);
 	}
-
-	/* Time accounting for sync context. */
-	if (dn->dn_objset->os_dsl_dataset)
-		dp = dn->dn_objset->os_dsl_dataset->ds_dir->dd_pool;
 
 	/* Wait for async i/o. */
 	err = zio_wait(dbs->dbs_zio);
