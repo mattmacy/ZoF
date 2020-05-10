@@ -1720,6 +1720,8 @@ zvol_dmu_ctx_init(zvol_dmu_state_t *zds, void *data, uint64_t off,
 	ASSERT(zv->zv_objset != NULL);
 	atomic_inc(&zv->zv_suspend_ref);
 
+	zds->zds_sync = !reader &&
+		(zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS);
 	if (reader)
 		dmu_flags |= DMU_CTX_FLAG_PREFETCH;
 	else if (zv->zv_flags & ZVOL_RDONLY)
@@ -1762,6 +1764,12 @@ zvol_dmu_done(dmu_ctx_t *dc)
 	zvol_dmu_state_t *zds = (zvol_dmu_state_t *)dc;
 	zvol_state_t *zv = zds->zds_zv;
 
+	/*
+	 * Initialization failed
+	 */
+	if (zds->zds_lr != NULL)
+		zfs_rangelock_exit(zds->zds_lr);
+
 	if ((dc->dc_flags & DMU_CTX_FLAG_READ) == 0 &&
 	    (zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS))
 		zil_commit(zv->zv_zilog, ZVOL_OBJ);
@@ -1769,11 +1777,6 @@ zvol_dmu_done(dmu_ctx_t *dc)
 	    dc->dc_dn_offset > zv->zv_volsize)
 		dc->dc_err = zio_worst_error(dc->dc_err, SET_ERROR(EINVAL));
 
-	/*
-	 * Initialization failed
-	 */
-	if (zds->zds_lr != NULL)
-		zfs_rangelock_exit(zds->zds_lr);
 	atomic_dec(&zv->zv_suspend_ref);
 }
 
