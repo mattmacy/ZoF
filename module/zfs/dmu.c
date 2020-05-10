@@ -553,22 +553,25 @@ dmu_buf_set_rele(dmu_buf_set_t *dbs, int err)
 static int
 dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 {
-	dmu_ctx_t *dmu_ctx = dbs->dbs_dc;
-	dnode_t *dn = dmu_ctx->dc_dn;
-	uint64_t blkid;
+	dmu_ctx_t *dc = dbs->dbs_dc;
+	dnode_t *dn = dc->dc_dn;
+	uint64_t blkid, buftotal, dn_offset;
 	int dbuf_flags;
 	boolean_t read, prefetch;
 	int i;
 
-	read = dmu_ctx->dc_flags & DMU_CTX_FLAG_READ;
-	prefetch = dmu_ctx->dc_flags & DMU_CTX_FLAG_PREFETCH;
+	read = dc->dc_flags & DMU_CTX_FLAG_READ;
+	prefetch = dc->dc_flags & DMU_CTX_FLAG_PREFETCH;
 	dbuf_flags = DB_RF_CANFAIL | DB_RF_NEVERWAIT | DB_RF_HAVESTRUCT;
 	if (!prefetch || dbs->dbs_size > zfetch_array_rd_sz)
 		dbuf_flags |= DB_RF_NOPREFETCH;
 
 	dbs->dbs_zio = zio_root(dn->dn_objset->os_spa, NULL, NULL,
 	    ZIO_FLAG_CANFAIL);
-	blkid = dbuf_whichblock(dn, 0, dmu_ctx->dc_dn_offset);
+	dn_offset = dc->dc_dn_offset;
+	blkid = dbuf_whichblock(dn, 0, dn_offset);
+	buftotal = 0;
+
 	/*
 	 * Note that while this loop is running, any zio's set up for async
 	 * reads are not executing, therefore access to this dbs is
@@ -577,9 +580,10 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 	for (i = 0; i < dbs->dbs_count; i++) {
 		dmu_buf_impl_t *db = NULL;
 		uint64_t bufoff, bufsiz;
-		int err = dbuf_hold_impl(dn, /* level */ 0, blkid + i,
+
+		int err = dbuf_hold_impl_(dn, /* level */ 0, blkid + i,
 		    /* fail_sparse */ FALSE, /* fail_uncached */ FALSE,
-		    dmu_ctx->dc_tag, &db, dbs);
+		    dc->dc_tag, &db, dbs, dn_offset, dbs->dbs_resid);
 		if (db == NULL) {
 			VERIFY(err);
 			/* Only include counts for the processed buffers. */
@@ -591,22 +595,28 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 			zio_nowait(dbs->dbs_zio);
 			return (err);
 		}
+		/* Calculate the amount of data this buffer contributes. */
+		bufoff = dn_offset - db->db.db_offset;
+		bufsiz = (int)MIN(db->db.db_size - bufoff, dbs->dbs_resid);
 		VERIFY(err == 0);
+		dbs->dbs_resid -= bufsiz;
+		buftotal += bufsiz;
+		dn_offset += bufsiz;
+
 		/* initiate async i/o */
-		if (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ)
+		if ((dc->dc_flags & DMU_CTX_FLAG_READ) ||
+		    (bufsiz != db->db.db_size &&
+		    db->db_state != DB_CACHED))
 			(void) dbuf_read(db, dbs->dbs_zio, dbuf_flags);
 
-		/* Calculate the amount of data this buffer contributes. */
-		ASSERT(dmu_ctx->dc_dn_offset >= db->db.db_offset);
-		bufoff = dmu_ctx->dc_dn_offset - db->db.db_offset;
-		bufsiz = (int)MIN(db->db.db_size - bufoff, dbs->dbs_resid);
-		dbs->dbs_resid -= bufsiz;
-		/* Update the caller's data to let them know what's next. */
-		dmu_ctx->dc_dn_offset += bufsiz;
-		dmu_ctx->dc_resid -= bufsiz;
 		/* Put this dbuf in the buffer set's list. */
 		dbs->dbs_dbp[i] = &db->db;
 	}
+		/* Update the caller's data to let them know what's next. */
+	mutex_enter(&dc->dc_mtx);
+	dc->dc_dn_offset += buftotal;
+	dc->dc_resid -= buftotal;
+	mutex_exit(&dc->dc_mtx);
 
 	if (prefetch && DNODE_META_IS_CACHEABLE(dn) &&
 	    dbs->dbs_size <= zfetch_array_rd_sz) {
@@ -732,10 +742,10 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	zfs_refcount_create_untracked(&dbs->dbs_holds);
 
 	/* Include a refcount for the initiator. */
-	if (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ)
+	if (dmu_ctx->dc_flags & (DMU_CTX_FLAG_READ|DMU_CTX_FLAG_ASYNC))
 		zfs_refcount_add_many(&dbs->dbs_holds, nblks + 1, NULL);
 	else
-		/* For writes, dbufs never need to call us back. */
+		/* For synchronous writes, dbufs never need to call us back. */
 		zfs_refcount_add(&dbs->dbs_holds, NULL);
 	dbs->dbs_dc = dmu_ctx;
 	zfs_refcount_add(&dmu_ctx->dc_holds, NULL);
@@ -746,7 +756,7 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	if (err  == 0) {
 		*buf_set_p = dbs;
 	} else {
-		if (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ)
+		if (dmu_ctx->dc_flags & (DMU_CTX_FLAG_READ|DMU_CTX_FLAG_ASYNC))
 			zfs_refcount_destroy_many(&dbs->dbs_holds, nblks + 1);
 		else
 			/* For writes, dbufs never need to call us back. */
