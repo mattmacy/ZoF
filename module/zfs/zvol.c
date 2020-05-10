@@ -1720,7 +1720,7 @@ zvol_dmu_ctx_init(zvol_dmu_state_t *zds, void *data, uint64_t off,
 	ASSERT(zv->zv_objset != NULL);
 	atomic_inc(&zv->zv_suspend_ref);
 
-	zds->zds_sync = !reader &&
+	zds->zds_sync |= !reader &&
 	    (zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS);
 	if (reader)
 		dmu_flags |= DMU_CTX_FLAG_PREFETCH;
