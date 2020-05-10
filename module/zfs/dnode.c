@@ -1774,7 +1774,7 @@ dnode_set_blksz(dnode_t *dn, uint64_t size, int ibs, dmu_tx_t *tx)
 		goto fail;
 
 	/* resize the old block */
-	err = dbuf_hold_impl(dn, 0, 0, TRUE, FALSE, FTAG, &db, NULL);
+	err = dbuf_hold_impl(dn, 0, 0, TRUE, FALSE, FTAG, &db);
 	if (err == 0) {
 		dbuf_new_size(db, size, tx);
 	} else if (err != ENOENT) {
@@ -2092,7 +2092,7 @@ dnode_free_range(dnode_t *dn, uint64_t off, uint64_t len, dmu_tx_t *tx)
 			head = len;
 		rw_enter(&dn->dn_struct_rwlock, RW_READER);
 		res = dbuf_hold_impl(dn, 0, dbuf_whichblock(dn, 0, off),
-		    TRUE, FALSE, FTAG, &db, NULL);
+		    TRUE, FALSE, FTAG, &db);
 		rw_exit(&dn->dn_struct_rwlock);
 		if (res == 0) {
 			caddr_t data;
@@ -2137,7 +2137,7 @@ dnode_free_range(dnode_t *dn, uint64_t off, uint64_t len, dmu_tx_t *tx)
 			tail = len;
 		rw_enter(&dn->dn_struct_rwlock, RW_READER);
 		res = dbuf_hold_impl(dn, 0, dbuf_whichblock(dn, 0, off+len),
-		    TRUE, FALSE, FTAG, &db, NULL);
+		    TRUE, FALSE, FTAG, &db);
 		rw_exit(&dn->dn_struct_rwlock);
 		if (res == 0) {
 			boolean_t dirty;
@@ -2378,7 +2378,7 @@ dnode_next_offset_level(dnode_t *dn, int flags, uint64_t *offset,
 	} else {
 		uint64_t blkid = dbuf_whichblock(dn, lvl, *offset);
 		error = dbuf_hold_impl(dn, lvl, blkid, TRUE, FALSE, FTAG,
-		    &db, NULL);
+		    &db);
 		if (error) {
 			if (error != ENOENT)
 				return (error);
