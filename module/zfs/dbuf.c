@@ -2870,7 +2870,7 @@ dbuf_findbp(dnode_t *dn, int level, uint64_t blkid, int fail_sparse,
 		int err;
 
 		err = dbuf_hold_impl(dn, level + 1,
-		    blkid >> epbs, fail_sparse, FALSE, NULL, parentp, NULL);
+		    blkid >> epbs, fail_sparse, FALSE, NULL, parentp);
 
 		if (err)
 			return (err);
@@ -3220,7 +3220,7 @@ dbuf_prefetch(dnode_t *dn, int64_t level, uint64_t blkid, zio_priority_t prio,
 		dmu_buf_impl_t *db;
 
 		if (dbuf_hold_impl(dn, parent_level, parent_blkid,
-		    FALSE, TRUE, FTAG, &db, NULL) == 0) {
+		    FALSE, TRUE, FTAG, &db) == 0) {
 			blkptr_t *bpp = db->db_buf->b_data;
 			bp = bpp[P2PHASE(curblkid, 1 << epbs)];
 			dbuf_rele(db, FTAG);
@@ -3317,14 +3317,49 @@ dbuf_hold_copy(dnode_t *dn, dmu_buf_impl_t *db)
 	rw_exit(&db->db_rwlock);
 }
 
+static void
+dbuf_hold_update_buf_set(dmu_buf_set_t *dbs, uint64_t dn_off,
+    uint64_t resid, dmu_buf_impl_t *db)
+{
+	dmu_ctx_t *dc;
+	uint64_t bufoff, tocpy;
+
+	if (dbs == NULL)
+		return;
+
+	dc = dbs->dbs_dc;
+	ASSERT(dn_off >= db->db.db_offset);
+
+	/* If a reading buffer set is associated, add the callback now. */
+	if (dc->dc_flags & DMU_CTX_FLAG_READ) {
+		if (db->db_state == DB_CACHED) {
+			/* Dbuf is already at the desired state. */
+			dmu_buf_set_rele(dbs, /* err */ 0);
+		} else {
+			dmu_buf_set_node_add(&db->db_buf_sets, dbs);
+		}
+	} else if (dc->dc_flags & DMU_CTX_FLAG_ASYNC) {
+		/* Calculate the amount of data this buffer contributes. */
+		bufoff = dn_off - db->db.db_offset;
+		tocpy = (int)MIN(db->db.db_size - bufoff, resid);
+		if (db->db_state == DB_CACHED || tocpy == db->db.db_size) {
+			/* Dbuf is resident or will be overwritten. */
+			dmu_buf_set_rele(dbs, /* err */ 0);
+		} else {
+			dmu_buf_set_node_add(&db->db_buf_sets, dbs);
+		}
+	}
+}
+
 /*
  * Returns with db_holds incremented, and db_mtx not held.
  * Note: dn_struct_rwlock must be held.
  */
 int
-dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid,
+dbuf_hold_impl_(dnode_t *dn, uint8_t level, uint64_t blkid,
     boolean_t fail_sparse, boolean_t fail_uncached,
-    void *tag, dmu_buf_impl_t **dbp, dmu_buf_set_t *dbs)
+    void *tag, dmu_buf_impl_t **dbp, dmu_buf_set_t *dbs,
+    uint64_t dnoff, uint64_t resid)
 {
 	dmu_buf_impl_t *db, *parent = NULL;
 
@@ -3414,16 +3449,7 @@ dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid,
 	}
 	(void) zfs_refcount_add(&db->db_holds, tag);
 	DBUF_VERIFY(db);
-
-	/* If a reading buffer set is associated, add the callback now. */
-	if (dbs != NULL && (dbs->dbs_dc->dc_flags & DMU_CTX_FLAG_READ)) {
-		if (db->db_state == DB_CACHED) {
-			/* Dbuf is already at the desired state. */
-			dmu_buf_set_rele(dbs, /* err */ 0);
-		} else {
-			dmu_buf_set_node_add(&db->db_buf_sets, dbs);
-		}
-	}
+	dbuf_hold_update_buf_set(dbs, dnoff, resid, db);
 	mutex_exit(&db->db_mtx);
 
 	/* NOTE: we can't rele the parent until after we drop the db_mtx */
@@ -3438,6 +3464,16 @@ dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid,
 	return (0);
 }
 
+int
+dbuf_hold_impl(dnode_t *dn, uint8_t level, uint64_t blkid,
+    boolean_t fail_sparse, boolean_t fail_uncached,
+    void *tag, dmu_buf_impl_t **dbp)
+{
+
+	return (dbuf_hold_impl_(dn, level, blkid, fail_sparse, fail_uncached,
+	    tag, dbp, NULL, 0, 0));
+}
+
 dmu_buf_impl_t *
 dbuf_hold(dnode_t *dn, uint64_t blkid, void *tag)
 {
@@ -3449,7 +3485,7 @@ dbuf_hold_level(dnode_t *dn, int level, uint64_t blkid, void *tag)
 {
 	dmu_buf_impl_t *db;
 	int err = dbuf_hold_impl(dn, level, blkid, FALSE, FALSE,
-	    tag, &db, NULL);
+	    tag, &db);
 	return (err ? NULL : db);
 }
 
