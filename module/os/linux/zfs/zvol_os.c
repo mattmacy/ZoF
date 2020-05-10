@@ -60,7 +60,10 @@ typedef struct zv_request {
 	zvol_state_t	*zv;
 	struct bio	*bio;
 	taskq_ent_t	ent;
+	boolean_t	flushed;
 } zv_request_t;
+
+static void zvol_strategy(zv_request_t *zr);
 
 /*
  * Given a path, return TRUE if path is a ZVOL.
@@ -339,6 +342,13 @@ zvol_strategy_dmu_done(dmu_ctx_t *dc)
 }
 
 static void
+zvol_strategy_flush(zv_request_t *zr)
+{
+		zil_commit(zv->zv_zilog, ZVOL_OBJ);
+		zvol_strategy(zr);
+}
+
+static void
 zvol_strategy(zv_request_t *zr)
 {
 	zvol_strategy_state_t *zss;
@@ -348,9 +358,14 @@ zvol_strategy(zv_request_t *zr)
 	struct bio *bio = zr->bio;
 	int rw, error;
 
-	if (bio_is_flush(bio))
-		zil_commit(zv->zv_zilog, ZVOL_OBJ);
-
+	/*
+	 * There is no readily apparent way to make zil_commit async
+	 */
+	if (bio_is_flush(bio) && !zr->flushed) {
+		zr->flushed = B_TRUE;
+		taskq_dispatch_ent(zvol_taskq, zvol_strategy_flush, zr, 0,
+		    &zvr->ent);
+	}
 	/* Some requests are just for flush and nothing else. */
 	if (BIO_BI_SIZE(bio) == 0) {
 		rw_exit(&zv->zv_suspend_lock);
@@ -370,6 +385,7 @@ zvol_strategy(zv_request_t *zr)
 	zss->zr = zr;
 	zss->start_jif = jiffies;
 	zss->zds.zds_zv = zr->zv;
+	zss->zds.zds_sync = bio_is_fua(zr->bio);
 	uio = &zss->uio;
 	uio_from_bio(uio, zr->bio);
 
@@ -439,6 +455,7 @@ zvol_request(struct request_queue *q, struct bio *bio)
 		zvr = kmem_alloc(sizeof (zv_request_t), KM_SLEEP);
 		zvr->zv = zv;
 		zvr->bio = bio;
+		zvr->flushed = B_FALSE;
 		taskq_init_ent(&zvr->ent);
 
 		/*
