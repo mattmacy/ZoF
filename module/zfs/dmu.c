@@ -945,9 +945,9 @@ dmu_ctx_init(dmu_ctx_t *dmu_ctx, struct dnode *dn, objset_t *os,
 	dmu_ctx->dc_os = os;
 	dmu_ctx->dc_object = object;
 	dmu_ctx->dc_size = size;
+	dmu_ctx->dc_flags = flags;
 	dmu_ctx_seek(dmu_ctx, offset, size, data_buf);
 	dmu_ctx->dc_tag = tag;
-	dmu_ctx->dc_flags = flags;
 
 	/* Initialize default I/O callbacks. */
 	if (dmu_ctx->dc_flags & DMU_CTX_FLAG_UIO) {
