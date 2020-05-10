@@ -125,7 +125,7 @@ dnode_cons(void *arg, void *unused, int kmflag)
 	 * Every dbuf has a reference, and dropping a tracked reference is
 	 * O(number of references), so don't track dn_holds.
 	 */
-	zfs_refcount_create(&dn->dn_holds);
+	zfs_refcount_create_untracked(&dn->dn_holds);
 	zfs_refcount_create(&dn->dn_tx_holds);
 	list_link_init(&dn->dn_link);
 
@@ -2377,8 +2377,7 @@ dnode_next_offset_level(dnode_t *dn, int flags, uint64_t *offset,
 		data = dn->dn_phys->dn_blkptr;
 	} else {
 		uint64_t blkid = dbuf_whichblock(dn, lvl, *offset);
-		error = dbuf_hold_impl(dn, lvl, blkid, TRUE, FALSE, FTAG,
-		    &db);
+		error = dbuf_hold_impl(dn, lvl, blkid, TRUE, FALSE, FTAG, &db);
 		if (error) {
 			if (error != ENOENT)
 				return (error);
