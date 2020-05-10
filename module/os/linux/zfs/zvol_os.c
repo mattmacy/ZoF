@@ -367,6 +367,7 @@ zvol_strategy(zv_request_t *zr)
 		zr->flushed = B_TRUE;
 		taskq_dispatch_ent(zvol_taskq, zvol_strategy_flush, zr, 0,
 		    &zr->ent);
+		return;
 	}
 	/* Some requests are just for flush and nothing else. */
 	if (BIO_BI_SIZE(bio) == 0) {
