@@ -342,10 +342,12 @@ zvol_strategy_dmu_done(dmu_ctx_t *dc)
 }
 
 static void
-zvol_strategy_flush(zv_request_t *zr)
+zvol_strategy_flush(void *arg)
 {
-		zil_commit(zv->zv_zilog, ZVOL_OBJ);
-		zvol_strategy(zr);
+	zv_request_t *zr = arg;
+
+	zil_commit(zr->zv->zv_zilog, ZVOL_OBJ);
+	zvol_strategy(zr);
 }
 
 static void
@@ -364,7 +366,7 @@ zvol_strategy(zv_request_t *zr)
 	if (bio_is_flush(bio) && !zr->flushed) {
 		zr->flushed = B_TRUE;
 		taskq_dispatch_ent(zvol_taskq, zvol_strategy_flush, zr, 0,
-		    &zvr->ent);
+		    &zr->ent);
 	}
 	/* Some requests are just for flush and nothing else. */
 	if (BIO_BI_SIZE(bio) == 0) {
