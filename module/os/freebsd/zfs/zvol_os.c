@@ -549,6 +549,11 @@ zvol_geom_bio_start(struct bio *bp)
 		return;
 	}
 
+#ifdef notyet
+	/*
+	 * The underlying code is to dependent on zio_wait
+	 * to work in a non-sleepable context
+	 */
 	switch (bp->bio_cmd) {
 	case BIO_READ:
 	case BIO_WRITE:
@@ -557,6 +562,7 @@ zvol_geom_bio_start(struct bio *bp)
 	default:
 		;
 	}
+#endif
 	if (!THREAD_CAN_SLEEP()) {
 		mtx_lock(&zsg->zsg_queue_mtx);
 		first = (bioq_first(&zsg->zsg_queue) == NULL);
