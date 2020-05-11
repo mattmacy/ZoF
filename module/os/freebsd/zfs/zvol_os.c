@@ -472,12 +472,42 @@ zvol_done(struct bio *bp, int err)
 }
 
 static void
+zvol_process_bio(zvol_state_t *zv, struct bio *bp)
+{
+	int err;
+
+	switch (bp->bio_cmd) {
+	case BIO_READ:
+	case BIO_WRITE:
+		zvol_geom_bio_readwrite(zv, bp);
+		return;
+	default:
+		break;
+	}
+	rw_enter(&zv->zv_suspend_lock, ZVOL_RW_READER);
+	zvol_geom_bio_check_zilog(bp);
+	err = 0;
+	switch (bp->bio_cmd) {
+	case BIO_FLUSH:
+		zil_commit(zv->zv_zilog, ZVOL_OBJ);
+		break;
+	case BIO_DELETE:
+		err = zvol_geom_bio_delete(zv, bp);
+		break;
+	default:
+		err = EOPNOTSUPP;
+		break;
+	}
+	rw_exit(&zv->zv_suspend_lock);
+	zvol_done(bp, err);
+}
+
+static void
 zvol_geom_worker(void *arg)
 {
 	zvol_state_t *zv = arg;
 	struct zvol_state_geom *zsg = &zv->zv_zso->zso_geom;
 	struct bio *bp;
-	int err;
 
 	ASSERT(zv->zv_zso->zso_volmode == ZFS_VOLMODE_GEOM);
 
@@ -500,30 +530,7 @@ zvol_geom_worker(void *arg)
 			continue;
 		}
 		mtx_unlock(&zsg->zsg_queue_mtx);
-		switch (bp->bio_cmd) {
-			case BIO_READ:
-			case BIO_WRITE:
-				zvol_geom_bio_readwrite(zv, bp);
-				continue;
-			default:
-				break;
-		}
-		rw_enter(&zv->zv_suspend_lock, ZVOL_RW_READER);
-		zvol_geom_bio_check_zilog(bp);
-		err = 0;
-		switch (bp->bio_cmd) {
-			case BIO_FLUSH:
-				zil_commit(zv->zv_zilog, ZVOL_OBJ);
-				break;
-			case BIO_DELETE:
-				err = zvol_geom_bio_delete(zv, bp);
-				break;
-			default:
-				err = EOPNOTSUPP;
-				break;
-		}
-		rw_exit(&zv->zv_suspend_lock);
-		zvol_done(bp, err);
+		zvol_process_bio(zv, bp);
 	}
 }
 
@@ -533,7 +540,6 @@ zvol_geom_bio_start(struct bio *bp)
 	zvol_state_t *zv = bp->bio_to->private;
 	struct zvol_state_geom *zsg = &zv->zv_zso->zso_geom;
 	boolean_t first;
-	int err = 0;
 
 	if (bp->bio_cmd == BIO_GETATTR) {
 		if (zvol_geom_bio_getattr(bp))
@@ -541,6 +547,14 @@ zvol_geom_bio_start(struct bio *bp)
 		return;
 	}
 
+	switch (bp->bio_cmd) {
+	case BIO_READ:
+	case BIO_WRITE:
+		zvol_geom_bio_readwrite(zv, bp);
+		return;
+	default:
+		;
+	}
 	if (!THREAD_CAN_SLEEP()) {
 		mtx_lock(&zsg->zsg_queue_mtx);
 		first = (bioq_first(&zsg->zsg_queue) == NULL);
@@ -550,30 +564,7 @@ zvol_geom_bio_start(struct bio *bp)
 			wakeup_one(&zsg->zsg_queue);
 		return;
 	}
-	switch (bp->bio_cmd) {
-	case BIO_READ:
-	case BIO_WRITE:
-		zvol_geom_bio_readwrite(zv, bp);
-		return;
-	default:
-		;
-	}
-	rw_enter(&zv->zv_suspend_lock, ZVOL_RW_READER);
-	zvol_geom_bio_check_zilog(bp);
-	switch (bp->bio_cmd) {
-	case BIO_FLUSH:
-		zil_commit(zv->zv_zilog, ZVOL_OBJ);
-		break;
-	case BIO_DELETE:
-		err = zvol_geom_bio_delete(zv, bp);
-		break;
-	default:
-		err = EOPNOTSUPP;
-		break;
-	}
-	rw_exit(&zv->zv_suspend_lock);
-	g_io_deliver(bp, err);
-
+	zvol_process_bio(zv, bp);
 }
 
 static int
@@ -704,12 +695,13 @@ zvol_geom_bio_readwrite(zvol_state_t *zv, struct bio *bp)
 
 	if (bp->bio_cmd == BIO_READ)
 		dmu_flags |= DMU_CTX_FLAG_READ;
+	else
+		zvol_ensure_zilog_async(zv);
 
 	zss = kmem_zalloc(sizeof (zvol_strategy_state_t), KM_SLEEP);
 	zss->bp = bp;
 	zss->zds.zds_zv = zv;
 
-	zvol_ensure_zilog_async(zv);
 	error = zvol_dmu_ctx_init(&zss->zds, bp->bio_data, bp->bio_offset,
 	    bp->bio_length, dmu_flags, zvol_strategy_dmu_done);
 	if (error) {
@@ -727,7 +719,6 @@ static void
 zvol_geom_bio_strategy(struct bio *bp)
 {
 	zvol_state_t *zv;
-	int error = EOPNOTSUPP;
 
 	if (bp->bio_to)
 		zv = bp->bio_to->private;
@@ -744,27 +735,7 @@ zvol_geom_bio_strategy(struct bio *bp)
 		zvol_done(bp, SET_ERROR(EROFS));
 		return;
 	}
-	switch (bp->bio_cmd) {
-	case BIO_READ:
-	case BIO_WRITE:
-		zvol_geom_bio_readwrite(zv, bp);
-		return;
-	default:
-			;
-	}
-	rw_enter(&zv->zv_suspend_lock, ZVOL_RW_READER);
-	switch (bp->bio_cmd) {
-	case BIO_DELETE:
-		error = zvol_geom_bio_delete(zv, bp);
-		break;
-	case BIO_FLUSH:
-		zil_commit(zv->zv_zilog, ZVOL_OBJ);
-		break;
-	default:
-		error = EOPNOTSUPP;
-	}
-	rw_exit(&zv->zv_suspend_lock);
-	zvol_done(bp, error);
+	zvol_process_bio(zv, bp);
 }
 
 /*
