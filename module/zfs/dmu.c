@@ -559,9 +559,8 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 	dmu_ctx_t *dc = dbs->dbs_dc;
 	dnode_t *dn = dc->dc_dn;
 	uint64_t blkid, buftotal, dn_offset;
-	int dbuf_flags;
+	int i, dbuf_flags;
 	boolean_t read, prefetch;
-	int i;
 
 	read = dc->dc_flags & DMU_CTX_FLAG_READ;
 	prefetch = dc->dc_flags & DMU_CTX_FLAG_PREFETCH;
@@ -569,9 +568,12 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 	if (!prefetch || dbs->dbs_size > zfetch_array_rd_sz)
 		dbuf_flags |= DB_RF_NOPREFETCH;
 
+	dn_offset = dc->dc_dn_offset;
+	dmu_prefetch(dn->dn_objset, dc->dc_object, 1, dn_offset,
+	    dbs->dbs_resid, ZIO_PRIORITY_SYNC_READ);
+
 	dbs->dbs_zio = zio_root(dn->dn_objset->os_spa, NULL, NULL,
 	    ZIO_FLAG_CANFAIL);
-	dn_offset = dc->dc_dn_offset;
 	blkid = dbuf_whichblock(dn, 0, dn_offset);
 	buftotal = 0;
 
