@@ -552,7 +552,7 @@ dmu_buf_set_rele(dmu_buf_set_t *dbs, int err)
  *          0		Success.
  */
 static int
-dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
+dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 {
 	dmu_ctx_t *dc = dbs->dbs_dc;
 	dnode_t *dn = dc->dc_dn;
@@ -569,17 +569,17 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 	if (!prefetch || dbs->dbs_size > zfetch_array_rd_sz)
 		dbuf_flags |= DB_RF_NOPREFETCH;
 
-	dmu_prefetch(dn->dn_objset, dc->dc_object, 1, dc->dc_dn_offset,
-	    dbs->dbs_resid, ZIO_PRIORITY_SYNC_READ);
-
-	dbs->dbs_zio = zio_root(dn->dn_objset->os_spa, NULL, NULL,
-	    ZIO_FLAG_CANFAIL);
+	if (!restarted) {
+		dmu_prefetch(dn->dn_objset, dc->dc_object, 1, dc->dc_dn_offset,
+		    dbs->dbs_resid, ZIO_PRIORITY_SYNC_READ);
+		dbs->dbs_zio = zio_root(dn->dn_objset->os_spa, NULL, NULL,
+		     ZIO_FLAG_CANFAIL);
+	}
 	blkid = dbuf_whichblock(dn, 0, dbs->dbs_dn_start);
 
-#ifdef CAN_DMU_RESTART
 	if (dc->dc_flags & DMU_CTX_FLAG_ASYNC)
 		async_zio = dbs->dbs_zio;
-#endif
+
 	/*
 	 * Note that while this loop is running, any zio's set up for async
 	 * reads are not executing, therefore access to this dbs is
@@ -773,19 +773,22 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	size_t set_size;
 	int err, nblks;
 	dnode_t *dn = dmu_ctx->dc_dn;
+	boolean_t restarted;
 
 	ASSERT(dmu_ctx != NULL);
 	ASSERT(!zfs_refcount_is_zero(&dmu_ctx->dc_holds));
 	dbs = *buf_set_p;
 
 	if (dbs == NULL) {
+		restarted = B_FALSE;
 		if ((err = dmu_buf_set_allocate(dmu_ctx, &dbs, size)))
 			return (err);
 	} else {
+		restarted = B_TRUE;
 		rw_enter(&dn->dn_struct_rwlock, RW_READER);
 	}
 	tx = dbs->dbs_tx;
-	err = dmu_buf_set_setup_buffers(dbs);
+	err = dmu_buf_set_setup_buffers(dbs, restarted);
 	if (err  == 0) {
 		*buf_set_p = dbs;
 	} else  if (err == EWOULDBLOCK) {
