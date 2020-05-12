@@ -573,7 +573,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 		dmu_prefetch(dn->dn_objset, dc->dc_object, 1, dc->dc_dn_offset,
 		    dbs->dbs_resid, ZIO_PRIORITY_SYNC_READ);
 		dbs->dbs_zio = zio_root(dn->dn_objset->os_spa, NULL, NULL,
-		     ZIO_FLAG_CANFAIL);
+		    ZIO_FLAG_CANFAIL);
 	}
 	blkid = dbuf_whichblock(dn, 0, dbs->dbs_dn_start);
 

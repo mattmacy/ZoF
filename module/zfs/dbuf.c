@@ -3438,8 +3438,8 @@ dbuf_hold_impl_(dnode_t *dn, uint8_t level, uint64_t blkid,
 			return (SET_ERROR(ENOENT));
 
 		ASSERT3P(parent, ==, NULL);
-		err = dbuf_findbp(dn, level, blkid, fail_sparse, &parent, &bp, ctx);
-
+		err = dbuf_findbp(dn, level, blkid, fail_sparse, &parent,
+		    &bp, ctx);
 		if (fail_sparse) {
 			if (err == 0 && bp && BP_IS_HOLE(bp))
 				err = SET_ERROR(ENOENT);
@@ -3554,7 +3554,7 @@ dbuf_hold_level_async(struct dnode *dn, int level, uint64_t blkid,
 	ctx.resid = resid;
 	ctx.zio = zio;
 	return (dbuf_hold_impl_(dn, level, blkid, FALSE, FALSE,
-	     tag, dbp, &ctx));
+	    tag, dbp, &ctx));
 }
 
 void
