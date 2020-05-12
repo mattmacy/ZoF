@@ -193,12 +193,13 @@ DEBUG_REFCOUNT(_vfs_zfs_dmu, buf_set_in_flight, "Buffer sets in flight");
 uint_t zfs_async_io_key;
 
 void
-dmu_buf_set_node_add(list_t *list, dmu_buf_set_t *dbs)
+dmu_buf_set_node_add(list_t *list, dmu_buf_set_t *dbs, boolean_t restart)
 {
 	dmu_buf_set_node_t *dbsn = kmem_zalloc(sizeof (dmu_buf_set_node_t),
 	    KM_SLEEP);
 	list_link_init(&dbsn->dbsn_link);
 	dbsn->dbsn_dbs = dbs;
+	dbsn->dbsn_dmu_restart = restart;
 	list_insert_tail(list, dbsn);
 	DEBUG_REFCOUNT_ADD(dbsn_in_flight);
 }
@@ -531,7 +532,7 @@ dmu_buf_set_rele(dmu_buf_set_t *dbs, int err)
 
 	dcs = tsd_get(zfs_async_io_key);
 	if (dcs != NULL && (dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC)) {
-		dmu_buf_set_node_add(&dcs->dcs_io_list, dbs);
+		dmu_buf_set_node_add(&dcs->dcs_io_list, dbs, B_FALSE);
 	} else {
 			/*
 			 * The current thread doesn't have anything
@@ -555,7 +556,9 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 {
 	dmu_ctx_t *dc = dbs->dbs_dc;
 	dnode_t *dn = dc->dc_dn;
-	uint64_t blkid, buftotal, dn_offset;
+	dmu_buf_impl_t *db;
+	uint64_t blkid;
+	uint64_t bufoff, bufsiz;
 	int i, dbuf_flags;
 	boolean_t read, prefetch;
 
@@ -565,27 +568,30 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 	if (!prefetch || dbs->dbs_size > zfetch_array_rd_sz)
 		dbuf_flags |= DB_RF_NOPREFETCH;
 
-	dn_offset = dc->dc_dn_offset;
-	dmu_prefetch(dn->dn_objset, dc->dc_object, 1, dn_offset,
+	dmu_prefetch(dn->dn_objset, dc->dc_object, 1, dc->dc_dn_offset,
 	    dbs->dbs_resid, ZIO_PRIORITY_SYNC_READ);
 
 	dbs->dbs_zio = zio_root(dn->dn_objset->os_spa, NULL, NULL,
 	    ZIO_FLAG_CANFAIL);
-	blkid = dbuf_whichblock(dn, 0, dn_offset);
-	buftotal = 0;
+	blkid = dbuf_whichblock(dn, 0, dbs->dbs_dn_start);
 
 	/*
 	 * Note that while this loop is running, any zio's set up for async
 	 * reads are not executing, therefore access to this dbs is
 	 * serialized within this function; i.e. atomics are not needed here.
 	 */
-	for (i = 0; i < dbs->dbs_count; i++) {
-		dmu_buf_impl_t *db = NULL;
-		uint64_t bufoff, bufsiz;
+	for (i = dbs->dbs_async_holds; i < dbs->dbs_count; i++) {
+		db = NULL;
 
 		int err = dbuf_hold_impl_(dn, /* level */ 0, blkid + i,
 		    /* fail_sparse */ FALSE, /* fail_uncached */ FALSE,
-		    dc->dc_tag, &db, dbs, dn_offset, dbs->dbs_resid);
+		    dc->dc_tag, &db, dbs, dc->dc_dn_offset, dbs->dbs_resid);
+
+		if (err == EWOULDBLOCK)
+			return (err);
+
+		dbs->dbs_async_holds++;
+		VERIFY(err == 0);
 		if (db == NULL) {
 			VERIFY(err);
 			/* Only include counts for the processed buffers. */
@@ -598,12 +604,9 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 			return (err);
 		}
 		/* Calculate the amount of data this buffer contributes. */
-		bufoff = dn_offset - db->db.db_offset;
+		bufoff = dc->dc_dn_offset - db->db.db_offset;
 		bufsiz = (int)MIN(db->db.db_size - bufoff, dbs->dbs_resid);
-		VERIFY(err == 0);
 		dbs->dbs_resid -= bufsiz;
-		buftotal += bufsiz;
-		dn_offset += bufsiz;
 
 		/* initiate async i/o */
 		if ((dc->dc_flags & DMU_CTX_FLAG_READ) ||
@@ -611,14 +614,12 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 		    db->db_state != DB_CACHED))
 			(void) dbuf_read(db, dbs->dbs_zio, dbuf_flags);
 
+		/* Update the caller's data to let them know what's next. */
+		dc->dc_dn_offset += bufsiz;
+		dc->dc_resid -= bufsiz;
 		/* Put this dbuf in the buffer set's list. */
 		dbs->dbs_dbp[i] = &db->db;
 	}
-		/* Update the caller's data to let them know what's next. */
-	mutex_enter(&dc->dc_mtx);
-	dc->dc_dn_offset += buftotal;
-	dc->dc_resid -= buftotal;
-	mutex_exit(&dc->dc_mtx);
 
 	if (prefetch && DNODE_META_IS_CACHEABLE(dn) &&
 	    dbs->dbs_size <= zfetch_array_rd_sz) {
@@ -671,28 +672,18 @@ out:
 }
 
 /*
- * Initialize a buffer set of a certain size.
+ * Allocate and initialize a dmu_buf_set_t *
  *
- * - dmu_ctx	DMU context to associate the buffer set with.
- * - buf_set_p	Pointer to set to the new buffer set's address.
- * - size		Requested size of the buffer set.
- *
- * returns: 0		Success.
- *          EIO		I/O error: tried to access past the end of the dnode,
- * 			or dmu_buf_set_setup_buffers() failed.
  */
 static int
-dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
+dmu_buf_set_allocate(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
     uint64_t size)
 {
-	dmu_buf_set_t *dbs;
-	dmu_tx_t *tx = NULL;
-	size_t set_size;
-	int err, nblks;
 	dnode_t *dn = dmu_ctx->dc_dn;
-
-	ASSERT(dmu_ctx != NULL);
-	ASSERT(!zfs_refcount_is_zero(&dmu_ctx->dc_holds));
+	dmu_tx_t *tx = NULL;
+	dmu_buf_set_t *dbs;
+	int err, nblks;
+	size_t set_size;
 
 	/*
 	 * Create a transaction for writes, if needed.  This must be done
@@ -720,8 +711,8 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 			    (longlong_t)dn->dn_object, dn->dn_datablksz,
 			    (longlong_t)dmu_ctx->dc_dn_offset,
 			    (longlong_t)size);
-			err = SET_ERROR(EIO);
-			goto out;
+			rw_exit(&dn->dn_struct_rwlock);
+			return (SET_ERROR(EIO));
 		}
 		nblks = 1;
 	}
@@ -753,11 +744,53 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	zfs_refcount_add(&dmu_ctx->dc_holds, NULL);
 	/* Either we're a reader or we have a transaction somewhere. */
 	ASSERT((dmu_ctx->dc_flags & DMU_CTX_FLAG_READ) || dmu_buf_set_tx(dbs));
+	*buf_set_p = dbs;
+	return (0);
+}
+/*
+ * Initialize a buffer set of a certain size.
+ *
+ * - dmu_ctx	DMU context to associate the buffer set with.
+ * - buf_set_p	Pointer to set to the new buffer set's address.
+ * - size		Requested size of the buffer set.
+ *
+ * returns: 0		Success.
+ *          EIO		I/O error: tried to access past the end of the dnode,
+ * 			or dmu_buf_set_setup_buffers() failed.
+ */
+static int
+dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
+    uint64_t size)
+{
+	dmu_buf_set_t *dbs;
+	dmu_tx_t *tx;
+	size_t set_size;
+	int err, nblks;
+	dnode_t *dn = dmu_ctx->dc_dn;
 
+	ASSERT(dmu_ctx != NULL);
+	ASSERT(!zfs_refcount_is_zero(&dmu_ctx->dc_holds));
+	dbs = *buf_set_p;
+
+	if (dbs == NULL) {
+		if ((err = dmu_buf_set_allocate(dmu_ctx, &dbs, size)))
+			return (err);
+	} else {
+		rw_enter(&dn->dn_struct_rwlock, RW_READER);
+	}
+	tx = dbs->dbs_tx;
 	err = dmu_buf_set_setup_buffers(dbs);
 	if (err  == 0) {
 		*buf_set_p = dbs;
+	} else  if (err == EWOULDBLOCK) {
+		rw_exit(&dn->dn_struct_rwlock);
+		return (err);
 	} else {
+		/* XXX this whole error path needs revisiting */
+		nblks = dbs->dbs_count;
+		set_size = sizeof (dmu_buf_set_t) +
+		    nblks * sizeof (dmu_buf_t *);
+
 		if (dmu_ctx->dc_flags & (DMU_CTX_FLAG_READ|DMU_CTX_FLAG_ASYNC))
 			zfs_refcount_destroy_many(&dbs->dbs_holds, nblks + 1);
 		else
@@ -772,7 +805,6 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 		atomic_add_64(&buf_set_total, -1);
 #endif
 	}
-out:
 	if (err && tx != NULL)
 		dmu_tx_abort(tx);
 	rw_exit(&dn->dn_struct_rwlock);
@@ -860,10 +892,13 @@ dmu_issue(dmu_ctx_t *dc)
 	    dc->dc_data_buf, dc->dc_dn_offset, dc->dc_resid);
 	while (dc->dc_resid > 0 && err == 0) {
 		io_size = MIN(dc->dc_resid, DMU_MAX_ACCESS/2);
+		dbs = NULL;
 
 		dprintf("%s(%p@%lu+%lu) chunk %lu\n", __func__, dc,
 		    dc->dc_dn_offset, dc->dc_resid, io_size);
 		err = dmu_buf_set_init(dc, &dbs, io_size);
+		if (err == EWOULDBLOCK)
+			return (0);
 		/* Process the I/O requests, if the initialization passed. */
 		if (err == 0) {
 			err = dmu_buf_set_process_io(dbs);
@@ -886,6 +921,51 @@ dmu_issue(dmu_ctx_t *dc)
 
 	return (dc->dc_err);
 }
+
+void
+dmu_issue_restart(dmu_buf_set_t *dbs, int err)
+{
+	uint64_t io_size;
+	dmu_ctx_t *dc;
+
+	dc = dbs->dbs_dc;
+	if (err) {
+		/*
+		 * We skipped a hold + rele || hold + read
+		 */
+		VERIFY(zfs_refcount_remove(&dbs->dbs_holds, NULL) != 0);
+		dmu_buf_set_rele(dbs, err);
+	}
+	/* This context must be async */
+	ASSERT(dc->dc_flags & DMU_CTX_FLAG_ASYNC);
+
+	/* While there is work left to do, execute the next chunk. */
+	dprintf("%s(%p) -> buf %p off %lu sz %lu\n", __func__, dc,
+	    dc->dc_data_buf, dc->dc_dn_offset, dc->dc_resid);
+	while (dc->dc_resid > 0 && err == 0) {
+		io_size = MIN(dc->dc_resid, DMU_MAX_ACCESS/2);
+
+		dprintf("%s(%p@%lu+%lu) chunk %lu\n", __func__, dc,
+		    dc->dc_dn_offset, dc->dc_resid, io_size);
+		err = dmu_buf_set_init(dc, &dbs, io_size);
+		if (err == EWOULDBLOCK)
+			return;
+		/* Process the I/O requests, if the initialization passed. */
+		if (err == 0)
+			err = dmu_buf_set_process_io(dbs);
+		if (dbs != NULL)
+			dmu_buf_set_rele(dbs, err);
+		dbs = NULL;
+	}
+
+	/*
+	 * If an error occurs while actually performing I/O, propagate to
+	 * the caller.  If an error occurs in this context, ensure that
+	 * async callers also receive it via the context, if appropriate.
+	 */
+	dmu_ctx_set_error(dc, err);
+}
+
 
 /*
  * Set up a DMU context.
