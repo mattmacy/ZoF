@@ -463,6 +463,9 @@ typedef struct dmu_buf_set {
 	/* The number of errors that occurred. */
 	int dbs_err;
 
+	/* number of buffers held so far */
+	int dbs_async_holds;
+
 	/* The ZIO associated with this context. */
 	struct zio *dbs_zio;
 
@@ -1009,6 +1012,7 @@ int dmu_free_long_object(objset_t *os, uint64_t object);
  * nonrecoverable I/O error.
  */
 int dmu_issue(dmu_ctx_t *dc);
+void dmu_issue_restart(dmu_buf_set_t *dbs, int err);
 int dmu_read(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 	void *buf, uint32_t flags);
 int dmu_read_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size, void *buf,

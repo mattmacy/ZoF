@@ -317,6 +317,9 @@ typedef struct dbuf_hash_table {
 
 typedef struct dmu_buf_set_node {
 
+	/* This entry requires a dmu restart */
+	boolean_t dbsn_dmu_restart;
+
 	/* This entry's link in the list. */
 	list_node_t dbsn_link;
 
@@ -328,7 +331,8 @@ typedef struct dmu_buf_set_node {
 /* Used for TSD for processing completed asynchronous I/Os. */
 extern uint_t zfs_async_io_key;
 
-void dmu_buf_set_node_add(list_t *list, dmu_buf_set_t *buf_set);
+void dmu_buf_set_node_add(list_t *list, dmu_buf_set_t *buf_set,
+    boolean_t restart);
 void dmu_buf_set_node_remove(list_t *list, dmu_buf_set_node_t *dbsn);
 
 /*
