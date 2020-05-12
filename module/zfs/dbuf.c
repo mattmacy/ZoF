@@ -771,7 +771,10 @@ dbuf_process_buf_sets_(dmu_buf_impl_t *db, int err, const char *function)
 	ASSERT(db->db_buf != NULL || err);
 	for (dbsn = list_head(&db->db_buf_sets); dbsn != NULL; dbsn = next) {
 		next = list_next(&db->db_buf_sets, dbsn);
-		dmu_buf_set_rele(dbsn->dbsn_dbs, err);
+		if (dbsn->dbsn_dmu_restart)
+			dmu_issue_restart(dbsn->dbsn_dbs, err);
+		else
+			dmu_buf_set_rele(dbsn->dbsn_dbs, err);
 		dmu_buf_set_node_remove(&db->db_buf_sets, dbsn);
 		count++;
 	}
@@ -3336,7 +3339,7 @@ dbuf_hold_update_buf_set(dmu_buf_set_t *dbs, uint64_t dn_off,
 			/* Dbuf is already at the desired state. */
 			dmu_buf_set_rele(dbs, /* err */ 0);
 		} else {
-			dmu_buf_set_node_add(&db->db_buf_sets, dbs);
+			dmu_buf_set_node_add(&db->db_buf_sets, dbs, B_FALSE);
 		}
 	} else if (dc->dc_flags & DMU_CTX_FLAG_ASYNC) {
 		/* Calculate the amount of data this buffer contributes. */
@@ -3346,7 +3349,7 @@ dbuf_hold_update_buf_set(dmu_buf_set_t *dbs, uint64_t dn_off,
 			/* Dbuf is resident or will be overwritten. */
 			dmu_buf_set_rele(dbs, /* err */ 0);
 		} else {
-			dmu_buf_set_node_add(&db->db_buf_sets, dbs);
+			dmu_buf_set_node_add(&db->db_buf_sets, dbs, B_FALSE);
 		}
 	}
 }
