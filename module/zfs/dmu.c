@@ -683,23 +683,24 @@ out:
  */
 static int
 dmu_buf_set_allocate(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
-    uint64_t size)
+    uint64_t size, dnode_t **dnp)
 {
-	dnode_t *dn = dmu_ctx->dc_dn;
 	dmu_tx_t *tx = NULL;
 	dmu_buf_set_t *dbs;
 	int err, nblks;
 	size_t set_size;
+	dnode_t *dn;
 
 	/*
 	 * Create a transaction for writes, if needed.  This must be done
 	 * first in order to hold the correct struct_rwlock, use the
 	 * correct values for dn_datablksz, etc.
 	 */
-	err = dmu_ctx_setup_tx(dmu_ctx, &tx, &dn, size);
+	err = dmu_ctx_setup_tx(dmu_ctx, &tx, dnp, size);
 	*buf_set_p = NULL;
 	if (err)
 		return (err);
+	dn = *dnp;
 	rw_enter(&dn->dn_struct_rwlock, RW_READER);
 
 	/* Figure out how many blocks are needed for the requested size. */
@@ -781,7 +782,7 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 
 	if (dbs == NULL) {
 		restarted = B_FALSE;
-		if ((err = dmu_buf_set_allocate(dmu_ctx, &dbs, size)))
+		if ((err = dmu_buf_set_allocate(dmu_ctx, &dbs, size, &dn)))
 			return (err);
 	} else {
 		restarted = B_TRUE;
