@@ -556,6 +556,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 {
 	dmu_ctx_t *dc = dbs->dbs_dc;
 	dnode_t *dn = dc->dc_dn;
+	zio_t *async_zio = NULL;
 	dmu_buf_impl_t *db;
 	uint64_t blkid;
 	uint64_t bufoff, bufsiz;
@@ -575,6 +576,10 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 	    ZIO_FLAG_CANFAIL);
 	blkid = dbuf_whichblock(dn, 0, dbs->dbs_dn_start);
 
+#ifdef CAN_DMU_RESTART
+	if (dc->dc_flags & DMU_CTX_FLAG_ASYNC)
+		async_zio = dbs->dbs_zio;
+#endif
 	/*
 	 * Note that while this loop is running, any zio's set up for async
 	 * reads are not executing, therefore access to this dbs is
@@ -583,14 +588,14 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 	for (i = dbs->dbs_async_holds; i < dbs->dbs_count; i++) {
 		db = NULL;
 
-		int err = dbuf_hold_impl_(dn, /* level */ 0, blkid + i,
-		    /* fail_sparse */ FALSE, /* fail_uncached */ FALSE,
-		    dc->dc_tag, &db, dbs, dc->dc_dn_offset, dbs->dbs_resid);
+		int err = dbuf_hold_level_async(dn, /* level */ 0, blkid + i,
+		    dc->dc_tag, &db, dc->dc_dn_offset, dbs, dbs->dbs_resid,
+		    async_zio);
 
-		if (err == EWOULDBLOCK)
+		if (err == EWOULDBLOCK) {
+			ASSERT(dc->dc_flags & DMU_CTX_FLAG_ASYNC);
 			return (err);
-
-		dbs->dbs_async_holds++;
+		}
 		VERIFY(err == 0);
 		if (db == NULL) {
 			VERIFY(err);
@@ -603,6 +608,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs)
 			zio_nowait(dbs->dbs_zio);
 			return (err);
 		}
+		dbs->dbs_async_holds++;
 		/* Calculate the amount of data this buffer contributes. */
 		bufoff = dc->dc_dn_offset - db->db.db_offset;
 		bufsiz = (int)MIN(db->db.db_size - bufoff, dbs->dbs_resid);
