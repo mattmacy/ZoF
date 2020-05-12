@@ -355,10 +355,9 @@ void dbuf_rm_spill(struct dnode *dn, dmu_tx_t *tx);
 dmu_buf_impl_t *dbuf_hold(struct dnode *dn, uint64_t blkid, void *tag);
 dmu_buf_impl_t *dbuf_hold_level(struct dnode *dn, int level, uint64_t blkid,
     void *tag);
-int dbuf_hold_impl_(struct dnode *dn, uint8_t level, uint64_t blkid,
-    boolean_t fail_sparse, boolean_t fail_uncached,
-    void *tag, dmu_buf_impl_t **dbp, dmu_buf_set_t *dbs,
-    uint64_t dnoff, uint64_t resid);
+int dbuf_hold_level_async(struct dnode *dn, int level, uint64_t blkid,
+    void *tag, dmu_buf_impl_t **dbp, uint64_t dnoff, dmu_buf_set_t *dbs,
+    uint64_t resid, zio_t *zio);
 int dbuf_hold_impl(struct dnode *dn, uint8_t level, uint64_t blkid,
     boolean_t fail_sparse, boolean_t fail_uncached,
     void *tag, dmu_buf_impl_t **dbp);
