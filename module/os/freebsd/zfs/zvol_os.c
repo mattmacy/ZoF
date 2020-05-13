@@ -218,6 +218,7 @@ zvol_geom_open(struct g_provider *pp, int flag, int count)
 	zvol_state_t *zv;
 	int err = 0;
 	boolean_t drop_suspend = B_TRUE;
+	boolean_t drop_namespace = B_FALSE;
 
 	if (!zpool_on_zvol && tsd_get(zfs_geom_probe_vdev_key) != NULL) {
 		/*
@@ -231,13 +232,29 @@ zvol_geom_open(struct g_provider *pp, int flag, int count)
 		return (SET_ERROR(EOPNOTSUPP));
 	}
 
+
+retry:
 	rw_enter(&zvol_state_lock, ZVOL_RW_READER);
 	zv = pp->private;
 	if (zv == NULL) {
+		if (drop_namespace)
+			mutex_exit(&spa_namespace_lock);
 		rw_exit(&zvol_state_lock);
 		return (SET_ERROR(ENXIO));
 	}
-
+	if (zv->zv_open_count == 0 && !mutex_owned(&spa_namespace_lock)) {
+		/*
+		 * We need to guarantee that the namespace lock is held
+		 * to avoid spurious failures in zvol_first_open
+		 */
+		int locked = mutex_tryenter(&spa_namespace_lock);
+		drop_namespace = B_TRUE;
+		if (!locked) {
+			rw_exit(&zvol_state_lock);
+			mutex_enter(&spa_namespace_lock);
+			goto retry;
+		}
+	}
 	mutex_enter(&zv->zv_state_lock);
 
 	ASSERT(zv->zv_zso->zso_volmode == ZFS_VOLMODE_GEOM);
@@ -299,6 +316,8 @@ zvol_geom_open(struct g_provider *pp, int flag, int count)
 #endif
 
 	zv->zv_open_count += count;
+	if (drop_namespace)
+		mutex_exit(&spa_namespace_lock);
 	mutex_exit(&zv->zv_state_lock);
 	if (drop_suspend)
 		rw_exit(&zv->zv_suspend_lock);
@@ -308,6 +327,8 @@ out_open_count:
 	if (zv->zv_open_count == 0)
 		zvol_last_close(zv);
 out_mutex:
+	if (drop_namespace)
+		mutex_exit(&spa_namespace_lock);
 	mutex_exit(&zv->zv_state_lock);
 	if (drop_suspend)
 		rw_exit(&zv->zv_suspend_lock);
