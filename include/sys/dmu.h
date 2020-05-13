@@ -384,6 +384,7 @@ typedef struct dmu_ctx {
 
 	/* The primary data associated with this context. */
 	uint64_t dc_size;	/* Requested total I/O size. */
+	uint64_t dc_resid_init;	/* Initial remaining bytes to process. */
 	uint64_t dc_resid;	/* Remaining bytes to process. */
 	uint64_t dc_dn_start;	/* Starting block offset into the dnode. */
 	uint64_t dc_dn_offset;	/* Current block offset. */
@@ -432,7 +433,7 @@ typedef struct dmu_ctx {
 	/* Flags for this DMU context. */
 	dmu_ctx_flag_t dc_flags;
 
-	/* The number of errors that occurred. */
+	/* The worst that occurred. */
 	int dc_err;
 } dmu_ctx_t;
 
@@ -460,7 +461,7 @@ typedef struct dmu_buf_set {
 	/* For writes only, if the context doesn't have a transaction. */
 	dmu_tx_t *dbs_tx;
 
-	/* The number of errors that occurred. */
+	/* The worst error that occurred. */
 	int dbs_err;
 
 	/* number of buffers held so far */
