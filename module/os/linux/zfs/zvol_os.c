@@ -326,7 +326,7 @@ zvol_strategy_dmu_done(dmu_ctx_t *dc)
 	if (dc->dc_resid_init == dc->dc_size)
 		len = dc->dc_completed_size;
 	else
-	    len = dc->dc_size;
+		len = dc->dc_size;
 
 	err = dc->dc_err;
 	reader = !!(dc->dc_flags & DMU_CTX_FLAG_READ);
