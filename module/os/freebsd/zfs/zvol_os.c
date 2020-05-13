@@ -687,8 +687,15 @@ zvol_strategy_dmu_done(dmu_ctx_t *dc)
 	zvol_strategy_state_t *zss = (zvol_strategy_state_t *)dc;
 
 	zvol_dmu_done(dc);
-	zss->bp->bio_completed = dc->dc_completed_size;
 
+	/*
+	 * Workaround bug in vdev_probe by being bug
+	 * for bug compatible with legacy code
+	 */
+	if (dc->dc_resid_init == dc->dc_size)
+		zss->bp->bio_completed = dc->dc_completed_size;
+	else
+		zss->bp->bio_completed = dc->dc_size;
 	zvol_done(zss->bp, dc->dc_err);
 	kmem_free(zss, sizeof (zvol_strategy_state_t));
 }
