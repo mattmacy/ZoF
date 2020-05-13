@@ -1119,6 +1119,7 @@ dmu_ctx_seek(dmu_ctx_t *dmu_ctx, uint64_t offset, uint64_t size,
 	dmu_ctx->dc_dn_offset = offset;
 	dmu_ctx->dc_dn_start = offset;
 	dmu_ctx->dc_resid = size;
+	dmu_ctx->dc_resid_init = size;
 	dmu_ctx->dc_data_buf = data_buf;
 }
 

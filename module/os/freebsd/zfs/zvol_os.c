@@ -690,7 +690,14 @@ zvol_strategy_dmu_done(dmu_ctx_t *dc)
 	struct bio *bp = zss->bp;
 
 	zvol_dmu_done(dc);
-	bp->bio_completed = dc->dc_completed_size;
+	/*
+	 * Workaround bug in vdev_probe by being bug
+	 * for bug compatible with legacy code
+	 */
+	if (dc->dc_resid_init == dc->dc_size)
+		bp->bio_completed = dc->dc_completed_size;
+	else
+		bp->bio_completed = dc->dc_size;
 
 	switch (bp->bio_cmd) {
 	case BIO_READ:
