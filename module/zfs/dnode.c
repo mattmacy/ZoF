@@ -271,7 +271,7 @@ dnode_verify(dnode_t *dn)
 	if (!(zfs_flags & ZFS_DEBUG_DNODE_VERIFY))
 		return;
 
-	if (!RW_WRITE_HELD(&dn->dn_struct_rwlock)) {
+	if (!RW_LOCK_HELD(&dn->dn_struct_rwlock)) {
 		rw_enter(&dn->dn_struct_rwlock, RW_READER);
 		drop_struct_lock = TRUE;
 	}
