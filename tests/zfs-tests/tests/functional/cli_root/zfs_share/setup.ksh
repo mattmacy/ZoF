@@ -27,7 +27,7 @@
 
 . $STF_SUITE/include/libtest.shlib
 
-share -s
+is_freebsd || share -s
 if [ $? -ne 0 ]; then
 	log_unsupported "The NFS utilities are not installed"
 fi

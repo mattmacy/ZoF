@@ -1389,7 +1389,7 @@ function is_shared_smb
 		fs=$(echo $fs | sed 's@/@_@g')
 	fi
 
-	if is_linux; then
+	if pgrep -q smbd; then
 		for mtpt in `net usershare list | awk '{print $1}'` ; do
 			if [[ $mtpt == $fs ]] ; then
 				return 0
@@ -1397,7 +1397,7 @@ function is_shared_smb
 		done
 		return 1
 	else
-		log_unsupported "Currently unsupported by the test framework"
+		log_note "SMB currently unsupported by the test framework"
 		return 1
 	fi
 }
@@ -1411,12 +1411,7 @@ function not_shared
 {
 	typeset fs=$1
 
-	is_shared $fs
-	if (($? == 0)); then
-		return 1
-	fi
-
-	return 0
+	! is_shared $fs
 }
 
 #
@@ -1428,12 +1423,7 @@ function not_shared_smb
 {
 	typeset fs=$1
 
-	is_shared_smb $fs
-	if (($? == 0)); then
-		return 1
-	fi
-
-	return 0
+	! is_shared_smb $fs
 }
 
 #
@@ -1528,21 +1518,19 @@ function showshares_smb
 #
 function setup_nfs_server
 {
+	case $(uname) in
+	FreeBSD) setup_nfs_server_freebsd;;
+	Linux) setup_nfs_server_linux;;
+	*) setup_nfs_server_illumos;;
+	esac
+}
+
+function setup_nfs_server_illumos
+{
 	# Cannot share directory in non-global zone.
 	#
 	if ! is_global_zone; then
 		log_note "Cannot trigger NFS server by sharing in LZ."
-		return
-	fi
-
-	if is_linux || is_freebsd; then
-		#
-		# Re-synchronize /var/lib/nfs/etab with /etc/exports and
-		# /etc/exports.d./* to provide a clean test environment.
-		#
-		log_must share -r
-
-		log_note "NFS server must be started prior to running ZTS."
 		return
 	fi
 
@@ -1582,6 +1570,24 @@ function setup_nfs_server
 	fi
 
 	log_note "Current NFS status: '$(svcs -Ho STA,FMRI $nfs_fmri)'"
+}
+
+function setup_nfs_server_linux
+{
+	log_note "NFS server must be started prior to running ZTS."
+
+	#
+	# Re-synchronize /var/lib/nfs/etab with /etc/exports and
+	# /etc/exports.d./* to provide a clean test environment.
+	#
+	log_must share -r
+}
+
+function setup_nfs_server_freebsd
+{
+	log_note "NFS server must be started prior to running ZTS."
+	log_must pgrep -q nfsd
+	log_must pgrep -q mountd
 }
 
 #
