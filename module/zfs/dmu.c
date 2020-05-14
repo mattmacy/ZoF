@@ -186,8 +186,6 @@ DEBUG_REFCOUNT(_vfs_zfs_dmu, buf_set_in_flight, "Buffer sets in flight");
 	uiomove((data), (sz), (dir), (uio))
 #endif
 
-
-
 /*
  * DMU Context based functions.
  */
@@ -704,7 +702,7 @@ dmu_buf_set_allocate(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	if (err)
 		return (err);
 	dn = *dnp;
-	rw_enter(&dn->dn_struct_rwlock, RW_READER);
+	dn_rlock(dn);
 
 	/* Figure out how many blocks are needed for the requested size. */
 	if (dn->dn_datablkshift) {
@@ -789,7 +787,7 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 			return (err);
 	} else {
 		restarted = B_TRUE;
-		rw_enter(&dn->dn_struct_rwlock, RW_READER);
+		dn_rlock(dn);
 	}
 	tx = dbs->dbs_tx;
 	err = dmu_buf_set_setup_buffers(dbs, restarted);
@@ -1191,7 +1189,7 @@ dmu_buf_hold_noread_by_dnode(dnode_t *dn, uint64_t offset,
 	uint64_t blkid;
 	dmu_buf_impl_t *db;
 
-	rw_enter(&dn->dn_struct_rwlock, RW_READER);
+	dn_rlock(dn);
 	blkid = dbuf_whichblock(dn, 0, offset);
 	db = dbuf_hold(dn, blkid, tag);
 	rw_exit(&dn->dn_struct_rwlock);
@@ -1216,6 +1214,7 @@ dmu_buf_hold_noread(objset_t *os, uint64_t object, uint64_t offset,
 	err = dnode_hold(os, object, FTAG, &dn);
 	if (err)
 		return (err);
+
 	rw_enter(&dn->dn_struct_rwlock, RW_READER);
 	blkid = dbuf_whichblock(dn, 0, offset);
 	db = dbuf_hold(dn, blkid, tag);
@@ -1538,7 +1537,7 @@ dmu_prefetch(objset_t *os, uint64_t object, int64_t level, uint64_t offset,
 		if (object == 0 || object >= DN_MAX_OBJECT)
 			return;
 
-		rw_enter(&dn->dn_struct_rwlock, RW_READER);
+		dn_rlock(dn);
 		blkid = dbuf_whichblock(dn, level,
 		    object * sizeof (dnode_phys_t));
 		dbuf_prefetch(dn, level, blkid, pri, 0);
@@ -1567,7 +1566,7 @@ dmu_prefetch(objset_t *os, uint64_t object, int64_t level, uint64_t offset,
 	 * offset)  is the first.  Then the number we need to prefetch is the
 	 * last - first + 1.
 	 */
-	rw_enter(&dn->dn_struct_rwlock, RW_READER);
+	dn_rlock(dn);
 	if (level > 0 || dn->dn_datablkshift != 0) {
 		nblks = dbuf_whichblock(dn, level, offset + len - 1) -
 		    dbuf_whichblock(dn, level, offset) + 1;
