@@ -277,6 +277,8 @@ zfsdev_open(struct cdev *devp, int flag, int mode, struct thread *td)
 {
 	int error;
 
+	panic("TODO: don't panic here");
+
 	mutex_enter(&zfsdev_state_lock);
 	error = zfs_ctldev_init(devp);
 	mutex_exit(&zfsdev_state_lock);
