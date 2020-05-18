@@ -63,8 +63,6 @@ typedef struct zv_request {
 	boolean_t	flushed;
 } zv_request_t;
 
-static void zvol_strategy(zv_request_t *zr);
-
 /*
  * Given a path, return TRUE if path is a ZVOL.
  */
@@ -350,17 +348,9 @@ zvol_strategy_dmu_done(dmu_ctx_t *dc)
 }
 
 static void
-zvol_strategy_flush(void *arg)
+zvol_strategy(void *arg)
 {
 	zv_request_t *zr = arg;
-
-	zil_commit(zr->zv->zv_zilog, ZVOL_OBJ);
-	zvol_strategy(zr);
-}
-
-static void
-zvol_strategy(zv_request_t *zr)
-{
 	zvol_strategy_state_t *zss;
 	zvol_state_t *zv = zr->zv;
 	uio_t *uio;
@@ -371,12 +361,9 @@ zvol_strategy(zv_request_t *zr)
 	/*
 	 * There is no readily apparent way to make zil_commit async
 	 */
-	if (bio_is_flush(bio) && !zr->flushed) {
-		zr->flushed = B_TRUE;
-		taskq_dispatch_ent(zvol_taskq, zvol_strategy_flush, zr, 0,
-		    &zr->ent);
-		return;
-	}
+	if (bio_is_flush(bio))
+		zil_commit(zr->zv->zv_zilog, ZVOL_OBJ);
+
 	/* Some requests are just for flush and nothing else. */
 	if (BIO_BI_SIZE(bio) == 0) {
 		rw_exit(&zv->zv_suspend_lock);
@@ -510,7 +497,8 @@ zvol_request(struct request_queue *q, struct bio *bio)
 			if (zvol_request_sync) {
 				zvol_write(zvr);
 			} else {
-				zvol_strategy(zvr);
+				taskq_dispatch_ent(zvol_taskq,
+				    zvol_strategy, zvr, 0, &zvr->ent);
 			}
 		}
 	} else {
@@ -535,7 +523,8 @@ zvol_request(struct request_queue *q, struct bio *bio)
 		if (zvol_request_sync) {
 			zvol_read(zvr);
 		} else {
-			zvol_strategy(zvr);
+			taskq_dispatch_ent(zvol_taskq,
+			    zvol_strategy, zvr, 0, &zvr->ent);
 		}
 	}
 
