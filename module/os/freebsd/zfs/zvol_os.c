@@ -712,8 +712,8 @@ zvol_strategy_dmu_done(dmu_ctx_t *dc)
 
 	zvol_dmu_done(dc);
 	/*
-	 * Workaround bug in vdev_probe by being bug
-	 * for bug compatible with legacy code
+	 * Reading zeroes past the end of dnode allocated blocks
+	 * needs to be treated as success
 	 */
 	if (dc->dc_resid_init == dc->dc_size)
 		bp->bio_completed = dc->dc_completed_size;
