@@ -892,6 +892,89 @@ usage:
 }
 
 /*
+ * Return a default volblocksize for the pool which always uses at least
+ * half of the data sectors.  This primarily applies to dRAID which alwaya
+ * writes full stripe widths.
+ */
+static uint64_t
+default_volblocksize(zpool_handle_t *zhp, nvlist_t *props)
+{
+	uint64_t volblocksize, asize = SPA_MINBLOCKSIZE;
+	nvlist_t *tree, **vdevs;
+	uint_t nvdevs;
+
+	nvlist_t *config = zpool_get_config(zhp, NULL);
+
+	if (nvlist_lookup_nvlist(config, ZPOOL_CONFIG_VDEV_TREE, &tree) != 0 ||
+	    nvlist_lookup_nvlist_array(tree, ZPOOL_CONFIG_CHILDREN,
+	    &vdevs, &nvdevs) != 0) {
+		return (ZVOL_DEFAULT_BLOCKSIZE);
+	}
+
+	for (int i = 0; i < nvdevs; i++) {
+		nvlist_t *nv = vdevs[i];
+		uint64_t ashift, ndata;
+
+		if (nvlist_lookup_uint64(nv, ZPOOL_CONFIG_ASHIFT, &ashift) != 0)
+			continue;
+
+		if (nvlist_lookup_uint64(nv, ZPOOL_CONFIG_DRAID_NDATA,
+		    &ndata) == 0) {
+			/* dRAID minimum allocation width */
+			asize = MAX(asize, ndata * (1ULL << ashift));
+		} else {
+			/* mirror or raidz */
+			asize = MAX(asize, 1ULL << ashift);
+		}
+	}
+
+	const char *prop = zfs_prop_to_name(ZFS_PROP_VOLBLOCKSIZE);
+	if (nvlist_lookup_uint64(props, prop, &volblocksize) == 0) {
+		/* Issue a warning when a non-optimal size is requested. */
+		if (volblocksize * 2 <= asize) {
+			uint64_t tgt_volblocksize = volblocksize;
+
+			while (tgt_volblocksize * 2 <= asize)
+				tgt_volblocksize *= 2;
+
+			(void) fprintf(stderr, gettext("Warning: set "
+			    "volblocksize to at least %llu to avoid wasting "
+			    "capacity.\n"), (u_longlong_t)tgt_volblocksize);
+		}
+	} else {
+		/*
+		 * Set the default volblocksize such that more than half of
+		 * the asize is used. The following table is for 4k sectors.
+		 *
+		 * n   asize   blksz  used  |   n   asize   blksz  used
+		 * -------------------------+---------------------------------
+		 * 1   4,096   8,192  100%  |   9  36,864  32,768   88%
+		 * 2   8,192   8,192  100%  |  10  40,960  32,768   80%
+		 * 3  12,288   8,192   66%  |  11  45,056  32,768   72%
+		 * 4  16,384  16,384  100%  |  12  49,152  32,768   66%
+		 * 5  20,480  16,384   80%  |  13  53,248  32,768   61%
+		 * 6  24,576  16,384   66%  |  14  57,344  32,768   57%
+		 * 7  28,672  16,384   57%  |  15  61,440  32,768   53%
+		 * 8  32,768  32,768  100%  |  16  65,536  65,636  100%
+		 *
+		 * Note: This is primarily a concern for dRAID which always
+		 * allocates a full stripe width, unlike mirrors and raidz
+		 * where n=1. For dRAID the default stripe width is n=8
+		 * in which case the volblocksize is set to 32k. Ignoring
+		 * compression there are no unused sectors.
+		 */
+		volblocksize = ZVOL_DEFAULT_BLOCKSIZE;
+
+		while (volblocksize * 2 <= asize)
+			volblocksize *= 2;
+
+		fnvlist_add_uint64(props, prop, volblocksize);
+	}
+
+	return (volblocksize);
+}
+
+/*
  * zfs create [-Pnpv] [-o prop=value] ... fs
  * zfs create [-Pnpsv] [-b blocksize] [-o prop=value] ... -V vol size
  *
@@ -1017,7 +1100,7 @@ zfs_do_create(int argc, char **argv)
 		goto badusage;
 	}
 
-	if (dryrun || (type == ZFS_TYPE_VOLUME && !noreserve)) {
+	if (dryrun || type == ZFS_TYPE_VOLUME) {
 		char msg[ZFS_MAX_DATASET_NAME_LEN * 2];
 		char *p;
 
@@ -1039,18 +1122,14 @@ zfs_do_create(int argc, char **argv)
 		}
 	}
 
-	/*
-	 * if volsize is not a multiple of volblocksize, round it up to the
-	 * nearest multiple of the volblocksize
-	 */
 	if (type == ZFS_TYPE_VOLUME) {
-		uint64_t volblocksize;
+		uint64_t volblocksize = default_volblocksize(zpool_handle,
+		    real_props);
 
-		if (nvlist_lookup_uint64(props,
-		    zfs_prop_to_name(ZFS_PROP_VOLBLOCKSIZE),
-		    &volblocksize) != 0)
-			volblocksize = ZVOL_DEFAULT_BLOCKSIZE;
-
+		/*
+		 * If volsize is not a multiple of volblocksize, round it
+		 * up to the nearest multiple of the volblocksize.
+		 */
 		if (volsize % volblocksize) {
 			volsize = P2ROUNDUP_TYPED(volsize, volblocksize,
 			    uint64_t);
@@ -1062,7 +1141,6 @@ zfs_do_create(int argc, char **argv)
 			}
 		}
 	}
-
 
 	if (type == ZFS_TYPE_VOLUME && !noreserve) {
 		uint64_t spa_version;

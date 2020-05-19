@@ -1441,6 +1441,20 @@ Use \fB1\fR for yes and \fB0\fR to disable (default).
 .sp
 .ne 2
 .na
+\fBzfs_deflate_shift\fR (int)
+.ad
+.RS 12n
+This parameter allows one to define the pools "average block size" which
+is used to calculate available space in raidz and draid configurations.
+Historically, this has always been 128K (17).  This parameter is only
+meaningful at pool create, it is stored in the pool and cannot be changed.
+.sp
+Default value: \fB17\fR.
+.RE
+
+.sp
+.ne 2
+.na
 \fBzfs_delay_min_dirty_percent\fR (int)
 .ad
 .RS 12n
@@ -2796,6 +2810,18 @@ Maximum read segment size to issue when sequentially resilvering a
 top-level vdev.
 .sp
 Default value: \fB1,048,576\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fBzfs_rebuild_vdev_limit\fR (ulong)
+.ad
+.RS 12n
+Maximum amount of data that can be concurrently issued at once for a
+sequential resilver per leaf device, given in bytes.
+.sp
+Default value: \fB33,554,432\fR.
 .RE
 
 .sp

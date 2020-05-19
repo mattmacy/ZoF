@@ -309,6 +309,29 @@ on a top-level vdev, and will never return to being \fBenabled\fR.
 .sp
 .ne 2
 .na
+\fBdraid\fR
+.ad
+.RS 4n
+.TS
+l l .
+GUID	open.openzfs:draid
+READ\-ONLY COMPATIBLE	no
+DEPENDENCIES	none
+.TE
+
+This feature enables use of the \fBdraid\fR vdev type.  dRAID is a distributed
+parity variant of raidz with integrated hot spares that allows for faster
+resilvering while retaining the benefits of raidz.  Data and parity are
+organized in redundancy groups and distributed evenly over all of the devices.
+
+This feature becomes \fBactive\fR when creating a pool which uses the
+\fBdraid\fR vdev type, or when adding a new \fBdraid\fR vdev to an
+existing pool.
+.RE
+
+.sp
+.ne 2
+.na
 \fBedonr\fR
 .ad
 .RS 4n

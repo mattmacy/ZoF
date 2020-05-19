@@ -5,6 +5,7 @@ SUBDIRS = \
 	chg_usr_exec \
 	devname2devid \
 	dir_rd_update \
+	draid \
 	file_check \
 	file_trunc \
 	file_write \

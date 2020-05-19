@@ -142,6 +142,7 @@
 #include <sys/zap.h>
 #include <sys/vdev.h>
 #include <sys/vdev_impl.h>
+#include <sys/vdev_draid.h>
 #include <sys/uberblock_impl.h>
 #include <sys/metaslab.h>
 #include <sys/metaslab_impl.h>
@@ -452,8 +453,8 @@ vdev_config_generate(spa_t *spa, vdev_t *vd, boolean_t getstats,
 		fnvlist_add_string(nv, ZPOOL_CONFIG_FRU, vd->vdev_fru);
 
 	if (vd->vdev_nparity != 0) {
-		ASSERT(strcmp(vd->vdev_ops->vdev_op_type,
-		    VDEV_TYPE_RAIDZ) == 0);
+		ASSERT(vd->vdev_ops == &vdev_raidz_ops ||
+		    vd->vdev_ops == &vdev_draid_ops);
 
 		/*
 		 * Make sure someone hasn't managed to sneak a fancy new vdev
@@ -471,6 +472,15 @@ vdev_config_generate(spa_t *spa, vdev_t *vd, boolean_t getstats,
 		 * will just ignore it.
 		 */
 		fnvlist_add_uint64(nv, ZPOOL_CONFIG_NPARITY, vd->vdev_nparity);
+	}
+
+	if (vd->vdev_ops == &vdev_draid_ops) {
+		fnvlist_add_uint64(nv, ZPOOL_CONFIG_DRAID_NDATA,
+		    vd->vdev_ndata);
+		fnvlist_add_uint64(nv, ZPOOL_CONFIG_DRAID_NSPARES,
+		    vd->vdev_nspares);
+		fnvlist_add_uint64(nv, ZPOOL_CONFIG_DRAID_NGROUPS,
+		    vd->vdev_ngroups);
 	}
 
 	if (vd->vdev_wholedisk != -1ULL)
@@ -781,6 +791,14 @@ vdev_label_read_config(vdev_t *vd, uint64_t txg)
 
 	if (!vdev_readable(vd))
 		return (NULL);
+
+	/*
+	 * The label for a dRAID distributed spare is not stored on disk.
+	 * Instead it is generated when needed which allows us to bypass
+	 * the pipeline when reading the config from the label.
+	 */
+	if (vd->vdev_ops == &vdev_draid_spare_ops)
+		return (vdev_draid_read_config_spare(vd));
 
 	vp_abd = abd_alloc_linear(sizeof (vdev_phys_t), B_TRUE);
 	vp = abd_to_buf(vp_abd);
@@ -1430,7 +1448,8 @@ vdev_uberblock_load_impl(zio_t *zio, vdev_t *vd, int flags,
 	for (int c = 0; c < vd->vdev_children; c++)
 		vdev_uberblock_load_impl(zio, vd->vdev_child[c], flags, cbp);
 
-	if (vd->vdev_ops->vdev_op_leaf && vdev_readable(vd)) {
+	if (vd->vdev_ops->vdev_op_leaf && vdev_readable(vd) &&
+	    vd->vdev_ops != &vdev_draid_spare_ops) {
 		for (int l = 0; l < VDEV_LABELS; l++) {
 			for (int n = 0; n < VDEV_UBERBLOCK_COUNT(vd); n++) {
 				vdev_label_read(zio, vd, l,
@@ -1519,6 +1538,13 @@ vdev_copy_uberblocks(vdev_t *vd)
 	    SCL_STATE);
 	ASSERT(vd->vdev_ops->vdev_op_leaf);
 
+	/*
+	 * No uberblocks are stored on distributed spares, they may be
+	 * safely skipped when expanding a leaf vdev.
+	 */
+	if (vd->vdev_ops == &vdev_draid_spare_ops)
+		return;
+
 	spa_config_enter(vd->vdev_spa, locks, FTAG, RW_READER);
 
 	ub_abd = abd_alloc_linear(VDEV_UBERBLOCK_SIZE(vd), B_TRUE);
@@ -1578,6 +1604,15 @@ vdev_uberblock_sync(zio_t *zio, uint64_t *good_writes,
 		return;
 
 	if (!vdev_writeable(vd))
+		return;
+
+	/*
+	 * There's no need to write uberblocks to a distributed spare, they
+	 * are already stored on all the leaves of the parent dRAID.  For
+	 * this same reason vdev_uberblock_load_impl() skips distributed
+	 * spares when reading uberblocks.
+	 */
+	if (vd->vdev_ops == &vdev_draid_spare_ops)
 		return;
 
 	/* If the vdev was expanded, need to copy uberblock rings. */
@@ -1694,6 +1729,14 @@ vdev_label_sync(zio_t *zio, uint64_t *good_writes,
 		return;
 
 	if (!vdev_writeable(vd))
+		return;
+
+	/*
+	 * The top-level config never needs to be written to a distributed
+	 * spare.  When read vdev_dspare_label_read_config() will generate
+	 * the config for the vdev_label_read_config().
+	 */
+	if (vd->vdev_ops == &vdev_draid_spare_ops)
 		return;
 
 	/*

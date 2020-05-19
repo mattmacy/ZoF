@@ -40,6 +40,7 @@
 #include <sys/dsl_dir.h>
 #include <sys/vdev_impl.h>
 #include <sys/vdev_rebuild.h>
+#include <sys/vdev_draid.h>
 #include <sys/uberblock_impl.h>
 #include <sys/metaslab.h>
 #include <sys/metaslab_impl.h>
@@ -190,6 +191,8 @@ vdev_dbgmsg_print_tree(vdev_t *vd, int indent)
 static vdev_ops_t *vdev_ops_table[] = {
 	&vdev_root_ops,
 	&vdev_raidz_ops,
+	&vdev_draid_ops,
+	&vdev_draid_spare_ops,
 	&vdev_mirror_ops,
 	&vdev_replacing_ops,
 	&vdev_spare_ops,
@@ -293,6 +296,11 @@ vdev_get_min_asize(vdev_t *vd)
 	if (pvd->vdev_ops == &vdev_raidz_ops)
 		return ((pvd->vdev_min_asize + pvd->vdev_children - 1) /
 		    pvd->vdev_children);
+
+	if (pvd->vdev_ops == &vdev_draid_ops) {
+		return (pvd->vdev_min_asize /
+		    (pvd->vdev_children - pvd->vdev_nspares));
+	}
 
 	return (pvd->vdev_min_asize);
 }
@@ -548,6 +556,7 @@ vdev_alloc_common(spa_t *spa, uint_t id, uint64_t guid, vdev_ops_t *ops)
 	list_link_init(&vd->vdev_initialize_node);
 	list_link_init(&vd->vdev_leaf_node);
 	list_link_init(&vd->vdev_trim_node);
+
 	mutex_init(&vd->vdev_dtl_lock, NULL, MUTEX_NOLOCKDEP, NULL);
 	mutex_init(&vd->vdev_stat_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&vd->vdev_probe_lock, NULL, MUTEX_DEFAULT, NULL);
@@ -566,9 +575,7 @@ vdev_alloc_common(spa_t *spa, uint_t id, uint64_t guid, vdev_ops_t *ops)
 	cv_init(&vd->vdev_trim_io_cv, NULL, CV_DEFAULT, NULL);
 
 	mutex_init(&vd->vdev_rebuild_lock, NULL, MUTEX_DEFAULT, NULL);
-	mutex_init(&vd->vdev_rebuild_io_lock, NULL, MUTEX_DEFAULT, NULL);
 	cv_init(&vd->vdev_rebuild_cv, NULL, CV_DEFAULT, NULL);
-	cv_init(&vd->vdev_rebuild_io_cv, NULL, CV_DEFAULT, NULL);
 
 	for (int t = 0; t < DTL_TYPES; t++) {
 		vd->vdev_dtl[t] = range_tree_create(NULL, RANGE_SEG64, NULL, 0,
@@ -587,6 +594,58 @@ vdev_alloc_common(spa_t *spa, uint_t id, uint64_t guid, vdev_ops_t *ops)
 }
 
 /*
+ * Verify that the provided dRAID configuration describes a valid
+ * configuration.  Returns DRAIDCFG_OK for a correct configuration.
+ * Otherwise, the returned draidcfg_err_t enum will describe the
+ * problem encountered with the configuration.
+ */
+static boolean_t
+vdev_draid_config_check(nvlist_t *nv, uint64_t *ndatap,
+    uint64_t *ngroupsp, uint64_t *nsparesp)
+{
+	uint64_t ngroups, ndata, nparity, nspares;
+	uint_t children;
+	nvlist_t **child;
+
+	if (nvlist_lookup_uint64(nv, ZPOOL_CONFIG_DRAID_NDATA, &ndata))
+		return (B_FALSE);
+
+	if (nvlist_lookup_uint64(nv, ZPOOL_CONFIG_NPARITY, &nparity) ||
+	    nparity == 0 || nparity > VDEV_RAIDZ_MAXPARITY) {
+		return (B_FALSE);
+	}
+
+	if (nvlist_lookup_nvlist_array(nv, ZPOOL_CONFIG_CHILDREN,
+	    &child, &children) || children == 0 ||
+	    children > VDEV_DRAID_MAX_CHILDREN) {
+		return (B_FALSE);
+	}
+
+	if (nvlist_lookup_uint64(nv, ZPOOL_CONFIG_DRAID_NSPARES, &nspares) ||
+	    nspares > 100 || nspares > (children - (ndata + nparity))) {
+		return (B_FALSE);
+	}
+
+	if (nvlist_lookup_uint64(nv, ZPOOL_CONFIG_DRAID_NGROUPS, &ngroups) ||
+	    ngroups == 0 || ngroups > VDEV_DRAID_MAX_CHILDREN) {
+		return (B_FALSE);
+	}
+
+	/*
+	 * Validate the minimum number of children exist per group for the
+	 * specified parity level (draid1 >= 3, draid2 >= 4, draid3 >= 5).
+	 */
+	if (children < (ndata + nparity + nspares))
+		return (B_FALSE);
+
+	*ndatap = ndata;
+	*ngroupsp = ngroups;
+	*nsparesp = nspares;
+
+	return (B_TRUE);
+}
+
+/*
  * Allocate a new vdev.  The 'alloctype' is used to control whether we are
  * creating a new vdev or loading an existing one - the behavior is slightly
  * different for each case.
@@ -598,6 +657,7 @@ vdev_alloc(spa_t *spa, vdev_t **vdp, nvlist_t *nv, vdev_t *parent, uint_t id,
 	vdev_ops_t *ops;
 	char *type;
 	uint64_t guid = 0, islog, nparity;
+	uint64_t ndata = 0, ngroups = 0, nspares = 0;
 	vdev_t *vd;
 	vdev_indirect_config_t *vic;
 	char *tmp = NULL;
@@ -658,7 +718,7 @@ vdev_alloc(spa_t *spa, vdev_t **vdp, nvlist_t *nv, vdev_t *parent, uint_t id,
 	 * Set the nparity property for RAID-Z vdevs.
 	 */
 	nparity = -1ULL;
-	if (ops == &vdev_raidz_ops) {
+	if (ops == &vdev_raidz_ops || ops == &vdev_draid_ops) {
 		if (nvlist_lookup_uint64(nv, ZPOOL_CONFIG_NPARITY,
 		    &nparity) == 0) {
 			if (nparity == 0 || nparity > VDEV_RAIDZ_MAXPARITY)
@@ -709,11 +769,32 @@ vdev_alloc(spa_t *spa, vdev_t **vdp, nvlist_t *nv, vdev_t *parent, uint_t id,
 		}
 	}
 
+	/*
+	 * Verify dRAID is supported and the configuration is valid.
+	 */
+	if (ops == &vdev_draid_ops) {
+
+		/* verify and return the dRAID specific values */
+		if (!vdev_draid_config_check(nv, &ndata, &ngroups, &nspares))
+			return (SET_ERROR(EINVAL));
+
+		/* spa_vdev_add() expects feature to be enabled */
+		if (alloctype == VDEV_ALLOC_ADD &&
+		    spa->spa_load_state != SPA_LOAD_CREATE &&
+		    !spa_feature_is_enabled(spa, SPA_FEATURE_DRAID)) {
+			return (SET_ERROR(ENOTSUP));
+		}
+	}
+
 	vd = vdev_alloc_common(spa, id, guid, ops);
 	vic = &vd->vdev_indirect_config;
 
 	vd->vdev_islog = islog;
 	vd->vdev_nparity = nparity;
+	vd->vdev_ndata = ndata;
+	vd->vdev_ngroups = ngroups;
+	vd->vdev_nspares = nspares;
+
 	if (top_level && alloc_bias != VDEV_BIAS_NONE)
 		vd->vdev_alloc_bias = alloc_bias;
 
@@ -1025,9 +1106,7 @@ vdev_free(vdev_t *vd)
 	cv_destroy(&vd->vdev_trim_io_cv);
 
 	mutex_destroy(&vd->vdev_rebuild_lock);
-	mutex_destroy(&vd->vdev_rebuild_io_lock);
 	cv_destroy(&vd->vdev_rebuild_cv);
-	cv_destroy(&vd->vdev_rebuild_io_cv);
 
 	zfs_ratelimit_fini(&vd->vdev_delay_rl);
 	zfs_ratelimit_fini(&vd->vdev_checksum_rl);
@@ -1290,6 +1369,16 @@ vdev_metaslab_group_create(vdev_t *vd)
 				spa->spa_max_ashift = vd->vdev_ashift;
 			if (vd->vdev_ashift < spa->spa_min_ashift)
 				spa->spa_min_ashift = vd->vdev_ashift;
+
+			/*
+			 * When using dRAID the minimum allocation size is
+			 * determined by the data disks in the stripe.
+			 */
+			int min_alloc = 1ULL << vd->vdev_ashift;
+			if (vd->vdev_ndata != 0)
+				min_alloc = vd->vdev_ndata * min_alloc;
+			if (min_alloc < spa->spa_min_alloc)
+				spa->spa_min_alloc = min_alloc;
 		}
 	}
 }
@@ -1616,53 +1705,85 @@ vdev_uses_zvols(vdev_t *vd)
 	return (B_FALSE);
 }
 
-void
-vdev_open_children(vdev_t *vd)
+/*
+ * Returns B_TRUE if the passed child should be opened.
+ */
+static boolean_t
+vdev_default_open_children_func(vdev_t *vd)
 {
-	taskq_t *tq;
-	int children = vd->vdev_children;
-
-	/*
-	 * in order to handle pools on top of zvols, do the opens
-	 * in a single thread so that the same thread holds the
-	 * spa_namespace_lock
-	 */
-	if (vdev_uses_zvols(vd)) {
-retry_sync:
-		for (int c = 0; c < children; c++)
-			vd->vdev_child[c]->vdev_open_error =
-			    vdev_open(vd->vdev_child[c]);
-	} else {
-		tq = taskq_create("vdev_open", children, minclsyspri,
-		    children, children, TASKQ_PREPOPULATE);
-		if (tq == NULL)
-			goto retry_sync;
-
-		for (int c = 0; c < children; c++)
-			VERIFY(taskq_dispatch(tq, vdev_open_child,
-			    vd->vdev_child[c], TQ_SLEEP) != TASKQID_INVALID);
-
-		taskq_destroy(tq);
-	}
-
-	vd->vdev_nonrot = B_TRUE;
-
-	for (int c = 0; c < children; c++)
-		vd->vdev_nonrot &= vd->vdev_child[c]->vdev_nonrot;
+	return (B_TRUE);
 }
 
 /*
- * Compute the raidz-deflation ratio.  Note, we hard-code
- * in 128k (1 << 17) because it is the "typical" blocksize.
- * Even though SPA_MAXBLOCKSIZE changed, this algorithm can not change,
- * otherwise it would inconsistently account for existing bp's.
+ * Open the requested child vdevs.  If any of the leaf vdevs are using
+ * a ZFS volume then do the opens in a single thread.  This avoids a
+ * deadlock when the current thread is holding the spa_namespace_lock.
+ */
+static void
+vdev_open_children_impl(vdev_t *vd, vdev_open_children_func_t *open_func)
+{
+	int children = vd->vdev_children;
+
+	taskq_t *tq = taskq_create("vdev_open", children, minclsyspri,
+	    children, children, TASKQ_PREPOPULATE);
+	vd->vdev_nonrot = B_TRUE;
+
+	for (int c = 0; c < children; c++) {
+		vdev_t *cvd = vd->vdev_child[c];
+
+		if (open_func(cvd) == B_FALSE)
+			continue;
+
+		if (tq == NULL || vdev_uses_zvols(vd)) {
+			cvd->vdev_open_error = vdev_open(cvd);
+		} else {
+			VERIFY(taskq_dispatch(tq, vdev_open_child,
+			    cvd, TQ_SLEEP) != TASKQID_INVALID);
+		}
+
+		vd->vdev_nonrot &= cvd->vdev_nonrot;
+	}
+
+	if (tq != NULL) {
+		taskq_wait(tq);
+		taskq_destroy(tq);
+	}
+}
+
+/*
+ * Open all child vdevs.
+ */
+void
+vdev_open_children(vdev_t *vd)
+{
+	vdev_open_children_impl(vd, vdev_default_open_children_func);
+}
+
+/*
+ * Conditionally open a subset of child vdevs.
+ */
+void
+vdev_open_children_subset(vdev_t *vd, vdev_open_children_func_t *open_func)
+{
+	vdev_open_children_impl(vd, open_func);
+}
+
+/*
+ * Compute the raidz-deflation ratio.  Note, we used to hard-code
+ * in 128k (1 << 17) because it is/was the "typical" blocksize.
+ * The "typical" blocksize can now be set using zfs_deflate_shift.
+ * Once defined for a new pool, the value cannot be changed,
+ * otherwise we would inconsistently account for existing bp's.
  */
 static void
 vdev_set_deflate_ratio(vdev_t *vd)
 {
 	if (vd == vd->vdev_top && !vd->vdev_ishole && vd->vdev_ashift != 0) {
-		vd->vdev_deflate_ratio = (1 << 17) /
-		    (vdev_psize_to_asize(vd, 1 << 17) >> SPA_MINBLOCKSHIFT);
+		int typical = 1 << 17;
+		if (vd->vdev_spa->spa_deflate > vd->vdev_ashift)
+			typical = 1 << vd->vdev_spa->spa_deflate;
+		vd->vdev_deflate_ratio = typical /
+		    (vdev_psize_to_asize(vd, typical) >> SPA_MINBLOCKSHIFT);
 	}
 }
 
@@ -1886,7 +2007,8 @@ vdev_open(vdev_t *vd)
 	}
 
 	/*
-	 * Track the min and max ashift values for normal data devices.
+	 * Track the min and max ashift values for normal data devices
+	 * as well as the minimum allocation size.
 	 */
 	if (vd->vdev_top == vd && vd->vdev_ashift != 0 &&
 	    vd->vdev_alloc_bias == VDEV_BIAS_NONE &&
@@ -1895,6 +2017,16 @@ vdev_open(vdev_t *vd)
 			spa->spa_max_ashift = vd->vdev_ashift;
 		if (vd->vdev_ashift < spa->spa_min_ashift)
 			spa->spa_min_ashift = vd->vdev_ashift;
+
+		/*
+		 * When using dRAID the minimum allocation size is
+		 * determined by the data disks in the stripe.
+		 */
+		int min_alloc = 1ULL << vd->vdev_ashift;
+		if (vd->vdev_ndata != 0)
+			min_alloc = vd->vdev_ndata * min_alloc;
+		if (min_alloc < spa->spa_min_alloc)
+			spa->spa_min_alloc = min_alloc;
 	}
 
 	/*
@@ -2223,7 +2355,8 @@ vdev_close(vdev_t *vd)
 	vdev_t *pvd = vd->vdev_parent;
 	spa_t *spa __maybe_unused = vd->vdev_spa;
 
-	ASSERT(spa_config_held(spa, SCL_STATE_ALL, RW_WRITER) == SCL_STATE_ALL);
+	ASSERT(vd->vdev_open_thread == curthread ||
+	    spa_config_held(spa, SCL_STATE_ALL, RW_WRITER) == SCL_STATE_ALL);
 
 	/*
 	 * If our parent is reopening, then we are as well, unless we are
@@ -2551,10 +2684,26 @@ vdev_dtl_empty(vdev_t *vd, vdev_dtl_type_t t)
 }
 
 /*
- * Returns B_TRUE if vdev determines offset needs to be resilvered.
+ * Check if the txg falls within the range which must be
+ * resilvered.  DVAs outside this range can always be skipped.
  */
 boolean_t
-vdev_dtl_need_resilver(vdev_t *vd, uint64_t offset, size_t psize)
+vdev_default_need_resilver(vdev_t *vd, const dva_t *dva, size_t psize,
+    uint64_t phys_birth)
+{
+	/* Set by sequential resilver. */
+	if (phys_birth == TXG_UNKNOWN)
+		return (B_TRUE);
+
+	return (vdev_dtl_contains(vd, DTL_PARTIAL, phys_birth, 1));
+}
+
+/*
+ * Returns B_TRUE if the vdev determines the DVA needs to be resilvered.
+ */
+boolean_t
+vdev_dtl_need_resilver(vdev_t *vd, const dva_t *dva, size_t psize,
+    uint64_t phys_birth)
 {
 	ASSERT(vd != vd->vdev_spa->spa_root_vdev);
 
@@ -2562,7 +2711,8 @@ vdev_dtl_need_resilver(vdev_t *vd, uint64_t offset, size_t psize)
 	    vd->vdev_ops->vdev_op_leaf)
 		return (B_TRUE);
 
-	return (vd->vdev_ops->vdev_op_need_resilver(vd, offset, psize));
+	return (vd->vdev_ops->vdev_op_need_resilver(vd, dva, psize,
+	    phys_birth));
 }
 
 /*
@@ -2808,7 +2958,7 @@ vdev_dtl_reassess(vdev_t *vd, uint64_t txg, uint64_t scrub_txg,
 		if (t == DTL_PARTIAL)
 			minref = 1;			/* i.e. non-zero */
 		else if (vd->vdev_nparity != 0)
-			minref = vd->vdev_nparity + 1;	/* RAID-Z */
+			minref = vd->vdev_nparity + 1;	/* RAID-Z, dRAID */
 		else
 			minref = vd->vdev_children;	/* any kind of mirror */
 		space_reftree_create(&reftree);
@@ -3672,6 +3822,9 @@ top:
 	if (!vd->vdev_ops->vdev_op_leaf)
 		return (spa_vdev_state_exit(spa, NULL, SET_ERROR(ENOTSUP)));
 
+	if (vd->vdev_ops == &vdev_draid_spare_ops)
+		return (spa_vdev_state_exit(spa, NULL, ENOTSUP));
+
 	tvd = vd->vdev_top;
 	mg = tvd->vdev_mg;
 	generation = spa->spa_config_generation + 1;
@@ -3916,6 +4069,13 @@ vdev_accessible(vdev_t *vd, zio_t *zio)
 static void
 vdev_get_child_stat(vdev_t *cvd, vdev_stat_t *vs, vdev_stat_t *cvs)
 {
+	/*
+	 * Exclude the dRAID spare when aggregating to avoid double counting
+	 * the ops and bytes.  These IOs are counted by the physical leaves.
+	 */
+	if (cvd->vdev_ops == &vdev_draid_spare_ops)
+		return;
+
 	for (int t = 0; t < VS_ZIO_TYPES; t++) {
 		vs->vs_ops[t] += cvs->vs_ops[t];
 		vs->vs_bytes[t] += cvs->vs_bytes[t];
@@ -4008,7 +4168,6 @@ vdev_get_stats_ex_impl(vdev_t *vd, vdev_stat_t *vs, vdev_stat_ex_t *vsx)
 				vdev_get_child_stat(cvd, vs, cvs);
 			if (vsx)
 				vdev_get_child_stat_ex(cvd, vsx, cvsx);
-
 		}
 	} else {
 		/*
@@ -4188,7 +4347,9 @@ vdev_stat_update(zio_t *zio, uint64_t psize)
 
 			/*
 			 * Repair is the result of a rebuild issued by the
-			 * rebuild thread (vdev_rebuild_thread).
+			 * rebuild thread (vdev_rebuild_thread).  To avoid
+			 * double counting repaired bytes the virtual dRAID
+			 * spare vdev is excluded from the processed bytes.
 			 */
 			if (zio->io_priority == ZIO_PRIORITY_REBUILD) {
 				vdev_t *tvd = vd->vdev_top;
@@ -4196,8 +4357,10 @@ vdev_stat_update(zio_t *zio, uint64_t psize)
 				vdev_rebuild_phys_t *vrp = &vr->vr_rebuild_phys;
 				uint64_t *rebuilt = &vrp->vrp_bytes_rebuilt;
 
-				if (vd->vdev_ops->vdev_op_leaf)
+				if (vd->vdev_ops->vdev_op_leaf &&
+				    vd->vdev_ops != &vdev_draid_spare_ops) {
 					atomic_add_64(rebuilt, psize);
+				}
 				vs->vs_rebuild_processed += psize;
 			}
 
@@ -4921,23 +5084,15 @@ vdev_clear_resilver_deferred(vdev_t *vd, dmu_tx_t *tx)
 	    vdev_resilver_needed(vd, NULL, NULL));
 }
 
-/*
- * Translate a logical range to the physical range for the specified vdev_t.
- * This function is initially called with a leaf vdev and will walk each
- * parent vdev until it reaches a top-level vdev. Once the top-level is
- * reached the physical range is initialized and the recursive function
- * begins to unwind. As it unwinds it calls the parent's vdev specific
- * translation function to do the real conversion.
- */
-void
-vdev_xlate(vdev_t *vd, const range_seg64_t *logical_rs,
+static void
+vdev_xlate_impl(vdev_t *vd, const range_seg64_t *logical_rs,
     range_seg64_t *physical_rs)
 {
 	/*
 	 * Walk up the vdev tree
 	 */
 	if (vd != vd->vdev_top) {
-		vdev_xlate(vd->vdev_parent, logical_rs, physical_rs);
+		vdev_xlate_impl(vd->vdev_parent, logical_rs, physical_rs);
 	} else {
 		/*
 		 * We've reached the top-level vdev, initialize the
@@ -4963,6 +5118,94 @@ vdev_xlate(vdev_t *vd, const range_seg64_t *logical_rs,
 
 	physical_rs->rs_start = intermediate.rs_start;
 	physical_rs->rs_end = intermediate.rs_end;
+}
+
+boolean_t
+vdev_xlate_is_empty(range_seg64_t *rs)
+{
+	return (rs->rs_start == rs->rs_end);
+}
+
+/*
+ * Translate a logical range to the first contiguous physical range for the
+ * specified vdev_t.  This function is initially called with a leaf vdev and
+ * will walk each parent vdev until it reaches a top-level vdev. Once the
+ * top-level is reached the physical range is initialized and the recursive
+ * function begins to unwind. As it unwinds it calls the parent's vdev
+ * specific translation function to do the real conversion.
+ */
+void
+vdev_xlate(vdev_t *vd, const range_seg64_t *logical_rs,
+    range_seg64_t *physical_rs, range_seg64_t *remain_rs)
+{
+	vdev_t *tvd = vd->vdev_top;
+	uint64_t len = logical_rs->rs_end - logical_rs->rs_start;
+
+	/*
+	 * Unlike with mirrors and raidz, a dRAID logical ranges can map
+	 * to multiple non-contiguous physical ranges.  This is handled by
+	 * returning the first physical range and setting remain_rs such
+	 * that is describes the remaining unmapped logical range.  See
+	 * vdev_draid_xlate() for additional details.
+	 */
+	if (tvd->vdev_ops == &vdev_draid_ops) {
+		uint64_t group, astart, rs_start = logical_rs->rs_start;
+
+		/*
+		 * Unaligned ranges must be skipped. All metaslabs are
+		 * correctly aligned so this should not happen, but we
+		 * opt to handle this case anyway for completeness.
+		 */
+		astart = vdev_draid_get_astart(tvd, rs_start);
+		if (astart != rs_start) {
+			physical_rs->rs_start = rs_start;
+			physical_rs->rs_end = rs_start;
+			remain_rs->rs_start = MIN(astart, logical_rs->rs_end);
+			remain_rs->rs_end = logical_rs->rs_end;
+			return;
+		}
+
+		group = vdev_draid_offset_to_group(tvd, rs_start);
+		len = vdev_draid_group_to_offset(tvd, group + 1) - rs_start;
+
+		range_seg64_t draid_rs;
+		draid_rs.rs_start = rs_start;
+		draid_rs.rs_end = MIN(rs_start + len, logical_rs->rs_end);
+
+		vdev_xlate_impl(vd, &draid_rs, physical_rs);
+
+		remain_rs->rs_start = draid_rs.rs_end;
+		remain_rs->rs_end = logical_rs->rs_end;
+	} else {
+		vdev_xlate_impl(vd, logical_rs, physical_rs);
+
+		remain_rs->rs_start = logical_rs->rs_end;
+		remain_rs->rs_end = logical_rs->rs_end;
+	}
+}
+
+void
+vdev_xlate_walk(vdev_t *vd, const range_seg64_t *logical_rs,
+    vdev_xlate_func_t *func, void *arg)
+{
+	range_seg64_t iter_rs = *logical_rs;
+	range_seg64_t physical_rs;
+	range_seg64_t remain_rs;
+
+	while (!vdev_xlate_is_empty(&iter_rs)) {
+
+		vdev_xlate(vd, &iter_rs, &physical_rs, &remain_rs);
+
+		/*
+		 * With raidz and dRAID, it's possible that the logical range
+		 * does not live on this leaf vdev. Only when there is a non-
+		 * zero physical size call the provided function.
+		 */
+		if (!vdev_xlate_is_empty(&physical_rs))
+			func(arg, &physical_rs);
+
+		iter_rs = remain_rs;
+	}
 }
 
 /*

@@ -5321,6 +5321,16 @@ zfs_get_holds(zfs_handle_t *zhp, nvlist_t **nvl)
  * 160k.  Again, 128k is from SPA_OLD_MAXBLOCKSIZE and 160k is as calculated in
  * the 128k block example above.
  *
+ * The situtation is slightly different when using dRAID instead of raidz.
+ * All blocks are inflated to the full stripe width and padded out as needed
+ * with zero-filled skip sectors.  Otherwise it behaves the same.
+ *
+ * +-------+-------+-------+-------+-------+
+ * | disk1 | disk2 | disk3 | disk4 | disk5 |
+ * +-------+-------+-------+-------+-------+
+ * |  P0   |  D0   |  D1   |  S0   |  S1   |
+ * +-------+-------+-------+-------+-------+
+ *
  * Compression may lead to a variety of block sizes being written for the same
  * volume or file.  There is no clear way to reserve just the amount of space
  * that will be required, so the worst case (no compression) is assumed.
@@ -5359,7 +5369,7 @@ static uint64_t
 volsize_from_vdevs(zpool_handle_t *zhp, uint64_t nblocks, uint64_t blksize)
 {
 	nvlist_t *config, *tree, **vdevs;
-	uint_t nvdevs, v;
+	uint_t nvdevs;
 	uint64_t ret = 0;
 
 	config = zpool_get_config(zhp, NULL);
@@ -5369,33 +5379,54 @@ volsize_from_vdevs(zpool_handle_t *zhp, uint64_t nblocks, uint64_t blksize)
 		return (nblocks * blksize);
 	}
 
-	for (v = 0; v < nvdevs; v++) {
+	for (int v = 0; v < nvdevs; v++) {
 		char *type;
 		uint64_t nparity, ashift, asize, tsize;
-		nvlist_t **disks;
-		uint_t ndisks;
 		uint64_t volsize;
+		uint_t ndisks = 1;
 
 		if (nvlist_lookup_string(vdevs[v], ZPOOL_CONFIG_TYPE,
-		    &type) != 0 || strcmp(type, VDEV_TYPE_RAIDZ) != 0 ||
-		    nvlist_lookup_uint64(vdevs[v], ZPOOL_CONFIG_NPARITY,
-		    &nparity) != 0 ||
-		    nvlist_lookup_uint64(vdevs[v], ZPOOL_CONFIG_ASHIFT,
-		    &ashift) != 0 ||
-		    nvlist_lookup_nvlist_array(vdevs[v], ZPOOL_CONFIG_CHILDREN,
-		    &disks, &ndisks) != 0) {
+		    &type) != 0)
 			continue;
+
+		if (strcmp(type, VDEV_TYPE_RAIDZ) != 0 &&
+		    strcmp(type, VDEV_TYPE_DRAID) != 0)
+			continue;
+
+		if (nvlist_lookup_uint64(vdevs[v],
+		    ZPOOL_CONFIG_NPARITY, &nparity) != 0)
+			continue;
+
+		if (nvlist_lookup_uint64(vdevs[v],
+		    ZPOOL_CONFIG_ASHIFT, &ashift) != 0)
+			continue;
+
+		if (strcmp(type, VDEV_TYPE_RAIDZ) == 0) {
+			nvlist_t **disks;
+
+			if (nvlist_lookup_nvlist_array(vdevs[v],
+			    ZPOOL_CONFIG_CHILDREN, &disks, &ndisks) != 0)
+				continue;
+		} else {
+			uint64_t ndata;
+
+			if (nvlist_lookup_uint64(vdevs[v],
+			    ZPOOL_CONFIG_DRAID_NDATA, &ndata) != 0)
+				continue;
+
+			ndisks = ndata + nparity;
 		}
 
 		/* allocation size for the "typical" 128k block */
 		tsize = vdev_raidz_asize(ndisks, nparity, ashift,
 		    SPA_OLD_MAXBLOCKSIZE);
+
 		/* allocation size for the blksize block */
 		asize = vdev_raidz_asize(ndisks, nparity, ashift, blksize);
 
 		/*
-		 * Scale this size down as a ratio of 128k / tsize.  See theory
-		 * statement above.
+		 * Scale this size down as a ratio of 128k / tsize.
+		 * See theory statement above.
 		 */
 		volsize = nblocks * asize * SPA_OLD_MAXBLOCKSIZE / tsize;
 		if (volsize > ret) {

@@ -757,10 +757,17 @@ typedef struct zpool_load_policy {
 #define	ZPOOL_CONFIG_LOAD_DATA_ERRORS	"verify_data_errors"
 #define	ZPOOL_CONFIG_REWIND_TIME	"seconds_of_rewind"
 
+/* dRAID configuration */
+#define	ZPOOL_CONFIG_DRAID_NDATA	"draid_ndata"
+#define	ZPOOL_CONFIG_DRAID_NSPARES	"draid_nspares"
+#define	ZPOOL_CONFIG_DRAID_NGROUPS	"draid_ngroups"
+
 #define	VDEV_TYPE_ROOT			"root"
 #define	VDEV_TYPE_MIRROR		"mirror"
 #define	VDEV_TYPE_REPLACING		"replacing"
 #define	VDEV_TYPE_RAIDZ			"raidz"
+#define	VDEV_TYPE_DRAID			"draid"
+#define	VDEV_TYPE_DRAID_SPARE		"dspare"
 #define	VDEV_TYPE_DISK			"disk"
 #define	VDEV_TYPE_FILE			"file"
 #define	VDEV_TYPE_MISSING		"missing"

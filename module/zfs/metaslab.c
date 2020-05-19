@@ -31,6 +31,7 @@
 #include <sys/space_map.h>
 #include <sys/metaslab_impl.h>
 #include <sys/vdev_impl.h>
+#include <sys/vdev_draid.h>
 #include <sys/zio.h>
 #include <sys/spa_impl.h>
 #include <sys/zfeature.h>
@@ -1562,21 +1563,66 @@ metaslab_block_find(zfs_btree_t *t, range_tree_t *rt, uint64_t start,
 
 #if defined(WITH_DF_BLOCK_ALLOCATOR) || \
     defined(WITH_CF_BLOCK_ALLOCATOR)
+
+/*
+ * Returns the next valid dRAID offset.  The passed offset is expected
+ * to already be aligned.
+ */
+static uint64_t
+metaslab_draid_offset(vdev_t *vd, uint64_t offset, uint64_t size)
+{
+	uint64_t start_group = vdev_draid_offset_to_group(vd, offset);
+	uint64_t end_group = vdev_draid_offset_to_group(vd, offset + size - 1);
+
+	/* Verify the passed offset is aligned. */
+	ASSERT3U(offset, ==, vdev_draid_get_astart(vd, offset));
+
+	/* Blocks may not span groups, advance to the next group */
+	if (start_group != end_group) {
+		offset = vdev_draid_group_to_offset(vd, start_group + 1);
+		ASSERT3U(offset, ==, vdev_draid_get_astart(vd, offset));
+	}
+
+	return (offset);
+}
+
+/*
+ * Checks all ranges of 'size' or larger from smallest to largest and
+ * returns the first valid dRAID offset which doesn't span groups.
+ */
+static uint64_t
+metaslab_draid_block_find(vdev_t *vd, zfs_btree_t *t, range_tree_t *rt,
+    uint64_t start, uint64_t size, zfs_btree_index_t *where)
+{
+	uint64_t offset;
+
+	range_seg_t *rs = metaslab_block_find(t, rt, start, size, where);
+	while (rs != NULL) {
+		offset = metaslab_draid_offset(vd, rs_get_start(rs, rt), size);
+		if (offset + size <= rs_get_end(rs, rt))
+			return (offset);
+
+		rs = zfs_btree_next(t, where, where);
+	}
+
+	return (-1);
+}
+
 /*
  * This is a helper function that can be used by the allocator to find a
  * suitable block to allocate. This will search the specified B-tree looking
  * for a block that matches the specified criteria.
  */
 static uint64_t
-metaslab_block_picker(range_tree_t *rt, uint64_t *cursor, uint64_t size,
-    uint64_t max_search)
+metaslab_block_picker(metaslab_t *msp, range_tree_t *rt, uint64_t *cursor,
+    uint64_t size, uint64_t max_search)
 {
 	if (*cursor == 0)
 		*cursor = rt->rt_start;
 	zfs_btree_t *bt = &rt->rt_root;
 	zfs_btree_index_t where;
 	range_seg_t *rs = metaslab_block_find(bt, rt, *cursor, size, &where);
-	uint64_t first_found;
+	uint64_t first_found = 0;
 	int count_searched = 0;
 
 	if (rs != NULL)
@@ -1585,10 +1631,16 @@ metaslab_block_picker(range_tree_t *rt, uint64_t *cursor, uint64_t size,
 	while (rs != NULL && (rs_get_start(rs, rt) - first_found <=
 	    max_search || count_searched < metaslab_min_search_count)) {
 		uint64_t offset = rs_get_start(rs, rt);
+		vdev_t *vd = msp->ms_group->mg_vd;
+
+		if (vd->vdev_ops == &vdev_draid_ops)
+			offset = metaslab_draid_offset(vd, offset, size);
+
 		if (offset + size <= rs_get_end(rs, rt)) {
 			*cursor = offset + size;
 			return (offset);
 		}
+
 		rs = zfs_btree_next(bt, &where, &where);
 		count_searched++;
 	}
@@ -1645,7 +1697,7 @@ metaslab_df_alloc(metaslab_t *msp, uint64_t size)
 	    free_pct < metaslab_df_free_pct) {
 		offset = -1;
 	} else {
-		offset = metaslab_block_picker(rt,
+		offset = metaslab_block_picker(msp, rt,
 		    cursor, size, metaslab_df_max_search);
 	}
 
@@ -1653,26 +1705,43 @@ metaslab_df_alloc(metaslab_t *msp, uint64_t size)
 		range_seg_t *rs;
 		if (zfs_btree_numnodes(&msp->ms_allocatable_by_size) == 0)
 			metaslab_size_tree_full_load(msp->ms_allocatable);
-		if (metaslab_df_use_largest_segment) {
-			/* use largest free segment */
-			rs = zfs_btree_last(&msp->ms_allocatable_by_size, NULL);
-		} else {
+
+		vdev_t *vd = msp->ms_group->mg_vd;
+		if (vd->vdev_ops == &vdev_draid_ops) {
 			zfs_btree_index_t where;
-			/* use segment of this size, or next largest */
-#ifdef _METASLAB_TRACING
-			metaslab_rt_arg_t *mrap = msp->ms_allocatable->rt_arg;
-			if (size < (1 << mrap->mra_floor_shift)) {
-				METASLABSTAT_BUMP(
-				    metaslabstat_df_find_under_floor);
-			}
-#endif
-			rs = metaslab_block_find(&msp->ms_allocatable_by_size,
+			/*
+			 * use segment of this size, or next largest which
+			 * satisfies the dRAID group spanning constraint.
+			 */
+			offset = metaslab_draid_block_find(vd,
+			    &msp->ms_allocatable_by_size,
 			    rt, msp->ms_start, size, &where);
-		}
-		if (rs != NULL && rs_get_start(rs, rt) + size <= rs_get_end(rs,
-		    rt)) {
-			offset = rs_get_start(rs, rt);
 			*cursor = offset + size;
+		} else {
+			if (metaslab_df_use_largest_segment) {
+				/* use largest free segment */
+				rs = zfs_btree_last(
+				    &msp->ms_allocatable_by_size, NULL);
+			} else {
+				zfs_btree_index_t where;
+				/* use segment of this size, or next largest */
+#ifdef _METASLAB_TRACING
+				metaslab_rt_arg_t *mrap =
+				    msp->ms_allocatable->rt_arg;
+				if (size < (1 << mrap->mra_floor_shift)) {
+					METASLABSTAT_BUMP(
+					    metaslabstat_df_find_under_floor);
+				}
+#endif
+				rs = metaslab_block_find(
+				    &msp->ms_allocatable_by_size,
+				    rt, msp->ms_start, size, &where);
+			}
+			if (rs != NULL && rs_get_start(rs, rt) + size <=
+			    rs_get_end(rs, rt)) {
+				offset = rs_get_start(rs, rt);
+				*cursor = offset + size;
+			}
 		}
 	}
 
@@ -2615,6 +2684,9 @@ metaslab_init(metaslab_group_t *mg, uint64_t id, uint64_t object,
 	ms->ms_allocator = -1;
 	ms->ms_new = B_TRUE;
 
+	if (vd->vdev_ops == &vdev_draid_ops)
+		vdev_draid_metaslab_init(vd, &ms->ms_start, &ms->ms_size);
+
 	/*
 	 * We only open space map objects that already exist. All others
 	 * will be opened when we finally allocate an object for it.
@@ -2893,6 +2965,26 @@ metaslab_set_fragmentation(metaslab_t *msp, boolean_t nodirty)
 }
 
 /*
+ * A dRAID metaslabs ms_start is always stripe aligned, this causes their sizes
+ * to vary by a few sectors. The block allocator may get confused and pick a
+ * distant metaslab because the closer ones are slightly smaller. The small
+ * variance doesn't matter when the metaslab has already been allocated from.
+ *
+ * This function returns adjusted size to calculate metaslab weight, and
+ * should not be used for other purposes.
+ */
+static uint64_t
+metaslab_weight_size(metaslab_t *msp)
+{
+	vdev_t *vd = msp->ms_group->mg_vd;
+
+	if (vd->vdev_ops != &vdev_draid_ops || space_map_allocated(msp->ms_sm))
+		return (msp->ms_size);
+
+	return (1ULL << vd->vdev_ms_shift);
+}
+
+/*
  * Compute a weight -- a selection preference value -- for the given metaslab.
  * This is based on the amount of free space, the level of fragmentation,
  * the LBA range, and whether the metaslab is loaded.
@@ -2909,7 +3001,7 @@ metaslab_space_weight(metaslab_t *msp)
 	/*
 	 * The baseline weight is the metaslab's free space.
 	 */
-	space = msp->ms_size - metaslab_allocated_space(msp);
+	space = metaslab_weight_size(msp) - metaslab_allocated_space(msp);
 
 	if (metaslab_fragmentation_factor_enabled &&
 	    msp->ms_fragmentation != ZFS_FRAG_INVALID) {
@@ -4998,7 +5090,8 @@ next:
 		 * we may end up in an infinite loop retrying the same
 		 * metaslab.
 		 */
-		ASSERT(!metaslab_should_allocate(msp, asize, try_hard));
+		IMPLY(mg->mg_vd->vdev_ops != &vdev_draid_ops,
+		    !metaslab_should_allocate(msp, asize, try_hard));
 
 		mutex_exit(&msp->ms_lock);
 	}
@@ -5812,7 +5905,6 @@ metaslab_alloc(spa_t *spa, metaslab_class_t *mc, uint64_t psize, blkptr_t *bp,
 			metaslab_group_alloc_increment(spa,
 			    DVA_GET_VDEV(&dva[d]), zio, flags, allocator);
 		}
-
 	}
 	ASSERT(error == 0);
 	ASSERT(BP_GET_NDVAS(bp) == ndvas);

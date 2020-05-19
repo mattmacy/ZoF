@@ -29,6 +29,7 @@
 #include <sys/debug.h>
 #include <sys/kstat.h>
 #include <sys/abd.h>
+#include <sys/vdev_impl.h>
 
 #ifdef  __cplusplus
 extern "C" {
@@ -110,6 +111,7 @@ typedef struct raidz_col {
 	int rc_error;			/* I/O error for this device */
 	uint8_t rc_tried;		/* Did we attempt this I/O column? */
 	uint8_t rc_skipped;		/* Did we skip this I/O column? */
+	uint8_t rc_repair;		/* Write good data to this column */
 } raidz_col_t;
 
 typedef struct raidz_map {
@@ -123,9 +125,11 @@ typedef struct raidz_map {
 	uint64_t rm_nskip;		/* Skipped sectors for padding */
 	uint64_t rm_skipstart;		/* Column index of padding start */
 	abd_t *rm_abd_copy;		/* rm_asize-buffer of copied data */
+	abd_t *rm_abd_skip;		/* dRAID skip sector buffer */
 	uintptr_t rm_reports;		/* # of referencing checksum reports */
 	uint8_t	rm_freed;		/* map no longer has referencing ZIO */
 	uint8_t	rm_ecksuminjected;	/* checksum error was injected */
+	uint8_t rm_include_skip;	/* skip sectors included in parity */
 	const raidz_impl_ops_t *rm_ops;	/* RAIDZ math operations */
 	raidz_col_t rm_col[1];		/* Flexible array of I/O columns */
 } raidz_map_t;
