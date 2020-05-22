@@ -56,6 +56,8 @@
 #include <sys/zfs_znode.h>
 
 
+#define WANT_ASYNC
+
 static ulong_t zfs_fsync_sync_cnt = 4;
 
 int
@@ -75,7 +77,6 @@ zfs_fsync(znode_t *zp, int syncflag, cred_t *cr)
 
 	return (0);
 }
-
 
 #if defined(SEEK_HOLE) && defined(SEEK_DATA)
 /*
@@ -166,6 +167,44 @@ zfs_access(znode_t *zp, int mode, int flag, cred_t *cr)
 	return (error);
 }
 
+static int
+zfs_read_prologue(znode_t *zp, off_t offset, ssize_t resid)
+{
+	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+
+	ZFS_ENTER(zfsvfs);
+	ZFS_VERIFY_ZP(zp);
+
+	/* We don't copy out anything useful for directories. */
+	if (Z_ISDIR(ZTOTYPE(zp))) {
+		ZFS_EXIT(zfsvfs);
+		return (SET_ERROR(EISDIR));
+	}
+
+	if (zp->z_pflags & ZFS_AV_QUARANTINED) {
+		ZFS_EXIT(zfsvfs);
+		return (SET_ERROR(EACCES));
+	}
+
+	/*
+	 * Validate file offset
+	 */
+	if (offset < (offset_t)0) {
+		ZFS_EXIT(zfsvfs);
+		return (SET_ERROR(EINVAL));
+	}
+
+	/*
+	 * Fasttrack empty reads
+	 */
+	if (resid == 0) {
+		ZFS_EXIT(zfsvfs);
+		return (0);
+	}
+
+	return (-1);
+}
+
 static unsigned long zfs_vnops_read_chunk_size = 1024 * 1024; /* Tunable */
 
 /*
@@ -196,32 +235,9 @@ zfs_read(struct znode *zp, uio_t *uio, int ioflag, cred_t *cr)
 	ZFS_ENTER(zfsvfs);
 	ZFS_VERIFY_ZP(zp);
 
-	if (zp->z_pflags & ZFS_AV_QUARANTINED) {
-		ZFS_EXIT(zfsvfs);
-		return (SET_ERROR(EACCES));
-	}
-
-	/* We don't copy out anything useful for directories. */
-	if (Z_ISDIR(ZTOTYPE(zp))) {
-		ZFS_EXIT(zfsvfs);
-		return (SET_ERROR(EISDIR));
-	}
-
-	/*
-	 * Validate file offset
-	 */
-	if (uio->uio_loffset < (offset_t)0) {
-		ZFS_EXIT(zfsvfs);
-		return (SET_ERROR(EINVAL));
-	}
-
-	/*
-	 * Fasttrack empty reads
-	 */
-	if (uio->uio_resid == 0) {
-		ZFS_EXIT(zfsvfs);
-		return (0);
-	}
+	error = zfs_read_prologue(zp, uio->uio_loffset, uio->uio_resid);
+	if (error >= 0)
+		return (error);
 
 #ifdef FRSYNC
 	/*
@@ -293,6 +309,50 @@ out:
 	return (error);
 }
 
+static int
+zfs_write_prologue(znode_t *zp, ssize_t resid, off_t offset, int ioflag)
+{
+	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	offset_t	woff;
+
+	if (resid == 0)
+		return (0);
+
+	ZFS_ENTER(zfsvfs);
+	ZFS_VERIFY_ZP(zp);
+	/*
+	 * Callers might not be able to detect properly that we are read-only,
+	 * so check it explicitly here.
+	 */
+	if (zfs_is_readonly(zfsvfs)) {
+		ZFS_EXIT(zfsvfs);
+		return (SET_ERROR(EROFS));
+	}
+
+	/*
+	 * If immutable or not appending then return EPERM.
+	 * Intentionally allow ZFS_READONLY through here.
+	 * See zfs_zaccess_common()
+	 */
+	if ((zp->z_pflags & ZFS_IMMUTABLE) ||
+	    ((zp->z_pflags & ZFS_APPENDONLY) && !(ioflag & O_APPEND) &&
+	    (offset < zp->z_size))) {
+		ZFS_EXIT(zfsvfs);
+		return (SET_ERROR(EPERM));
+	}
+
+	/*
+	 * Validate file offset
+	 */
+	woff = ioflag & O_APPEND ? zp->z_size : offset;
+	if (woff < 0) {
+		ZFS_EXIT(zfsvfs);
+		return (SET_ERROR(EINVAL));
+	}
+
+	return (-1);
+}
+
 /*
  * Write the bytes to a file.
  *
@@ -323,8 +383,10 @@ zfs_write(znode_t *zp, uio_t *uio, int ioflag, cred_t *cr)
 	 * Fasttrack empty write
 	 */
 	ssize_t n = start_resid;
-	if (n == 0)
-		return (0);
+	if ((error = zfs_write_prologue(zp, start_resid, uio->uio_loffset,
+	    ioflag)) >= 0)
+		return (error);
+
 
 	rlim64_t limit = MAXOFFSET_T;
 
@@ -342,34 +404,8 @@ zfs_write(znode_t *zp, uio_t *uio, int ioflag, cred_t *cr)
 	SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_FLAGS(zfsvfs), NULL,
 	    &zp->z_pflags, 8);
 
-	/*
-	 * Callers might not be able to detect properly that we are read-only,
-	 * so check it explicitly here.
-	 */
-	if (zfs_is_readonly(zfsvfs)) {
-		ZFS_EXIT(zfsvfs);
-		return (SET_ERROR(EROFS));
-	}
 
-	/*
-	 * If immutable or not appending then return EPERM
-	 */
-	if ((zp->z_pflags & (ZFS_IMMUTABLE | ZFS_READONLY)) ||
-	    ((zp->z_pflags & ZFS_APPENDONLY) && !(ioflag & O_APPEND) &&
-	    (uio->uio_loffset < zp->z_size))) {
-		ZFS_EXIT(zfsvfs);
-		return (SET_ERROR(EPERM));
-	}
-
-	/*
-	 * Validate file offset
-	 */
 	offset_t woff = ioflag & O_APPEND ? zp->z_size : uio->uio_loffset;
-	if (woff < 0) {
-		ZFS_EXIT(zfsvfs);
-		return (SET_ERROR(EINVAL));
-	}
-
 	int max_blksz = zfsvfs->z_max_blksz;
 
 	/*
@@ -718,6 +754,576 @@ zfs_setsecattr(znode_t *zp, vsecattr_t *vsecp, int flag, cred_t *cr)
 	ZFS_EXIT(zfsvfs);
 	return (error);
 }
+#ifdef WANT_ASYNC
+
+uint64_t
+dmu_physmove(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off, uint64_t sz)
+{
+	struct uio_bio *uio = (struct uio_bio *)dbs->dbs_dc->dc_data_buf;
+	uint64_t adv = uio->uio_resid;
+	int err;
+
+	err = uiobiomove((char *)db->db_data + off, sz, uio);
+	if (err)
+		dbs->dbs_err = err;
+	adv -= uio->uio_resid;
+
+	return (adv);
+}
+
+static boolean_t
+dnode_has_dirty(dnode_t *dn)
+{
+	boolean_t dirty = B_FALSE;
+
+	/*
+	 * Check if dnode is dirty
+	 */
+	for (int i = 0; i < TXG_SIZE; i++) {
+		if (multilist_link_active(&dn->dn_dirty_link[i])) {
+			dirty = B_TRUE;
+			break;
+		}
+	}
+	return (dirty);
+}
+
+void
+zfs_read_async_epilogue(zfs_read_state_t *state, int error)
+{
+	znode_t		*zp = state->zrs_zp;
+	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	struct uio_bio *uio = state->zrs_uio;
+	dmu_buf_impl_t *db = (dmu_buf_impl_t *)state->zrs_db;
+
+	DB_DNODE_EXIT(db);
+	zfs_rangelock_exit(state->zrs_lr);
+	ZFS_ACCESSTIME_STAMP(zfsvfs, zp);
+	ZFS_EXIT(zfsvfs);
+	if (error) {
+		uio->uio_flags |= UIO_BIO_ERROR;
+		uio->uio_error = error;
+	}
+	uio->uio_bio_done(uio);
+	kmem_free(state, sizeof (*state));
+}
+
+static void
+zfs_read_async_resume(void *arg)
+{
+	zfs_read_state_t *state = arg;
+	znode_t		*zp = state->zrs_zp;
+	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	struct uio_bio *uio = state->zrs_uio;
+	dnode_t *dn = state->zrs_dn;
+	zfs_locked_range_t		*lr;
+	int flags, error = 0;
+
+	/*
+	 * Lock the range against changes.
+	 */
+	if ((state->zrs_done & ZRS_RANGELOCK) == 0) {
+		state->zrs_done |= ZRS_RANGELOCK;
+		error = zfs_rangelock_tryenter_async(&zp->z_rangelock,
+		    uio->uio_loffset, uio->uio_resid, RL_READER, &state->zrs_lr,
+		    zfs_read_async_resume, state);
+		if (error == EINPROGRESS)
+			return;
+		VERIFY(error == 0);
+	}
+	lr = state->zrs_lr;
+	/*
+	 * If we are reading past end-of-file we can skip
+	 * to the end; but we might still need to set atime.
+	 */
+	if (uio->uio_loffset >= zp->z_size) {
+		error = 0;
+		goto out;
+	}
+	if (zp_has_cached_in_range(zp, uio->uio_loffset, uio->uio_resid)) {
+		zfs_mappedread_async(state);
+		return;
+	}
+	flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_ASYNC |
+	    DMU_CTX_FLAG_NO_HOLD | DMU_CTX_FLAG_PREFETCH;
+	if ((state->zrs_done & ZRS_DMU_ISSUED) == 0) {
+		state->zrs_done |= ZRS_DMU_ISSUED;
+		error = dmu_ctx_init(&state->zrs_dc, dn, zfsvfs->z_os, zp->z_id,
+		    uio->uio_loffset, uio->uio_resid, uio, FTAG, flags);
+		if (error)
+			goto out;
+		state->zrs_dc.dc_data_transfer_cb = dmu_physmove;
+		dmu_ctx_set_complete_cb(&state->zrs_dc,
+		    (dmu_ctx_cb_t)zfs_read_async_resume);
+		error = dmu_issue(&state->zrs_dc);
+		dmu_ctx_rele(&state->zrs_dc);
+		if (error == 0 || error == EINPROGRESS)
+			return;
+	}
+out:
+	zfs_read_async_epilogue(state, error);
+}
+
+int
+zfs_read_async(znode_t *zp, struct uio_bio *uio, int ioflag)
+{
+	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	int		error = 0;
+	dmu_buf_impl_t *db;
+	dnode_t *dn;
+	zfs_read_state_t		*state;
+
+	error = zfs_read_prologue(zp, uio->uio_loffset, uio->uio_resid);
+	if (error >= 0)
+		return (error);
+
+	state = kmem_zalloc(sizeof (*state), KM_SLEEP);
+	state->zrs_zp = zp;
+	state->zrs_uio = uio;
+	state->zrs_ioflag = ioflag;
+
+	state->zrs_db = sa_get_db(zp->z_sa_hdl);
+	db = (dmu_buf_impl_t *)state->zrs_db;
+	DB_DNODE_ENTER(db);
+	state->zrs_dn = dn = DB_DNODE(db);
+	/*
+	 * If we're in FRSYNC mode, sync out this znode before reading it.
+	 */
+	if (zfsvfs->z_log &&
+	    (ioflag & FRSYNC || zfsvfs->z_os->os_sync == ZFS_SYNC_ALWAYS) &&
+	    dnode_has_dirty(dn))
+		error = zil_commit_async(zfsvfs->z_log, zp->z_id,
+		    zfs_read_async_resume, state);
+
+	if (error) {
+		ASSERT(error == EINPROGRESS);
+		return (error);
+	}
+	zfs_read_async_resume(state);
+	return (EINPROGRESS);
+}
+
+typedef enum {
+	ZWS_BLOCKED	= 1 << 1,
+	ZWS_RANGELOCK_PRE	= 1 << 2,
+	ZWS_RANGELOCK_POST	= 1 << 3,
+	ZWS_TX_ASSIGNED	= 1 << 4,
+	ZWS_DMU_ISSUED	= 1 << 5,
+	ZWS_TX_BYTES_UPDATED	= 1 << 6,
+	ZWS_UPDATED_PAGES	= 1 << 7,
+} zws_done_t;
+
+
+typedef struct zfs_write_state {
+	dmu_ctx_t	zws_dc;
+	znode_t	*zws_zp;
+	dnode_t	*zws_dn;
+	dmu_buf_impl_t	*zws_db;
+	zfs_locked_range_t	*zws_lr;
+	struct uio_bio	*zws_uio;
+	struct ucred *zws_cred;
+	dmu_tx_t	*zws_tx;
+	sa_bulk_attr_t	zws_bulk[4];
+	uint64_t	zws_mtime[2];
+	uint64_t zws_ctime[2];
+	int zws_ioflag;
+	int zws_tx_bytes;
+	uint16_t zws_done;
+	uint8_t zws_rc;
+} zfs_write_state_t;
+
+static void zfs_write_async_resume(zfs_write_state_t *state);
+
+static int
+zfs_rangelock_write_async(zfs_write_state_t *state)
+{
+	int error;
+	off_t range_off;
+	ssize_t woff, range_len;
+	zfs_rangelock_type_t type;
+	zfs_locked_range_t *lr;
+	znode_t *zp = state->zws_zp;
+	struct uio_bio *uio = state->zws_uio;
+	struct thread *td = uio->uio_td;
+
+	woff = state->zws_uio->uio_loffset;
+	range_len = state->zws_uio->uio_resid;
+	range_off = (state->zws_ioflag & FAPPEND) ? 0 : woff;
+	type = (state->zws_ioflag & FAPPEND) ? RL_APPEND : RL_WRITER;
+
+	if ((state->zws_done & ZWS_RANGELOCK_PRE) == 0) {
+		state->zws_done |= ZWS_RANGELOCK_PRE;
+		error = zfs_rangelock_tryenter_async(&zp->z_rangelock,
+		    range_off, range_len, type, &state->zws_lr,
+		    (callback_fn)zfs_write_async_resume, state);
+		if (error == EINPROGRESS) {
+			state->zws_done |= ZWS_BLOCKED;
+			return (error);
+		}
+	}
+	lr = state->zws_lr;
+	if (state->zws_ioflag & FAPPEND) {
+		woff = lr->lr_offset;
+		if (lr->lr_length == UINT64_MAX) {
+			/*
+			 * We overlocked the file because this write will cause
+			 * the file block size to increase.
+			 * Note that zp_size cannot change with this lock held.
+			 */
+			woff = zp->z_size;
+		}
+		uio->uio_loffset = woff;
+	}
+	if (woff > MAXOFFSET_T)
+		return (EFBIG);
+#ifdef RLIMIT_FSIZE
+	if (uio->uio_loffset + uio->uio_resid > lim_cur(td, RLIMIT_FSIZE)) {
+		PROC_LOCK(td->td_proc);
+		kern_psignal(td->td_proc, SIGXFSZ);
+		PROC_UNLOCK(td->td_proc);
+	}
+#endif
+	state->zws_done |= ZWS_RANGELOCK_POST;
+	return (0);
+}
+
+static void
+zfs_write_async_epilogue(zfs_write_state_t *state)
+{
+	int rc = state->zws_rc;
+	struct uio_bio *uio = state->zws_uio;
+
+	if ((state->zws_done & ZWS_BLOCKED) == 0)
+		return;
+
+	if (state->zws_lr)
+		zfs_rangelock_exit(state->zws_lr);
+	if (state->zws_dn)
+		DB_DNODE_EXIT(state->zws_db);
+	ZFS_EXIT(state->zws_zp->z_zfsvfs);
+
+	if (rc && rc != EINPROGRESS) {
+		uio->uio_flags |= UIO_BIO_ERROR;
+		uio->uio_error = rc;
+	}
+	kmem_free(state, sizeof (*state));
+	uio->uio_bio_done(uio);
+}
+
+static void
+zfs_write_async_resume(zfs_write_state_t *state)
+{
+	znode_t		*zp = state->zws_zp;
+	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	struct uio_bio *uio = state->zws_uio;
+	rlim64_t	limit = MAXOFFSET_T;
+	int		max_blksz = zfsvfs->z_max_blksz;
+	struct ucred *cr = state->zws_cred;
+	zilog_t		*zilog;
+	dmu_buf_impl_t *db;
+	dnode_t *dn;
+	zfs_locked_range_t		*lr;
+	dmu_tx_t	*tx;
+	uint64_t	end_size;
+	uint64_t	uid, gid, projid;
+	int		tx_bytes, flags, error, write_eof;
+	off_t	woff;
+	ssize_t n;
+	int rc = 0;
+
+	if ((state->zws_done & ZWS_RANGELOCK_POST) == 0)
+		rc = zfs_rangelock_write_async(state);
+	if (rc) {
+		state->zws_rc = rc;
+		goto done;
+	}
+	lr = state->zws_lr;
+	woff = uio->uio_loffset;
+	n = uio->uio_resid;
+	if ((woff + n) > limit || woff > (limit - n))
+		n = limit - woff;
+
+	/* Will this write extend the file length? */
+	write_eof = (woff + n > zp->z_size);
+
+	end_size = MAX(zp->z_size, woff + n);
+	uid = zp->z_uid;
+	gid = zp->z_gid;
+	projid = zp->z_projid;
+
+	if (zfs_id_overblockquota(zfsvfs, DMU_USERUSED_OBJECT, uid) ||
+	    zfs_id_overblockquota(zfsvfs, DMU_GROUPUSED_OBJECT, gid) ||
+	    (projid != ZFS_DEFAULT_PROJID &&
+	    zfs_id_overblockquota(zfsvfs, DMU_PROJECTUSED_OBJECT, projid))) {
+		state->zws_rc = SET_ERROR(EDQUOT);
+		goto done;
+	}
+	if ((state->zws_done & ZWS_TX_ASSIGNED) == 0) {
+		state->zws_tx = tx =  dmu_tx_create(zfsvfs->z_os);
+		dmu_tx_hold_sa(tx, zp->z_sa_hdl, B_FALSE);
+		state->zws_db = db = (dmu_buf_impl_t *)sa_get_db(zp->z_sa_hdl);
+		DB_DNODE_ENTER(db);
+		state->zws_dn = dn = DB_DNODE(db);
+		dmu_tx_hold_write_by_dnode(tx, dn, woff, MIN(n, max_blksz));
+		/* XXX may do synchronous I/O if it has an external ACL */
+		zfs_sa_upgrade_txholds(tx, zp);
+		state->zws_done |= (ZWS_TX_ASSIGNED|ZWS_BLOCKED);
+		error = dmu_tx_assign_async(tx,
+		    (callback_fn)zfs_write_async_resume, state);
+		if (error == EINPROGRESS)
+			return;
+		state->zws_done &= ~ZWS_BLOCKED;
+		if (error) {
+			state->zws_done &= ~ZWS_TX_ASSIGNED;
+			state->zws_rc = error;
+			goto done;
+		}
+	}
+	tx = state->zws_tx;
+	dn = state->zws_dn;
+	/*
+	 * If zfs_range_lock() over-locked we grow the blocksize
+	 * and then reduce the lock range.  This will only happen
+	 * on the first iteration since zfs_range_reduce() will
+	 * shrink down r_len to the appropriate size.
+	 */
+	if (lr->lr_length == UINT64_MAX) {
+		uint64_t new_blksz;
+
+		if (zp->z_blksz > max_blksz) {
+			/*
+			 * File's blocksize is already larger than the
+			 * "recordsize" property.  Only let it grow to
+			 * the next power of 2.
+			 */
+			ASSERT(!ISP2(zp->z_blksz));
+			new_blksz = MIN(end_size,
+			    1 << highbit64(zp->z_blksz));
+		} else {
+			new_blksz = MIN(end_size, max_blksz);
+		}
+		zfs_grow_blocksize(zp, new_blksz, tx);
+		zfs_rangelock_reduce(lr, woff, n);
+	}
+	if ((state->zws_done & ZWS_DMU_ISSUED) == 0) {
+		state->zws_done |= ZWS_DMU_ISSUED;
+		if (woff + n > zp->z_size)
+			vnode_pager_setsize(ZTOV(zp), woff + n);
+		flags = DMU_CTX_FLAG_ASYNC | DMU_CTX_FLAG_NO_HOLD;
+		state->zws_tx_bytes = uio->uio_resid;
+		error = dmu_ctx_init(&state->zws_dc, dn, zfsvfs->z_os, zp->z_id,
+		    uio->uio_loffset, uio->uio_resid, uio, FTAG, flags);
+		if (error)
+			goto done;
+		state->zws_dc.dc_data_transfer_cb = dmu_physmove;
+		dmu_ctx_set_complete_cb(&state->zws_dc,
+		    (dmu_ctx_cb_t)zfs_write_async_resume);
+		dmu_ctx_set_dmu_tx(&state->zws_dc, tx);
+		error = dmu_issue(&state->zws_dc);
+		dmu_ctx_rele(&state->zws_dc);
+		if (error && error != EINPROGRESS)
+			goto done;
+		state->zws_done |= ZWS_BLOCKED;
+		return;
+	}
+	if ((state->zws_done & ZWS_TX_BYTES_UPDATED) == 0) {
+		state->zws_done |= ZWS_TX_BYTES_UPDATED;
+		state->zws_tx_bytes -= uio->uio_resid;
+	}
+	tx_bytes = state->zws_tx_bytes;
+	error = state->zws_dc.dc_err;
+
+	/*
+	 * If we made no progress, we're done.  If we made even
+	 * partial progress, update the znode and ZIL accordingly.
+	 */
+	if (tx_bytes == 0) {
+		(void) sa_update(zp->z_sa_hdl, SA_ZPL_SIZE(zfsvfs),
+		    (void *)&zp->z_size, sizeof (uint64_t), tx);
+		dmu_tx_commit(tx);
+		ASSERT(error != 0);
+		goto done;
+	}
+	if (zp_has_cached_in_range(zp, uio->uio_loffset, tx_bytes) &&
+	    ((state->zws_done & ZWS_UPDATED_PAGES) == 0)) {
+		state->zws_done |= ZWS_UPDATED_PAGES;
+		error = update_pages_async(zp, woff, tx_bytes, dn,
+		    zfsvfs->z_os, zp->z_id, (callback_fn)zfs_write_async_resume,
+		    state);
+		if (error == EINPROGRESS)
+			return;
+	}
+
+	/*
+	 * Clear Set-UID/Set-GID bits on successful write if not
+	 * privileged and at least one of the excute bits is set.
+	 *
+	 * It would be nice to to this after all writes have
+	 * been done, but that would still expose the ISUID/ISGID
+	 * to another app after the partial write is committed.
+	 *
+	 * Note: we don't call zfs_fuid_map_id() here because
+	 * user 0 is not an ephemeral uid.
+	 */
+	mutex_enter(&zp->z_acl_lock);
+	if ((zp->z_mode & (S_IXUSR | (S_IXUSR >> 3) |
+	    (S_IXUSR >> 6))) != 0 &&
+	    (zp->z_mode & (S_ISUID | S_ISGID)) != 0 &&
+	    secpolicy_vnode_setid_retain(zp, cr,
+	    (zp->z_mode & S_ISUID) != 0 && zp->z_uid == 0) != 0) {
+		uint64_t newmode;
+		zp->z_mode &= ~(S_ISUID | S_ISGID);
+		newmode = zp->z_mode;
+		(void) sa_update(zp->z_sa_hdl, SA_ZPL_MODE(zfsvfs),
+		    (void *)&newmode, sizeof (uint64_t), tx);
+	}
+	mutex_exit(&zp->z_acl_lock);
+
+	zfs_tstamp_update_setup(zp, CONTENT_MODIFIED, state->zws_mtime,
+	    state->zws_ctime);
+		/*
+		 * Update the file size (zp_size) if it has changed;
+		 * account for possible concurrent updates.
+		 */
+	while ((end_size = zp->z_size) < uio->uio_loffset)
+		atomic_cas_64(&zp->z_size, end_size, uio->uio_loffset);
+
+	/*
+	 * If we are replaying and eof is non zero then force
+	 * the file size to the specified eof. Note, there's no
+	 * concurrency during replay.
+	 */
+	if (zfsvfs->z_replay && zfsvfs->z_replay_eof != 0)
+		zp->z_size = zfsvfs->z_replay_eof;
+
+	if (error == 0)
+		error = sa_bulk_update(zp->z_sa_hdl, state->zws_bulk, 4, tx);
+	else
+		(void) sa_bulk_update(zp->z_sa_hdl, state->zws_bulk, 4, tx);
+
+	zilog = zfsvfs->z_log;
+	zfs_log_write(zilog, tx, TX_WRITE, zp, woff, tx_bytes,
+	    state->zws_ioflag, NULL, NULL);
+	dmu_tx_commit(tx);
+	if (error)
+		goto done;
+
+	if (state->zws_ioflag & (FSYNC | FDSYNC) ||
+	    zfsvfs->z_os->os_sync == ZFS_SYNC_ALWAYS) {
+		error = zil_commit_async(zilog, zp->z_id,
+		    (callback_fn)zfs_write_async_epilogue, state);
+		if (error == EINPROGRESS)
+			return;
+	}
+done:
+	zfs_write_async_epilogue(state);
+}
+
+int
+zfs_write_async(znode_t *zp, struct uio_bio *uio, int ioflag)
+{
+	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	zfs_write_state_t *state;
+	sa_bulk_attr_t *bulk;
+	int rc, c;
+
+	if ((rc = zfs_write_prologue(zp, uio->uio_resid, uio->uio_loffset,
+	    ioflag)) >= 0)
+		return (rc);
+
+	state = kmem_zalloc(sizeof (*state), KM_SLEEP);
+	state->zws_zp = zp;
+	state->zws_uio = uio;
+	state->zws_ioflag = ioflag;
+	bulk = (void*)&state->zws_bulk;
+	c = 0;
+	SA_ADD_BULK_ATTR(bulk, c, SA_ZPL_MTIME(zfsvfs), NULL,
+	    &state->zws_mtime, 16);
+	SA_ADD_BULK_ATTR(bulk, c, SA_ZPL_CTIME(zfsvfs), NULL,
+	    &state->zws_ctime, 16);
+	SA_ADD_BULK_ATTR(bulk, c, SA_ZPL_SIZE(zfsvfs), NULL,
+	    &zp->z_size, 8);
+	SA_ADD_BULK_ATTR(bulk, c, SA_ZPL_FLAGS(zfsvfs), NULL,
+	    &zp->z_pflags, 8);
+
+	zfs_write_async_resume(state);
+	rc = state->zws_rc;
+	if (rc && rc != EINPROGRESS) {
+		if (state->zws_lr)
+			zfs_rangelock_exit(state->zws_lr);
+		ZFS_EXIT(state->zws_zp->z_zfsvfs);
+		kmem_free(state, sizeof (*state));
+	}
+	return (rc);
+}
+
+typedef struct zfs_sync_state {
+	znode_t *zss_zp;
+	struct uio_bio *zss_uio;
+} zfs_sync_state_t;
+
+static void
+zfs_sync_async_done(void *arg)
+{
+	zfs_sync_state_t *zss = arg;
+	struct uio_bio *uio;
+
+	ZFS_EXIT(zss->zss_zp->z_zfsvfs);
+	uio = zss->zss_uio;
+	kmem_free(zss, sizeof (*zss));
+	uio->uio_bio_done(uio);
+}
+
+int
+zfs_sync_async(znode_t *zp, struct uio_bio *uio)
+{
+	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	zfs_sync_state_t *zss;
+	int		rc;
+
+	if (zfsvfs->z_os->os_sync == ZFS_SYNC_DISABLED)
+		return (0);
+
+	zss = kmem_alloc(sizeof (*zss), KM_SLEEP);
+	zss->zss_zp = zp;
+	zss->zss_uio = uio;
+	ZFS_ENTER(zfsvfs);
+	ZFS_VERIFY_ZP(zp);
+	rc = zil_commit_async(zfsvfs->z_log, zp->z_id,
+	    zfs_sync_async_done, zss);
+	if (rc == 0) {
+		ZFS_EXIT(zfsvfs);
+		kmem_free(zss, sizeof (*zss));
+	}
+	return (rc);
+}
+
+int
+zfs_ubop(znode_t *zp, struct uio_bio *uio, int ioflag)
+{
+	uint8_t cmd;
+	int rc;
+
+	cmd = uio->uio_cmd;
+	switch (cmd) {
+		case UIO_BIO_READ:
+			rc = zfs_read_async(zp, uio, ioflag);
+			break;
+		case UIO_BIO_WRITE:
+			rc = zfs_write_async(zp, uio, ioflag);
+			break;
+		case UIO_BIO_SYNC:
+			rc = zfs_sync_async(zp, uio);
+		default:
+			rc = EOPNOTSUPP;
+	}
+	return (rc);
+}
+
+
+
+#endif
+
 
 #ifdef ZFS_DEBUG
 static int zil_fault_io = 0;
