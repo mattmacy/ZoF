@@ -831,6 +831,69 @@ out:
 	return (error);
 }
 
+static int
+zfs_read_async(struct vnode *vp, struct uio_bio *uio, int ioflag, struct ucred *cred)
+{
+	return (EOPNOTSUPP);
+}
+
+static int
+zfs_write_async(struct vnode *vp, struct uio_bio *uio, int ioflag, struct ucred *cred)
+{
+	return (EOPNOTSUPP);
+}
+
+static int
+zfs_sync_async(struct vnode *vp, struct uio_bio *uio, int ioflag, struct ucred *cred)
+{
+	return (EOPNOTSUPP);
+}
+
+static int
+zfs_ubop(struct vnode *vp, struct uio_bio *uio, int ioflag, struct ucred *cred)
+{
+	uint8_t cmd;
+	int rc;
+
+	cmd = uio->uio_cmd;
+	switch (cmd) {
+		case UIO_BIO_READ:
+		rc = zfs_read_async(vp, uio, ioflag, cred);
+		break;
+		case UIO_BIO_WRITE:
+		rc = zfs_write_async(vp, uio, ioflag, cred);
+		break;
+		case UIO_BIO_SYNC:
+		rc = zfs_sync_async(vp, uio, ioflag, cred);
+		default:
+			rc = EOPNOTSUPP;
+	}
+	return (rc);
+}
+
+#ifndef _SYS_SYSPROTO_H_
+struct vop_ubop {
+	struct vop_generic_args a_gen;
+	struct vnode *a_vp;
+	struct uio_bio *a_uio;
+	int a_ioflag;
+	struct ucred *a_cred;
+};
+#endif
+
+static int
+zfs_freebsd_ubop(struct vop_ubop_args *ap)
+{
+
+	return (zfs_ubop(ap->a_vp, ap->a_uio, ap->a_ioflag, ap->a_cred));
+}
+
+static int
+zfs_can_ubop(struct vop_can_ubop_args *ap __unused)
+{
+	return (EOPNOTSUPP);
+}
+
 /*
  * Write the bytes to a file.
  *
@@ -845,7 +908,7 @@ out:
  *	OUT:	uio	- updated offset and range.
  *
  *	RETURN:	0 on success, error code on failure.
- *
+refa *
  * Timestamps:
  *	vp - ctime|mtime updated if byte count > 0
  */
@@ -6530,6 +6593,8 @@ struct vop_vector zfs_vnodeops = {
 	.vop_lock1 =		zfs_lock,
 #endif
 #endif
+	.vop_ubop =	zfs_freebsd_ubop,
+	.vop_can_ubop = zfs_can_ubop,
 };
 VFS_VOP_VECTOR_REGISTER(zfs_vnodeops);
 
