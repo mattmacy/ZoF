@@ -1070,8 +1070,47 @@ dmu_tx_assign(dmu_tx_t *tx, uint64_t txg_how)
 	}
 
 	txg_rele_to_quiesce(&tx->tx_txgh);
-
 	return (0);
+}
+
+typedef struct dmu_tx_assign_state {
+	taskq_ent_t dtas_task;
+	dmu_tx_t *dtas_tx;
+	callback_fn dtas_cb;
+	void *dtas_arg;
+} dmu_tx_assign_state_t;
+
+static void
+dmu_tx_assign_callback(void *arg)
+{
+	dmu_tx_assign_state_t *dtas = arg;
+	dmu_tx_t *tx = dtas->dtas_tx;
+	callback_fn cb = dtas->dtas_cb;
+	void *cb_arg = dtas->dtas_arg;;
+	int rc;
+
+	kmem_free(dtas, sizeof (*dtas));
+	rc = dmu_tx_assign(tx, TXG_WAIT);
+	cb(cb_arg);
+}
+
+int
+dmu_tx_assign_async(dmu_tx_t *tx, callback_fn cb, void *arg)
+{
+	int rc;
+	dmu_tx_assign_state_t *dtas;
+
+	rc = dmu_tx_assign(tx, TXG_NOWAIT);
+	if (rc != ERESTART)
+		return (rc);
+	dtas = kmem_alloc(sizeof (*dtas), KM_SLEEP);
+	taskq_init_ent(&dtas->dtas_task);
+	dtas->dtas_tx = tx;
+	dtas->dtas_cb = cb;
+	dtas->dtas_arg = arg;
+	taskq_dispatch_ent(system_taskq, dmu_tx_assign_callback, dtas,
+	    0, &dtas->dtas_task);
+	return (EINPROGRESS);
 }
 
 void
