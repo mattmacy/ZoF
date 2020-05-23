@@ -193,22 +193,22 @@ DEBUG_REFCOUNT(_vfs_zfs_dmu, buf_set_in_flight, "Buffer sets in flight");
 uint_t zfs_async_io_key;
 
 void
-dmu_buf_set_node_add(list_t *list, dmu_buf_set_t *dbs, boolean_t restart)
+dmu_buf_ctx_node_add(list_t *list, dmu_buf_ctx_t *ctx, dmu_buf_ctx_cb_t cb)
 {
-	dmu_buf_set_node_t *dbsn = kmem_zalloc(sizeof (dmu_buf_set_node_t),
+	dmu_buf_ctx_node_t *dbsn = kmem_zalloc(sizeof (dmu_buf_ctx_node_t),
 	    KM_SLEEP);
 	list_link_init(&dbsn->dbsn_link);
-	dbsn->dbsn_dbs = dbs;
-	dbsn->dbsn_dmu_restart = restart;
+	dbsn->dbsn_ctx = ctx;
+	dbsn->dbsn_cb = cb;
 	list_insert_tail(list, dbsn);
 	DEBUG_REFCOUNT_ADD(dbsn_in_flight);
 }
 
 void
-dmu_buf_set_node_remove(list_t *list, dmu_buf_set_node_t *dbsn)
+dmu_buf_ctx_node_remove(list_t *list, dmu_buf_ctx_node_t *dbsn)
 {
 	list_remove(list, dbsn);
-	kmem_free(dbsn, sizeof (dmu_buf_set_node_t));
+	kmem_free(dbsn, sizeof (dmu_buf_ctx_node_t));
 	ASSERT(dbsn_in_flight > 0);
 	DEBUG_REFCOUNT_DEC(dbsn_in_flight);
 }
@@ -417,8 +417,9 @@ dmu_ctx_rele(dmu_ctx_t *dmu_ctx)
  *       dmu_buf_set's elements doesn't need a lock.
  */
 static void
-dmu_buf_set_ready(dmu_buf_set_t *dbs)
+dmu_buf_set_ready(dmu_buf_ctx_t *dbs_ctx)
 {
+	dmu_buf_set_t *dbs = (dmu_buf_set_t *)dbs_ctx;
 	dmu_ctx_t *dc = dbs->dbs_dc;
 
 	/* Only perform I/O if no errors occurred for the buffer set. */
@@ -451,8 +452,8 @@ dmu_thread_context_create(void)
 	ASSERT3P(tsd_get(zfs_async_io_key), ==, NULL);
 	/* Called with taskqueue mutex held. */
 	dcs = kmem_zalloc(sizeof (dmu_cb_state_t), KM_SLEEP);
-	list_create(&dcs->dcs_io_list, sizeof (dmu_buf_set_node_t),
-	    offsetof(dmu_buf_set_node_t, dbsn_link));
+	list_create(&dcs->dcs_io_list, sizeof (dmu_buf_ctx_node_t),
+	    offsetof(dmu_buf_ctx_node_t, dbsn_link));
 
 	ret = tsd_set(zfs_async_io_key, dcs);
 #ifdef ZFS_DEBUG
@@ -488,7 +489,7 @@ void
 dmu_thread_context_process(void)
 {
 	dmu_cb_state_t *dcs = tsd_get(zfs_async_io_key);
-	dmu_buf_set_node_t *dbsn, *next;
+	dmu_buf_ctx_node_t *dbsn, *next;
 
 	/*
 	 * If the current thread didn't register, it doesn't handle queued
@@ -500,8 +501,8 @@ dmu_thread_context_process(void)
 
 	for (dbsn = list_head(&dcs->dcs_io_list); dbsn != NULL; dbsn = next) {
 		next = list_next(&dcs->dcs_io_list, dbsn);
-		dmu_buf_set_ready(dbsn->dbsn_dbs);
-		dmu_buf_set_node_remove(&dcs->dcs_io_list, dbsn);
+		dmu_buf_set_ready(dbsn->dbsn_ctx);
+		dmu_buf_ctx_node_remove(&dcs->dcs_io_list, dbsn);
 	}
 }
 
@@ -514,8 +515,9 @@ dmu_thread_context_process(void)
  * invariant:		If specified, the dbuf's mutex must be held.
  */
 void
-dmu_buf_set_rele(dmu_buf_set_t *dbs, int err)
+dmu_buf_set_rele(dmu_buf_ctx_t *dbs_ctx, int err)
 {
+	dmu_buf_set_t *dbs = (dmu_buf_set_t *)dbs_ctx;
 	dmu_ctx_t *dmu_ctx = dbs->dbs_dc;
 	dmu_cb_state_t *dcs;
 
@@ -532,14 +534,14 @@ dmu_buf_set_rele(dmu_buf_set_t *dbs, int err)
 
 	dcs = tsd_get(zfs_async_io_key);
 	if (dcs != NULL && (dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC)) {
-		dmu_buf_set_node_add(&dcs->dcs_io_list, dbs, B_FALSE);
+		dmu_buf_ctx_node_add(&dcs->dcs_io_list, &dbs->dbs_ctx, dmu_buf_set_rele);
 	} else {
 			/*
 			 * The current thread doesn't have anything
 			 * registered in its TSD, so it must not handle
 			 * queued delivery.  Dispatch this set now.
 			 */
-			dmu_buf_set_ready(dbs);
+			dmu_buf_set_ready(&dbs->dbs_ctx);
 	}
 }
 
@@ -576,6 +578,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 		    ZIO_FLAG_CANFAIL);
 	}
 	blkid = dbuf_whichblock(dn, 0, dbs->dbs_dn_start);
+	dbs->dbs_ctx.dbc_type = DBC_DMU_ISSUE;
 
 	if (dc->dc_flags & DMU_CTX_FLAG_ASYNC)
 		async_zio = dbs->dbs_zio;
@@ -589,8 +592,8 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 		db = NULL;
 
 		int err = dbuf_hold_level_async(dn, /* level */ 0, blkid + i,
-		    dc->dc_tag, &db, dc->dc_dn_offset, dbs, dbs->dbs_resid,
-		    async_zio);
+		    dc->dc_tag, &db, dc->dc_dn_offset, &dbs->dbs_ctx,
+		    dbs->dbs_resid, async_zio, dmu_issue_restart);
 
 		if (err == EWOULDBLOCK) {
 			ASSERT(dc->dc_flags & DMU_CTX_FLAG_ASYNC);
@@ -912,7 +915,7 @@ dmu_issue(dmu_ctx_t *dc)
 		/* Process the I/O requests, if the initialization passed. */
 		if (err == 0) {
 			err = dmu_buf_set_process_io(dbs);
-			dmu_buf_set_rele(dbs, err);
+			dmu_buf_set_rele(&dbs->dbs_ctx, err);
 		}
 	}
 	/*
@@ -933,8 +936,9 @@ dmu_issue(dmu_ctx_t *dc)
 }
 
 void
-dmu_issue_restart(dmu_buf_set_t *dbs, int err)
+dmu_issue_restart(dmu_buf_ctx_t *dbs_ctx, int err)
 {
+	dmu_buf_set_t *dbs = (dmu_buf_set_t *)dbs_ctx;
 	uint64_t io_size;
 	dmu_ctx_t *dc;
 
@@ -944,7 +948,7 @@ dmu_issue_restart(dmu_buf_set_t *dbs, int err)
 		 * We skipped a hold + rele || hold + read
 		 */
 		VERIFY(zfs_refcount_remove(&dbs->dbs_holds, NULL) != 0);
-		dmu_buf_set_rele(dbs, err);
+		dmu_buf_set_rele(&dbs->dbs_ctx, err);
 	}
 	/* This context must be async */
 	ASSERT(dc->dc_flags & DMU_CTX_FLAG_ASYNC);
@@ -964,7 +968,7 @@ dmu_issue_restart(dmu_buf_set_t *dbs, int err)
 		if (err == 0)
 			err = dmu_buf_set_process_io(dbs);
 		if (dbs != NULL)
-			dmu_buf_set_rele(dbs, err);
+			dmu_buf_set_rele(&dbs->dbs_ctx, err);
 		dbs = NULL;
 	}
 
