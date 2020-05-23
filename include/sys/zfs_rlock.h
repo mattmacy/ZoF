@@ -61,6 +61,8 @@ typedef struct zfs_locked_range {
 	zfs_rangelock_type_t lr_type; /* range type */
 	kcondvar_t lr_write_cv;	/* cv for waiting writers */
 	kcondvar_t lr_read_cv;	/* cv for waiting readers */
+	list_t lr_write_cb; /* list of write callbacks */
+	list_t lr_read_cb; /* list of read callbacks */
 	uint8_t lr_proxy;	/* acting for original range */
 	uint8_t lr_write_wanted; /* writer wants to lock this range */
 	uint8_t lr_read_wanted;	/* reader wants to lock this range */
@@ -71,6 +73,10 @@ void zfs_rangelock_fini(zfs_rangelock_t *);
 
 zfs_locked_range_t *zfs_rangelock_enter(zfs_rangelock_t *,
     uint64_t, uint64_t, zfs_rangelock_type_t);
+int zfs_rangelock_tryenter(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
+    zfs_rangelock_type_t type, zfs_locked_range_t **lr,
+    callback_fn cb, void *arg);
+
 void zfs_rangelock_exit(zfs_locked_range_t *);
 void zfs_rangelock_reduce(zfs_locked_range_t *, uint64_t, uint64_t);
 

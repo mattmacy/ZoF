@@ -712,6 +712,10 @@ zvol_geom_bio_async(zvol_state_t *zv, struct bio *bp)
 
 	error = zvol_dmu_ctx_init(&zss->zds, bp->bio_data, bp->bio_offset,
 	    bp->bio_length, dmu_flags, zvol_strategy_dmu_done);
+
+	if (error == EWOULDBLOCK)
+		return;
+
 	if (error) {
 		kmem_free(zss, sizeof (zvol_strategy_state_t));
 		atomic_dec(&zv->zv_suspend_ref);
