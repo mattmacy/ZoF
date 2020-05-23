@@ -113,6 +113,14 @@
 #include <sys/zfs_context.h>
 #include <sys/zfs_rlock.h>
 
+typedef struct zfs_rangelock_cb_entry {
+	list_node_t zrce_node;
+	zfs_locked_range_t *zrce_lr;
+	zfs_locked_range_t **zrce_lrp;
+	callback_fn zrce_cb;
+	void *zrce_arg;
+} zfs_rangelock_cb_entry_t;
+
 
 /*
  * AVL comparison function used to order range locks
@@ -153,9 +161,9 @@ zfs_rangelock_fini(zfs_rangelock_t *rl)
  * Check if a write lock can be grabbed.  If not, fail immediately or sleep and
  * recheck until available, depending on the value of the "nonblock" parameter.
  */
-static boolean_t
+static int
 zfs_rangelock_enter_writer(zfs_rangelock_t *rl, zfs_locked_range_t *new,
-    boolean_t nonblock)
+    zfs_locked_range_t **old)
 {
 	avl_tree_t *tree = &rl->rl_tree;
 	zfs_locked_range_t *lr;
@@ -185,7 +193,7 @@ zfs_rangelock_enter_writer(zfs_rangelock_t *rl, zfs_locked_range_t *new,
 		 */
 		if (avl_numnodes(tree) == 0) {
 			avl_add(tree, new);
-			return (B_TRUE);
+			return (0);
 		}
 
 		/*
@@ -206,10 +214,12 @@ zfs_rangelock_enter_writer(zfs_rangelock_t *rl, zfs_locked_range_t *new,
 			goto wait;
 
 		avl_insert(tree, new, where);
-		return (B_TRUE);
+		return (0);
 wait:
-		if (nonblock)
-			return (B_FALSE);
+		if (old != NULL) {
+			*old = lr;
+			return (EINPROGRESS);
+		}
 		if (!lr->lr_write_wanted) {
 			cv_init(&lr->lr_write_cv, NULL, CV_DEFAULT, NULL);
 			lr->lr_write_wanted = B_TRUE;
@@ -250,6 +260,10 @@ zfs_rangelock_proxify(avl_tree_t *tree, zfs_locked_range_t *lr)
 	proxy->lr_proxy = B_TRUE;
 	proxy->lr_write_wanted = B_FALSE;
 	proxy->lr_read_wanted = B_FALSE;
+	list_create(&proxy->lr_write_cb, sizeof (zfs_rangelock_cb_entry_t),
+	    offsetof(zfs_rangelock_cb_entry_t, zrce_node));
+	list_create(&proxy->lr_read_cb, sizeof (zfs_rangelock_cb_entry_t),
+	    offsetof(zfs_rangelock_cb_entry_t, zrce_node));
 	avl_add(tree, proxy);
 
 	return (proxy);
@@ -279,6 +293,10 @@ zfs_rangelock_split(avl_tree_t *tree, zfs_locked_range_t *lr, uint64_t off)
 	rear->lr_proxy = B_TRUE;
 	rear->lr_write_wanted = B_FALSE;
 	rear->lr_read_wanted = B_FALSE;
+	list_create(&rear->lr_write_cb, sizeof (zfs_rangelock_cb_entry_t),
+	    offsetof(zfs_rangelock_cb_entry_t, zrce_node));
+	list_create(&rear->lr_read_cb, sizeof (zfs_rangelock_cb_entry_t),
+	    offsetof(zfs_rangelock_cb_entry_t, zrce_node));
 
 	zfs_locked_range_t *front = zfs_rangelock_proxify(tree, lr);
 	front->lr_length = off - lr->lr_offset;
@@ -304,6 +322,11 @@ zfs_rangelock_new_proxy(avl_tree_t *tree, uint64_t off, uint64_t len)
 	lr->lr_proxy = B_TRUE;
 	lr->lr_write_wanted = B_FALSE;
 	lr->lr_read_wanted = B_FALSE;
+	list_create(&lr->lr_write_cb, sizeof (zfs_rangelock_cb_entry_t),
+	    offsetof(zfs_rangelock_cb_entry_t, zrce_node));
+	list_create(&lr->lr_read_cb, sizeof (zfs_rangelock_cb_entry_t),
+	    offsetof(zfs_rangelock_cb_entry_t, zrce_node));
+
 	avl_add(tree, lr);
 }
 
@@ -398,9 +421,9 @@ zfs_rangelock_add_reader(avl_tree_t *tree, zfs_locked_range_t *new,
  * Check if a reader lock can be grabbed.  If not, fail immediately or sleep and
  * recheck until available, depending on the value of the "nonblock" parameter.
  */
-static boolean_t
+static int
 zfs_rangelock_enter_reader(zfs_rangelock_t *rl, zfs_locked_range_t *new,
-    boolean_t nonblock)
+    zfs_locked_range_t **old)
 {
 	avl_tree_t *tree = &rl->rl_tree;
 	zfs_locked_range_t *prev, *next;
@@ -421,8 +444,10 @@ retry:
 	 */
 	if (prev && (off < prev->lr_offset + prev->lr_length)) {
 		if ((prev->lr_type == RL_WRITER) || (prev->lr_write_wanted)) {
-			if (nonblock)
-				return (B_FALSE);
+			if (old != NULL) {
+				*old = prev;
+				return (EINPROGRESS);
+			}
 			if (!prev->lr_read_wanted) {
 				cv_init(&prev->lr_read_cv,
 				    NULL, CV_DEFAULT, NULL);
@@ -447,8 +472,10 @@ retry:
 		if (off + len <= next->lr_offset)
 			goto got_lock;
 		if ((next->lr_type == RL_WRITER) || (next->lr_write_wanted)) {
-			if (nonblock)
-				return (B_FALSE);
+			if (old != NULL) {
+				*old = next;
+				return (EINPROGRESS);
+			}
 			if (!next->lr_read_wanted) {
 				cv_init(&next->lr_read_cv,
 				    NULL, CV_DEFAULT, NULL);
@@ -467,20 +494,12 @@ got_lock:
 	 * locks and bumping ref counts (r_count).
 	 */
 	zfs_rangelock_add_reader(tree, new, prev, where);
-	return (B_TRUE);
+	return (0);
 }
 
-/*
- * Lock a range (offset, length) as either shared (RL_READER) or exclusive
- * (RL_WRITER or RL_APPEND).  If RL_APPEND is specified, rl_cb() will convert
- * it to a RL_WRITER lock (with the offset at the end of the file).  Returns
- * the range lock structure for later unlocking (or reduce range if the
- * entire file is locked as RL_WRITER), or NULL if nonblock is true and the
- * lock could not be acquired immediately.
- */
 static zfs_locked_range_t *
-zfs_rangelock_enter_impl(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
-    zfs_rangelock_type_t type, boolean_t nonblock)
+zfs_rangelock_alloc(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
+    zfs_rangelock_type_t type)
 {
 	zfs_locked_range_t *new;
 
@@ -497,38 +516,156 @@ zfs_rangelock_enter_impl(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
 	new->lr_proxy = B_FALSE;
 	new->lr_write_wanted = B_FALSE;
 	new->lr_read_wanted = B_FALSE;
+	list_create(&new->lr_write_cb, sizeof (zfs_rangelock_cb_entry_t),
+	    offsetof(zfs_rangelock_cb_entry_t, zrce_node));
+	list_create(&new->lr_read_cb, sizeof (zfs_rangelock_cb_entry_t),
+	    offsetof(zfs_rangelock_cb_entry_t, zrce_node));
+	return (new);
+}
 
+static void
+zfs_rangelock_enqueue_callback(zfs_locked_range_t *old, zfs_locked_range_t *new,
+    callback_fn cb, void *arg, zfs_locked_range_t **lrp,
+    zfs_rangelock_cb_entry_t *oldentry)
+{
+	zfs_rangelock_cb_entry_t *entry;
+
+	if (oldentry != NULL) {
+		entry = oldentry;
+	} else {
+		entry = kmem_alloc(sizeof (zfs_rangelock_cb_entry_t), KM_SLEEP);
+		entry->zrce_lr = new;
+		entry->zrce_lrp = lrp;
+		entry->zrce_cb = cb;
+		entry->zrce_arg = arg;
+	}
+	if (new->lr_type == RL_READER)
+		list_insert_tail(&old->lr_read_cb, entry);
+	else
+		list_insert_tail(&old->lr_write_cb, entry);
+}
+
+static int
+zfs_rangelock_tryiter(zfs_rangelock_t *rl, zfs_locked_range_t *new,
+    callback_fn cb, void *arg, zfs_locked_range_t **lrp,
+    zfs_rangelock_cb_entry_t *oldentry)
+{
+	zfs_locked_range_t *old;
+	int rc = 0;
+
+	if (new->lr_type == RL_READER) {
+		/*
+		 * First check for the usual case of no locks
+		 */
+		if (avl_numnodes(&rl->rl_tree) == 0)
+			avl_add(&rl->rl_tree, new);
+		else
+			rc = zfs_rangelock_enter_reader(rl, new, &old);
+	} else {
+		/* RL_WRITER or RL_APPEND */
+		rc = zfs_rangelock_enter_writer(rl, new, &old);
+	}
+	if (unlikely((rc != 0) && cb != NULL))
+		zfs_rangelock_enqueue_callback(old, new, cb, arg, lrp,
+		    oldentry);
+	return (rc);
+}
+
+static void
+zfs_rangelock_process_queued(zfs_rangelock_t *rl, list_t *cb_list)
+{
+	zfs_rangelock_cb_entry_t *entry;
+	list_t work;
+	int rc;
+
+	if (list_is_empty(cb_list))
+		return;
+	list_create(&work, sizeof (zfs_rangelock_cb_entry_t),
+	    offsetof(zfs_rangelock_cb_entry_t, zrce_node));
+	while (!list_is_empty(cb_list)) {
+		entry = list_head(cb_list);
+		list_remove(cb_list, entry);
+		rc = zfs_rangelock_tryiter(rl, entry->zrce_lr,
+		    NULL, NULL, NULL, entry);
+		if (rc == 0)
+			list_insert_tail(&work, entry);
+	}
+	list_move_tail(cb_list, &work);
+}
+
+static void
+zfs_rangelock_process_cb(list_t *cb_list)
+{
+	zfs_rangelock_cb_entry_t *entry;
+
+	while (!list_is_empty(cb_list)) {
+		entry = list_head(cb_list);
+		list_remove(cb_list, entry);
+		*(entry->zrce_lrp) = entry->zrce_lr;
+		entry->zrce_cb(entry->zrce_arg);
+		kmem_free(entry, sizeof (*entry));
+	}
+}
+
+/*
+ * Lock a range (offset, length) as either shared (RL_READER) or exclusive
+ * (RL_WRITER or RL_APPEND).  If RL_APPEND is specified, rl_cb() will convert
+ * it to a RL_WRITER lock (with the offset at the end of the file).  Returns
+ * the range lock structure for later unlocking (or reduce range if the
+ * entire file is locked as RL_WRITER).
+ */
+zfs_locked_range_t *
+zfs_rangelock_enter(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
+    zfs_rangelock_type_t type)
+{
+	zfs_locked_range_t *new;
+
+	new = zfs_rangelock_alloc(rl, off, len, type);
 	mutex_enter(&rl->rl_lock);
 	if (type == RL_READER) {
 		/*
 		 * First check for the usual case of no locks
 		 */
-		if (avl_numnodes(&rl->rl_tree) == 0) {
+		if (avl_numnodes(&rl->rl_tree) == 0)
 			avl_add(&rl->rl_tree, new);
-		} else if (!zfs_rangelock_enter_reader(rl, new, nonblock)) {
-			kmem_free(new, sizeof (*new));
-			new = NULL;
-		}
-	} else if (!zfs_rangelock_enter_writer(rl, new, nonblock)) {
-		kmem_free(new, sizeof (*new));
-		new = NULL;
+		else
+			zfs_rangelock_enter_reader(rl, new, NULL);
+	} else {
+		/* RL_WRITER or RL_APPEND */
+		zfs_rangelock_enter_writer(rl, new, NULL);
 	}
 	mutex_exit(&rl->rl_lock);
 	return (new);
 }
 
-zfs_locked_range_t *
-zfs_rangelock_enter(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
-    zfs_rangelock_type_t type)
+int
+zfs_rangelock_tryenter_async(zfs_rangelock_t *rl, uint64_t off,
+    uint64_t len, zfs_rangelock_type_t type, zfs_locked_range_t **lrp,
+    callback_fn cb, void *arg)
 {
-	return (zfs_rangelock_enter_impl(rl, off, len, type, B_FALSE));
+	zfs_locked_range_t *new;
+	int rc = 0;
+
+	*lrp = NULL;
+	new = zfs_rangelock_alloc(rl, off, len, type);
+	mutex_enter(&rl->rl_lock);
+	rc = zfs_rangelock_tryiter(rl, new, cb, arg, lrp, NULL);
+	mutex_exit(&rl->rl_lock);
+	if (rc == 0)
+		*lrp = new;
+	return (rc);
 }
 
 zfs_locked_range_t *
 zfs_rangelock_tryenter(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
     zfs_rangelock_type_t type)
 {
-	return (zfs_rangelock_enter_impl(rl, off, len, type, B_TRUE));
+	zfs_locked_range_t *lr;
+
+	(void) zfs_rangelock_tryenter_async(rl, off, len, type, &lr,
+	    NULL, NULL);
+
+	return (lr);
 }
 
 /*
@@ -565,8 +702,10 @@ zfs_rangelock_exit_reader(zfs_rangelock_t *rl, zfs_locked_range_t *remove,
 	 */
 	if (remove->lr_count == 1) {
 		avl_remove(tree, remove);
+		zfs_rangelock_process_queued(rl, &remove->lr_write_cb);
 		if (remove->lr_write_wanted)
 			cv_broadcast(&remove->lr_write_cv);
+		zfs_rangelock_process_queued(rl, &remove->lr_read_cb);
 		if (remove->lr_read_wanted)
 			cv_broadcast(&remove->lr_read_cv);
 		list_insert_tail(free_list, remove);
@@ -597,8 +736,12 @@ zfs_rangelock_exit_reader(zfs_rangelock_t *rl, zfs_locked_range_t *remove,
 			lr->lr_count--;
 			if (lr->lr_count == 0) {
 				avl_remove(tree, lr);
+				zfs_rangelock_process_queued(rl,
+				    &lr->lr_write_cb);
 				if (lr->lr_write_wanted)
 					cv_broadcast(&lr->lr_write_cv);
+				zfs_rangelock_process_queued(rl,
+				    &lr->lr_read_cb);
 				if (lr->lr_read_wanted)
 					cv_broadcast(&lr->lr_read_cv);
 				list_insert_tail(free_list, lr);
@@ -633,8 +776,10 @@ zfs_rangelock_exit(zfs_locked_range_t *lr)
 	if (lr->lr_type == RL_WRITER) {
 		/* writer locks can't be shared or split */
 		avl_remove(&rl->rl_tree, lr);
+		zfs_rangelock_process_queued(rl, &lr->lr_write_cb);
 		if (lr->lr_write_wanted)
 			cv_broadcast(&lr->lr_write_cv);
+		zfs_rangelock_process_queued(rl, &lr->lr_read_cb);
 		if (lr->lr_read_wanted)
 			cv_broadcast(&lr->lr_read_cv);
 		list_insert_tail(&free_list, lr);
@@ -647,9 +792,11 @@ zfs_rangelock_exit(zfs_locked_range_t *lr)
 	}
 	mutex_exit(&rl->rl_lock);
 
-	while ((free_lr = list_remove_head(&free_list)) != NULL)
+	while ((free_lr = list_remove_head(&free_list)) != NULL) {
+		zfs_rangelock_process_cb(&free_lr->lr_write_cb);
+		zfs_rangelock_process_cb(&free_lr->lr_read_cb);
 		zfs_rangelock_free(free_lr);
-
+	}
 	list_destroy(&free_list);
 }
 
@@ -674,6 +821,8 @@ zfs_rangelock_reduce(zfs_locked_range_t *lr, uint64_t off, uint64_t len)
 	mutex_enter(&rl->rl_lock);
 	lr->lr_offset = off;
 	lr->lr_length = len;
+	zfs_rangelock_process_queued(rl, &lr->lr_write_cb);
+	zfs_rangelock_process_queued(rl, &lr->lr_read_cb);
 	mutex_exit(&rl->rl_lock);
 	if (lr->lr_write_wanted)
 		cv_broadcast(&lr->lr_write_cv);

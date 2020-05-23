@@ -1743,8 +1743,10 @@ zvol_dmu_ctx_init(zvol_dmu_state_t *zds, void *data, uint64_t off,
 		dmu_ctx_set_buf_set_transfer_cb(&zds->zds_dc,
 		    zvol_dmu_buf_set_transfer_write);
 	dmu_ctx_set_complete_cb(&zds->zds_dc, done_cb);
-	zds->zds_lr = zfs_rangelock_enter(&zv->zv_rangelock, off, io_size,
-	    reader ? RL_READER : RL_WRITER);
+
+	error = zfs_rangelock_tryenter_async(&zv->zv_rangelock,
+	    off, io_size, reader ? RL_READER : RL_WRITER,
+	    &zds->zds_lr, (callback_fn)zvol_dmu_issue, zds);
 
 	return (error);
 }
