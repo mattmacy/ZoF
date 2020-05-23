@@ -1207,7 +1207,7 @@ dmu_write_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset,
 	    buf, /* flags */ 0, tx, done_cb));
 }
 
-int
+static int
 dmu_buf_hold_noread_by_dnode(dnode_t *dn, uint64_t offset,
     void *tag, dmu_buf_t **dbp)
 {
