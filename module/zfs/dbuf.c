@@ -2750,7 +2750,7 @@ dbuf_dirty_record_create_nofill(dbuf_dirty_state_t *dds)
 	dbuf_dirty_record_register_as_leaf(dds);
 }
 
-void
+static void
 dbuf_dirty_verify(dmu_buf_impl_t *db, dmu_tx_t *tx)
 {
 #ifdef ZFS_DEBUG
@@ -2898,7 +2898,7 @@ dbuf_dirty_exit(dbuf_dirty_state_t *dds)
  * they create dirty records that contain ARC buffers in each txg.  They
  * don't need any frontend manipulation.
  */
-dbuf_dirty_record_t *
+static dbuf_dirty_record_t *
 dbuf_dirty_nofill(dmu_buf_impl_t *db, dmu_tx_t *tx)
 {
 	dbuf_dirty_state_t dds;
@@ -3263,7 +3263,7 @@ dbuf_dirty_leaf_common(dbuf_dirty_state_t *dds)
 		    dds->dds_size);
 }
 
-dbuf_dirty_record_t *
+static dbuf_dirty_record_t *
 dbuf_dirty_record_create_bonus(dbuf_dirty_state_t *dds)
 {
 	dmu_buf_impl_t *db = dds->dds_db;
@@ -3428,7 +3428,7 @@ dbuf_dirty_handle_fault(dbuf_dirty_state_t *dds)
 /*
  * Common dbuf_dirty_enter() replacement for leaf blocks.
  */
-void
+static void
 dbuf_dirty_leaf_enter(dbuf_dirty_state_t *dds,
     dmu_buf_impl_t *db, dmu_tx_t *tx, int offset, int size)
 {
@@ -3481,7 +3481,7 @@ dbuf_dirty_leaf(dmu_buf_impl_t *db, dmu_tx_t *tx, int offset, int size)
  * have to handle partial fills, since it is always provided an already
  * filled buffer that is the write data for the transaction.
  */
-dbuf_dirty_record_t *
+static dbuf_dirty_record_t *
 dbuf_dirty_with_arcbuf(dmu_buf_impl_t *db, dmu_tx_t *tx, arc_buf_t *fill_buf)
 {
 	dbuf_dirty_state_t dds;
@@ -3934,9 +3934,8 @@ dbuf_override_impl(dmu_buf_impl_t *db, const blkptr_t *bp, dmu_tx_t *tx)
 	dl->dr_overridden_by.blk_birth = dr->dr_txg;
 }
 
-#pragma weak dmu_buf_fill_done = dbuf_fill_done
 /* ARGSUSED */
-void
+static void
 dbuf_fill_done(dmu_buf_impl_t *db, dmu_tx_t *tx)
 {
 	dbuf_dirty_record_t *dr;
@@ -3992,6 +3991,8 @@ dbuf_fill_done(dmu_buf_impl_t *db, dmu_tx_t *tx)
 	if (process)
 		dbuf_process_buf_ctxs(&ctx_list, /* err */ 0);
 }
+#pragma weak dmu_buf_fill_done = dbuf_fill_done
+
 
 void
 dmu_buf_write_embedded(dmu_buf_t *dbuf, void *data,
@@ -5354,7 +5355,7 @@ dbuf_prepare_encrypted_dnode_leaf(dbuf_dirty_record_t *dr)
 	}
 }
 
-boolean_t
+static boolean_t
 dbuf_resolve_still_pending(dbuf_dirty_record_t *dr, zio_t **dr_zio, zio_t *zio)
 {
 	/* Resolve race with dbuf_read_complete()/dbuf_free_range() */
