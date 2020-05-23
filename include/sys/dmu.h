@@ -437,7 +437,19 @@ typedef struct dmu_ctx {
 	int dc_err;
 } dmu_ctx_t;
 
+enum dmu_buf_ctx_type {
+	DBC_DMU_ISSUE,
+	DBC_DBUF_HOLD
+};
+
+typedef struct dmu_buf_ctx {
+	uint32_t dbc_flags;
+	uint8_t dbc_type;
+} dmu_buf_ctx_t;
+
 typedef struct dmu_buf_set {
+	/* generic callback context */
+	dmu_buf_ctx_t	dbs_ctx;
 
 	/* The DMU context that this buffer set is associated with. */
 	dmu_ctx_t *dbs_dc;
@@ -480,7 +492,7 @@ int dmu_ctx_init(dmu_ctx_t *dc, struct dnode *dn, objset_t *os,
 void dmu_ctx_seek(dmu_ctx_t *dc, uint64_t offset, uint64_t size,
     void *data_buf);
 void dmu_ctx_rele(dmu_ctx_t *dc);
-void dmu_buf_set_rele(dmu_buf_set_t *dbs, int err);
+void dmu_buf_set_rele(dmu_buf_ctx_t *ctx, int err);
 void dmu_buf_set_transfer(dmu_buf_set_t *dbs);
 void dmu_buf_set_transfer_write(dmu_buf_set_t *dbs);
 
@@ -1013,7 +1025,7 @@ int dmu_free_long_object(objset_t *os, uint64_t object);
  * nonrecoverable I/O error.
  */
 int dmu_issue(dmu_ctx_t *dc);
-void dmu_issue_restart(dmu_buf_set_t *dbs, int err);
+void dmu_issue_restart(dmu_buf_ctx_t *dbs, int err);
 int dmu_read(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 	void *buf, uint32_t flags);
 int dmu_read_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size, void *buf,
