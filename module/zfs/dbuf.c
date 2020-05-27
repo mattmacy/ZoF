@@ -3405,7 +3405,8 @@ dbuf_hold_update_buf_set(dbuf_hold_async_ctx_t *ctx, dmu_buf_impl_t *db)
 			/* Dbuf is already at the desired state. */
 			dmu_buf_set_rele(&dbs->dbs_ctx, /* err */ 0);
 		} else {
-			dmu_buf_ctx_node_add(&db->db_buf_ctxs, &dbs->dbs_ctx, dmu_buf_set_rele);
+			dmu_buf_ctx_node_add(&db->db_buf_ctxs, &dbs->dbs_ctx,
+			    dmu_buf_set_rele);
 		}
 	} else if (dc->dc_flags & DMU_CTX_FLAG_ASYNC) {
 		/* Calculate the amount of data this buffer contributes. */
@@ -3415,7 +3416,8 @@ dbuf_hold_update_buf_set(dbuf_hold_async_ctx_t *ctx, dmu_buf_impl_t *db)
 			/* Dbuf is resident or will be overwritten. */
 			dmu_buf_set_rele(&dbs->dbs_ctx, /* err */ 0);
 		} else {
-			dmu_buf_ctx_node_add(&db->db_buf_ctxs, &dbs->dbs_ctx, dmu_buf_set_rele);
+			dmu_buf_ctx_node_add(&db->db_buf_ctxs, &dbs->dbs_ctx,
+			    dmu_buf_set_rele);
 		}
 	}
 }
@@ -3562,7 +3564,7 @@ dbuf_hold_level(dnode_t *dn, int level, uint64_t blkid, void *tag)
 int
 dbuf_hold_level_async(struct dnode *dn, int level, uint64_t blkid,
     void *tag, dmu_buf_impl_t **dbp, uint64_t dn_off, dmu_buf_ctx_t *buf_ctx,
-     uint64_t resid, zio_t *zio,  dmu_buf_ctx_cb_t buf_cb)
+    uint64_t resid, zio_t *zio,  dmu_buf_ctx_cb_t buf_cb)
 {
 	dbuf_hold_async_ctx_t ctx;
 
