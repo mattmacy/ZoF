@@ -888,12 +888,6 @@ zfs_freebsd_ubop(struct vop_ubop_args *ap)
 	return (zfs_ubop(ap->a_vp, ap->a_uio, ap->a_ioflag, ap->a_cred));
 }
 
-static int
-zfs_can_ubop(struct vop_can_ubop_args *ap __unused)
-{
-	return (EOPNOTSUPP);
-}
-
 /*
  * Write the bytes to a file.
  *
@@ -6594,7 +6588,6 @@ struct vop_vector zfs_vnodeops = {
 #endif
 #endif
 	.vop_ubop =	zfs_freebsd_ubop,
-	.vop_can_ubop = zfs_can_ubop,
 };
 VFS_VOP_VECTOR_REGISTER(zfs_vnodeops);
 
