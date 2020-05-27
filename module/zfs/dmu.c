@@ -575,8 +575,6 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 		dbuf_flags |= DB_RF_NOPREFETCH;
 
 	if (!restarted) {
-		dmu_prefetch(dn->dn_objset, dc->dc_object, 1, dc->dc_dn_offset,
-		    dbs->dbs_resid, ZIO_PRIORITY_SYNC_READ);
 		dbs->dbs_zio = zio_root(dn->dn_objset->os_spa, NULL, NULL,
 		    ZIO_FLAG_CANFAIL);
 	}
