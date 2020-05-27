@@ -537,7 +537,8 @@ dmu_buf_set_rele(dmu_buf_ctx_t *dbs_ctx, int err)
 
 	dcs = tsd_get(zfs_async_io_key);
 	if (dcs != NULL && (dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC)) {
-		dmu_buf_ctx_node_add(&dcs->dcs_io_list, &dbs->dbs_ctx, dmu_buf_set_rele);
+		dmu_buf_ctx_node_add(&dcs->dcs_io_list, &dbs->dbs_ctx,
+		    dmu_buf_set_rele);
 	} else {
 			/*
 			 * The current thread doesn't have anything
