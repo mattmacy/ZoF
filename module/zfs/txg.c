@@ -737,7 +737,7 @@ do_txg_wait_synced_async(void *arg, int error)
 	tx_cpu_t *tc;
 
 	if (ctx->twc_txg < tx->tx_synced_txg) {
-		tc = &tx->tx_cpu[curcpu];
+		tc = &tx->tx_cpu[CPU_SEQID];
 		mutex_enter(&tc->tc_lock);
 		list_insert_tail(&tc->tc_callbacks[g], &ctx->twc_dcb);
 		mutex_exit(&tc->tc_lock);
@@ -763,7 +763,7 @@ txg_wait_synced_async(dsl_pool_t *dp, uint64_t txg, txg_wait_cb_t cb, void *arg)
 	ctx->twc_dcb.dcb_func = do_txg_wait_synced_async;
 	ctx->twc_dcb.dcb_data = ctx;
 
-	tc = &tx->tx_cpu[curcpu];
+	tc = &tx->tx_cpu[CPU_SEQID];
 	mutex_enter(&tc->tc_lock);
 	list_insert_tail(&tc->tc_callbacks[g], &ctx->twc_dcb);
 	mutex_exit(&tc->tc_lock);
