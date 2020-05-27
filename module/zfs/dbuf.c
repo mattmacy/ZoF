@@ -1861,8 +1861,11 @@ dbuf_free_range(dnode_t *dn, uint64_t start_blkid, uint64_t end_blkid,
 	uint64_t txg = tx->tx_txg;
 	avl_index_t where;
 	dbuf_dirty_record_t *dr;
-	list_t ctx_list;
-	boolean_t process = B_FALSE;
+	list_t ctx_list, all_ctx_list;
+	boolean_t process, process_all = B_FALSE;
+
+	list_create(&all_ctx_list, sizeof (dmu_buf_ctx_node_t),
+	    offsetof(dmu_buf_ctx_node_t, dbsn_link));
 
 	if (end_blkid > dn->dn_maxblkid &&
 	    !(start_blkid == DMU_SPILL_BLKID || end_blkid == DMU_SPILL_BLKID))
@@ -1947,14 +1950,18 @@ dbuf_free_range(dnode_t *dn, uint64_t start_blkid, uint64_t end_blkid,
 			rw_exit(&db->db_rwlock);
 			arc_buf_freeze(db->db_buf);
 		}
-		if (db->db_buf != NULL)
+		if (db->db_buf != NULL) {
 			process = dbuf_fetch_buf_ctxs(db, &ctx_list);
+			process_all |= process;
+			if (process)
+				list_move_tail(&all_ctx_list, &ctx_list);
+		}
 		mutex_exit(&db->db_mtx);
 	}
 	kmem_free(db_search, sizeof (dmu_buf_impl_t));
 	mutex_exit(&dn->dn_dbufs_mtx);
-	if (process)
-		dbuf_process_buf_ctxs(&ctx_list, /* err */ 0);
+	if (process_all)
+		dbuf_process_buf_ctxs(&all_ctx_list, /* err */ 0);
 }
 
 void
