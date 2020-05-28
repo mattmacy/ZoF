@@ -212,7 +212,7 @@ zfs_rangelock_enter_writer(zfs_rangelock_t *rl, zfs_locked_range_t *new,
 			goto wait;
 
 		avl_insert(tree, new, where);
-		return (0);;
+		return (0);
 wait:
 		if (old != NULL) {
 			*old = lr;
@@ -709,10 +709,12 @@ zfs_rangelock_exit_reader(zfs_rangelock_t *rl, zfs_locked_range_t *remove,
 			lr->lr_count--;
 			if (lr->lr_count == 0) {
 				avl_remove(tree, lr);
-				zfs_rangelock_process_queued(rl, &lr->lr_write_cb);
+				zfs_rangelock_process_queued(rl,
+				    &lr->lr_write_cb);
 				if (lr->lr_write_wanted)
 					cv_broadcast(&lr->lr_write_cv);
-				zfs_rangelock_process_queued(rl, &lr->lr_read_cb);
+				zfs_rangelock_process_queued(rl,
+				    &lr->lr_read_cb);
 				if (lr->lr_read_wanted)
 					cv_broadcast(&lr->lr_read_cv);
 				list_insert_tail(free_list, lr);

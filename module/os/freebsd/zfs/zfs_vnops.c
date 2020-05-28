@@ -825,19 +825,22 @@ out:
 }
 
 static int
-zfs_read_async(struct vnode *vp, struct uio_bio *uio, int ioflag, struct ucred *cred)
+zfs_read_async(struct vnode *vp, struct uio_bio *uio, int ioflag,
+    struct ucred *cred)
 {
 	return (EOPNOTSUPP);
 }
 
 static int
-zfs_write_async(struct vnode *vp, struct uio_bio *uio, int ioflag, struct ucred *cred)
+zfs_write_async(struct vnode *vp, struct uio_bio *uio, int ioflag,
+    struct ucred *cred)
 {
 	return (EOPNOTSUPP);
 }
 
 static int
-zfs_sync_async(struct vnode *vp, struct uio_bio *uio, int ioflag, struct ucred *cred)
+zfs_sync_async(struct vnode *vp, struct uio_bio *uio, int ioflag,
+    struct ucred *cred)
 {
 	return (EOPNOTSUPP);
 }
@@ -895,7 +898,7 @@ zfs_freebsd_ubop(struct vop_ubop_args *ap)
  *	OUT:	uio	- updated offset and range.
  *
  *	RETURN:	0 on success, error code on failure.
-refa *
+ *
  * Timestamps:
  *	vp - ctime|mtime updated if byte count > 0
  */

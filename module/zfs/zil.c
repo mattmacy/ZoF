@@ -2965,7 +2965,8 @@ do_zil_commit_impl_async(void *arg)
 }
 
 static void
-zil_commit_impl_async(zilog_t *zilog, uint64_t foid, zil_commit_cb_t cb, void *arg)
+zil_commit_impl_async(zilog_t *zilog, uint64_t foid, zil_commit_cb_t cb,
+    void *arg)
 {
 	zil_commit_ctx_t *zcc;
 
