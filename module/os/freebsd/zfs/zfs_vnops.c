@@ -824,6 +824,8 @@ out:
 	return (error);
 }
 
+#ifdef HAVE_UBOP
+
 static int
 zfs_read_async(struct vnode *vp, struct uio_bio *uio, int ioflag,
     struct ucred *cred)
@@ -883,6 +885,7 @@ zfs_freebsd_ubop(struct vop_ubop_args *ap)
 
 	return (zfs_ubop(ap->a_vp, ap->a_uio, ap->a_ioflag, ap->a_cred));
 }
+#endif /* HAVE_UBOP */
 
 /*
  * Write the bytes to a file.
@@ -6565,7 +6568,9 @@ struct vop_vector zfs_vnodeops = {
 	.vop_lock1 =		zfs_lock,
 #endif
 #endif
+#ifdef HAVE_UBOP
 	.vop_ubop =	zfs_freebsd_ubop,
+#endif
 };
 VFS_VOP_VECTOR_REGISTER(zfs_vnodeops);
 
