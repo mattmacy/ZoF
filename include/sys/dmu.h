@@ -393,6 +393,7 @@ typedef struct dmu_ctx {
 
 	/* The dnode held in association with this context. */
 	struct dnode *dc_dn;
+
 	objset_t *dc_os;	/* Object set associated with the dnode. */
 	uint64_t dc_object;	/* Object ID associated with the dnode. */
 
@@ -401,6 +402,8 @@ typedef struct dmu_ctx {
 
 	/* The tag used for this context. */
 	void *dc_tag;
+
+	kcondvar_t dc_cv_done;
 
 	/* The callback to call once an I/O completes entirely. */
 	dmu_ctx_cb_t dc_complete_cb;
