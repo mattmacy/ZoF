@@ -399,6 +399,9 @@ dmu_ctx_rele(dmu_ctx_t *dmu_ctx)
 		return;
 
 	mutex_destroy(&dmu_ctx->dc_mtx);
+	if ((dmu_ctx->dc_flags & (DMU_CTX_FLAG_ASYNC|DMU_CTX_FLAG_READ)) ==
+	    DMU_CTX_FLAG_READ)
+		cv_destroy(&dmu_ctx->dc_cv_done);
 	zfs_refcount_destroy(&dmu_ctx->dc_holds);
 	ASSERT(dmu_ctx_in_flight > 0);
 	DEBUG_REFCOUNT_DEC(dmu_ctx_in_flight);
@@ -435,6 +438,7 @@ dmu_buf_set_ready(dmu_buf_ctx_t *dbs_ctx)
 
 	for (int i = 0; i < dbs->dbs_count; i++) {
 		dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbs->dbs_dbp[i];
+
 		ASSERT(db != NULL);
 		dbuf_rele(db, dc->dc_tag);
 	}
@@ -521,31 +525,43 @@ void
 dmu_buf_set_rele(dmu_buf_ctx_t *dbs_ctx, int err)
 {
 	dmu_buf_set_t *dbs = (dmu_buf_set_t *)dbs_ctx;
-	dmu_ctx_t *dmu_ctx = dbs->dbs_dc;
+	dmu_ctx_t *dmu_ctx;
 	dmu_cb_state_t *dcs;
+	boolean_t drop_lock = B_FALSE;
 
 	if (dbs == NULL)
 		return;
 	/* Report an error, if any. */
 	if (err)
 		dmu_buf_set_set_error(dbs, err);
-
+	dmu_ctx = dbs->dbs_dc;
+	if ((dmu_ctx->dc_flags & (DMU_CTX_FLAG_ASYNC|DMU_CTX_FLAG_READ)) ==
+	    DMU_CTX_FLAG_READ && zfs_refcount_count(&dbs->dbs_holds) > 1) {
+		mutex_enter(&dmu_ctx->dc_mtx);
+		drop_lock = B_TRUE;
+	}
 	/* If we are finished, schedule this buffer set for delivery. */
 	ASSERT(!zfs_refcount_is_zero(&dbs->dbs_holds));
-	if (zfs_refcount_remove(&dbs->dbs_holds, NULL) != 0)
+	if (zfs_refcount_remove(&dbs->dbs_holds, NULL) != 0) {
+		if (drop_lock) {
+			cv_broadcast(&dmu_ctx->dc_cv_done);
+			mutex_exit(&dmu_ctx->dc_mtx);
+		}
 		return;
-
+	}
+	if (drop_lock)
+			mutex_exit(&dmu_ctx->dc_mtx);
 	dcs = tsd_get(zfs_async_io_key);
 	if (dcs != NULL && (dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC)) {
 		dmu_buf_ctx_node_add(&dcs->dcs_io_list, &dbs->dbs_ctx,
 		    dmu_buf_set_rele);
 	} else {
-			/*
-			 * The current thread doesn't have anything
-			 * registered in its TSD, so it must not handle
-			 * queued delivery.  Dispatch this set now.
-			 */
-			dmu_buf_set_ready(&dbs->dbs_ctx);
+		/*
+		 * The current thread doesn't have anything
+		 * registered in its TSD, so it must not handle
+		 * queued delivery.  Dispatch this set now.
+		 */
+		dmu_buf_set_ready(&dbs->dbs_ctx);
 	}
 }
 
@@ -867,6 +883,12 @@ dmu_buf_set_process_io(dmu_buf_set_t *dbs)
 		if (err)
 			return (err);
 	}
+	if (zfs_refcount_count(&dbs->dbs_holds) > 1) {
+		mutex_enter(&dmu_ctx->dc_mtx);
+		while (zfs_refcount_count(&dbs->dbs_holds) > 1)
+			cv_wait(&dmu_ctx->dc_cv_done, &dmu_ctx->dc_mtx);
+		mutex_exit(&dmu_ctx->dc_mtx);
+	}
 	return (0);
 }
 
@@ -1046,6 +1068,10 @@ dmu_ctx_init(dmu_ctx_t *dmu_ctx, struct dnode *dn, objset_t *os,
 	dmu_ctx->dc_flags = flags;
 	dmu_ctx_seek(dmu_ctx, offset, size, data_buf);
 	dmu_ctx->dc_tag = tag;
+
+	if ((dmu_ctx->dc_flags & (DMU_CTX_FLAG_ASYNC|DMU_CTX_FLAG_READ)) ==
+	    DMU_CTX_FLAG_READ)
+		cv_init(&dmu_ctx->dc_cv_done, NULL, CV_DEFAULT, NULL);
 
 	/* Initialize default I/O callbacks. */
 	if (dmu_ctx->dc_flags & DMU_CTX_FLAG_UIO) {
