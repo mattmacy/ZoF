@@ -75,7 +75,7 @@ zfs_locked_range_t *zfs_rangelock_enter(zfs_rangelock_t *,
     uint64_t, uint64_t, zfs_rangelock_type_t);
 int zfs_rangelock_tryenter(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
     zfs_rangelock_type_t type, zfs_locked_range_t **lr,
-    zfs_rangelock_cb_t cb, void *arg);
+    callback_fn cb, void *arg);
 
 void zfs_rangelock_exit(zfs_locked_range_t *);
 void zfs_rangelock_reduce(zfs_locked_range_t *, uint64_t, uint64_t);

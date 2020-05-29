@@ -116,7 +116,8 @@
 typedef struct zfs_rangelock_cb_entry {
 	list_node_t zrce_node;
 	zfs_locked_range_t *zrce_lr;
-	zfs_rangelock_cb_t *zrce_cb;
+	zfs_locked_range_t **zrce_lrp;
+	callback_fn zrce_cb;
 	void *zrce_arg;
 } zfs_rangelock_cb_entry_t;
 
@@ -517,7 +518,8 @@ zfs_rangelock_alloc(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
 
 static void
 zfs_rangelock_enqueue_callback(zfs_locked_range_t *old, zfs_locked_range_t *new,
-    zfs_rangelock_cb_t cb, void *arg, zfs_rangelock_cb_entry_t *oldentry)
+    callback_fn cb, void *arg, zfs_locked_range_t **lrp,
+    zfs_rangelock_cb_entry_t *oldentry)
 {
 	zfs_rangelock_cb_entry_t *entry;
 
@@ -526,6 +528,7 @@ zfs_rangelock_enqueue_callback(zfs_locked_range_t *old, zfs_locked_range_t *new,
 	} else {
 		entry = kmem_alloc(sizeof (zfs_rangelock_cb_entry_t), KM_SLEEP);
 		entry->zrce_lr = new;
+		entry->zrce_lrp = lrp;
 		entry->zrce_cb = cb;
 		entry->zrce_arg = arg;
 	}
@@ -537,6 +540,7 @@ zfs_rangelock_enqueue_callback(zfs_locked_range_t *old, zfs_locked_range_t *new,
 
 static int
 zfs_rangelock_tryiter(zfs_rangelock_t *rl, zfs_locked_range_t *new,
+    callback_fn cb, void *arg, zfs_locked_range_t **lrp,
     zfs_rangelock_cb_entry_t *oldentry)
 {
 	zfs_locked_range_t *old;
@@ -555,7 +559,7 @@ zfs_rangelock_tryiter(zfs_rangelock_t *rl, zfs_locked_range_t *new,
 		rc = zfs_rangelock_enter_writer(rl, new, &old);
 	}
 	if (unlikely(rc != 0))
-		zfs_rangelock_enqueue_callback(old, NULL, NULL, NULL, oldentry);
+		zfs_rangelock_enqueue_callback(old, new, cb, arg, lrp, oldentry);
 	return (rc);
 }
 
@@ -573,7 +577,7 @@ zfs_rangelock_process_queued(zfs_rangelock_t *rl, list_t *cb_list)
 	while (!list_is_empty(cb_list)) {
 		entry = list_head(cb_list);
 		list_remove(cb_list, entry);
-		rc = zfs_rangelock_tryiter(rl, entry->zrce_lr, entry);
+		rc = zfs_rangelock_tryiter(rl, NULL, NULL, NULL, NULL, entry);
 		if (rc == 0)
 			list_insert_tail(&work, entry);
 	}
@@ -588,7 +592,8 @@ zfs_rangelock_process_cb(list_t *cb_list)
 	while (!list_is_empty(cb_list)) {
 		entry = list_head(cb_list);
 		list_remove(cb_list, entry);
-		entry->zrce_cb(entry->zrce_lr, entry->zrce_arg);
+		*(entry->zrce_lrp) = entry->zrce_lr;
+		entry->zrce_cb(entry->zrce_arg);
 		kmem_free(entry, sizeof (*entry));
 	}
 }
@@ -626,18 +631,18 @@ zfs_rangelock_enter(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
 
 int
 zfs_rangelock_tryenter(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
-    zfs_rangelock_type_t type, zfs_locked_range_t **lr,
-    zfs_rangelock_cb_t cb, void *arg)
+    zfs_rangelock_type_t type, zfs_locked_range_t **lrp,
+    callback_fn cb, void *arg)
 {
 	zfs_locked_range_t *new;
 	int rc = 0;
 
 	new = zfs_rangelock_alloc(rl, off, len, type);
 	mutex_enter(&rl->rl_lock);
-	rc = zfs_rangelock_tryiter(rl, new, NULL);
+	rc = zfs_rangelock_tryiter(rl, new, cb, arg, lrp, NULL);
 	mutex_exit(&rl->rl_lock);
 	if (rc == 0)
-		*lr = new;
+		*lrp = new;
 	return (rc);
 }
 
