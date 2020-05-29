@@ -713,6 +713,45 @@ mappedread(vnode_t *vp, int nbytes, uio_t *uio)
 
 offset_t zfs_read_chunk_size = 1024 * 1024; /* Tunable */
 
+static int
+zfs_read_prologue(vnode_t *vp, off_t offset, ssize_t resid)
+{
+	znode_t		*zp = VTOZ(vp);
+	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+
+	ZFS_ENTER(zfsvfs);
+	ZFS_VERIFY_ZP(zp);
+
+	/* We don't copy out anything useful for directories. */
+	if (vp->v_type == VDIR) {
+		ZFS_EXIT(zfsvfs);
+		return (SET_ERROR(EISDIR));
+	}
+
+	if (zp->z_pflags & ZFS_AV_QUARANTINED) {
+		ZFS_EXIT(zfsvfs);
+		return (SET_ERROR(EACCES));
+	}
+
+	/*
+	 * Validate file offset
+	 */
+	if (offset < (offset_t)0) {
+		ZFS_EXIT(zfsvfs);
+		return (SET_ERROR(EINVAL));
+	}
+
+	/*
+	 * Fasttrack empty reads
+	 */
+	if (resid == 0) {
+		ZFS_EXIT(zfsvfs);
+		return (0);
+	}
+
+	return (-1);
+}
+
 /*
  * Read bytes from specified file into supplied buffer.
  *
@@ -740,36 +779,9 @@ zfs_read(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cr)
 	int		error = 0;
 	zfs_locked_range_t		*lr;
 
-	ZFS_ENTER(zfsvfs);
-	ZFS_VERIFY_ZP(zp);
-
-	/* We don't copy out anything useful for directories. */
-	if (vp->v_type == VDIR) {
-		ZFS_EXIT(zfsvfs);
-		return (SET_ERROR(EISDIR));
-	}
-
-	if (zp->z_pflags & ZFS_AV_QUARANTINED) {
-		ZFS_EXIT(zfsvfs);
-		return (SET_ERROR(EACCES));
-	}
-
-	/*
-	 * Validate file offset
-	 */
-	if (uio->uio_loffset < (offset_t)0) {
-		ZFS_EXIT(zfsvfs);
-		return (SET_ERROR(EINVAL));
-	}
-
-	/*
-	 * Fasttrack empty reads
-	 */
-	if (uio->uio_resid == 0) {
-		ZFS_EXIT(zfsvfs);
-		return (0);
-	}
-
+	error = zfs_read_prologue(vp, uio->uio_loffset, uio->uio_resid);
+	if (error >= 0)
+		return (error);
 	/*
 	 * If we're in FRSYNC mode, sync out this znode before reading it.
 	 */
@@ -825,12 +837,150 @@ out:
 }
 
 #ifdef HAVE_UBOP
+static uint64_t
+dmu_physmove(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off, uint64_t sz)
+{
+	struct uio_bio *uio = (struct uio_bio *)dbs->dbs_dc->dc_data_buf;
+	uint64_t adv = uio->uio_resid;
+	int err;
+
+	err = uiobiomove((char *)db->db_data + off, sz, uio);
+	if (err)
+		dbs->dbs_err = err;
+	adv -= uio->uio_resid;
+
+	return (adv);
+}
+
+static boolean_t
+dnode_has_dirty(dnode_t *dn)
+{
+	boolean_t dirty = B_FALSE;
+
+	/*
+	 * Check if dnode is dirty
+	 */
+	for (int i = 0; i < TXG_SIZE; i++) {
+		if (multilist_link_active(&dn->dn_dirty_link[i])) {
+			dirty = B_TRUE;
+			break;
+		}
+	}
+	return (dirty);
+}
+
+typedef enum {
+	ZRS_RANGELOCK	= 1 << 1,
+	ZRS_DMU_ISSUED	= 1 << 2,
+} zrs_done_t;
+
+typedef struct zfs_read_state {
+	dmu_ctx_t	zrs_dc;
+	znode_t	*zrs_zp;
+	dnode_t	*zrs_dn;
+	dmu_buf_impl_t	*zrs_db;
+	zfs_locked_range_t	*zrs_lr;
+	struct uio_bio	*zrs_uio;
+	int	zrs_ioflag;
+	int	zrs_done;
+	struct ucred	*zrs_cred;
+} zfs_read_state_t;
+
+static void
+zfs_read_resume(void *arg)
+{
+	zfs_read_state_t *state = arg;
+	znode_t		*zp = state->zrs_zp;
+	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	struct uio_bio *uio = state->zrs_uio;
+	dnode_t *dn = state->zrs_dn;
+	zfs_locked_range_t		*lr;
+	int flags, error = 0;
+
+	/*
+	 * Lock the range against changes.
+	 */
+	if ((state->zrs_done & ZRS_RANGELOCK) == 0) {
+		state->zrs_done |= ZRS_RANGELOCK;
+		error = zfs_rangelock_tryenter(&zp->z_rangelock,
+		    uio->uio_loffset, uio->uio_resid, RL_READER, &state->zrs_lr,
+		    zfs_read_resume, state);
+		if (error == EWOULDBLOCK)
+			return;
+		VERIFY(error == 0);
+	}
+	lr = state->zrs_lr;
+	/*
+	 * If we are reading past end-of-file we can skip
+	 * to the end; but we might still need to set atime.
+	 */
+	if (uio->uio_loffset >= zp->z_size) {
+		error = 0;
+		goto out;
+	}
+	flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_ASYNC |
+	    DMU_CTX_FLAG_NO_HOLD;
+	if ((state->zrs_done & ZRS_DMU_ISSUED) == 0) {
+		state->zrs_done |= ZRS_DMU_ISSUED;
+		error = dmu_ctx_init(&state->zrs_dc, dn, /* os */ NULL, /* object */ 0,
+		    uio->uio_loffset, uio->uio_resid, uio, FTAG, flags);
+		if (error)
+			goto out;
+		state->zrs_dc.dc_data_transfer_cb = dmu_physmove;
+		dmu_ctx_set_complete_cb(&state->zrs_dc, (dmu_ctx_cb_t)zfs_read_resume);
+		error = dmu_issue(&state->zrs_dc);
+		dmu_ctx_rele(&state->zrs_dc);
+	}
+out:
+	DB_DNODE_EXIT(state->zrs_db);
+	zfs_rangelock_exit(lr);
+	ZFS_ACCESSTIME_STAMP(zfsvfs, zp);
+	ZFS_EXIT(zfsvfs);
+	if (error) {
+		uio->uio_flags |= UIO_BIO_ERROR;
+		uio->uio_error = error;
+	}
+	uio->uio_bio_done(uio);
+}
 
 static int
 zfs_read_async(struct vnode *vp, struct uio_bio *uio, int ioflag,
     struct ucred *cred)
 {
-	return (EOPNOTSUPP);
+	znode_t		*zp = VTOZ(vp);
+	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	int		error = 0;
+	dmu_buf_impl_t *db;
+	dnode_t *dn;
+	zfs_read_state_t		*state;
+
+	error = zfs_read_prologue(vp, uio->uio_loffset, uio->uio_resid);
+	if (error >= 0)
+		return (error);
+
+	state = kmem_zalloc(sizeof(*state), KM_SLEEP);
+	state->zrs_zp = zp;
+	state->zrs_uio = uio;
+	state->zrs_ioflag = ioflag;
+	state->zrs_cred = cred;
+
+	state->zrs_db = db = (dmu_buf_impl_t *)sa_get_db(zp->z_sa_hdl);
+	DB_DNODE_ENTER(db);
+	state->zrs_dn = dn = DB_DNODE(db);
+	/*
+	 * If we're in FRSYNC mode, sync out this znode before reading it.
+	 */
+	if (zfsvfs->z_log &&
+	    (ioflag & FRSYNC || zfsvfs->z_os->os_sync == ZFS_SYNC_ALWAYS) &&
+	    dnode_has_dirty(dn))
+		error = zil_commit_async(zfsvfs->z_log, zp->z_id, zfs_read_resume, state);
+
+	if (error) {
+		ASSERT(error == EWOULDBLOCK);
+		return (error);
+	}
+	zfs_read_resume(state);
+	return (EWOULDBLOCK);
 }
 
 static int
@@ -855,16 +1005,16 @@ zfs_ubop(struct vnode *vp, struct uio_bio *uio, int ioflag, struct ucred *cred)
 
 	cmd = uio->uio_cmd;
 	switch (cmd) {
-		case UIO_BIO_READ:
+	case UIO_BIO_READ:
 		rc = zfs_read_async(vp, uio, ioflag, cred);
 		break;
-		case UIO_BIO_WRITE:
+	case UIO_BIO_WRITE:
 		rc = zfs_write_async(vp, uio, ioflag, cred);
 		break;
-		case UIO_BIO_SYNC:
+	case UIO_BIO_SYNC:
 		rc = zfs_sync_async(vp, uio, ioflag, cred);
-		default:
-			rc = EOPNOTSUPP;
+	default:
+		rc = EOPNOTSUPP;
 	}
 	return (rc);
 }
