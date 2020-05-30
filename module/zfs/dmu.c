@@ -528,6 +528,7 @@ dmu_buf_set_rele(dmu_buf_ctx_t *dbs_ctx, int err)
 	dmu_ctx_t *dmu_ctx;
 	dmu_cb_state_t *dcs;
 	boolean_t drop_lock = B_FALSE;
+	int count;
 
 	if (dbs == NULL)
 		return;
@@ -542,15 +543,14 @@ dmu_buf_set_rele(dmu_buf_ctx_t *dbs_ctx, int err)
 	}
 	/* If we are finished, schedule this buffer set for delivery. */
 	ASSERT(!zfs_refcount_is_zero(&dbs->dbs_holds));
-	if (zfs_refcount_remove(&dbs->dbs_holds, NULL) != 0) {
-		if (drop_lock) {
-			cv_broadcast(&dmu_ctx->dc_cv_done);
-			mutex_exit(&dmu_ctx->dc_mtx);
-		}
-		return;
-	}
+	count = zfs_refcount_remove(&dbs->dbs_holds, NULL);
+	if (count == 1)
+		cv_broadcast(&dmu_ctx->dc_cv_done);
 	if (drop_lock)
-			mutex_exit(&dmu_ctx->dc_mtx);
+		mutex_exit(&dmu_ctx->dc_mtx);
+	if (count != 0)
+		return;
+
 	dcs = tsd_get(zfs_async_io_key);
 	if (dcs != NULL && (dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC)) {
 		dmu_buf_ctx_node_add(&dcs->dcs_io_list, &dbs->dbs_ctx,
@@ -636,8 +636,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 		dbs->dbs_resid -= bufsiz;
 
 		/* initiate async i/o */
-		if ((dc->dc_flags & DMU_CTX_FLAG_READ) ||
-		    (bufsiz != db->db.db_size &&
+		if (read || (bufsiz != db->db.db_size &&
 		    db->db_state != DB_CACHED))
 			(void) dbuf_read(db, dbs->dbs_zio, dbuf_flags);
 
@@ -870,24 +869,19 @@ dmu_buf_set_process_io(dmu_buf_set_t *dbs)
 	err = zio_wait(dbs->dbs_zio);
 	if (err)
 		return (err);
-	/* wait for other io to complete */
-	for (i = 0; i < dbs->dbs_count; i++) {
-		dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbs->dbs_dbp[i];
-		mutex_enter(&db->db_mtx);
-		while (db->db_state == DB_READ ||
-		    db->db_state == DB_FILL)
-			cv_wait(&db->db_changed, &db->db_mtx);
-		if (db->db_state == DB_UNCACHED)
-			err = SET_ERROR(EIO);
-		mutex_exit(&db->db_mtx);
-		if (err)
-			return (err);
-	}
+	/* wait for io to complete */
 	if (zfs_refcount_count(&dbs->dbs_holds) > 1) {
 		mutex_enter(&dmu_ctx->dc_mtx);
 		while (zfs_refcount_count(&dbs->dbs_holds) > 1)
 			cv_wait(&dmu_ctx->dc_cv_done, &dmu_ctx->dc_mtx);
 		mutex_exit(&dmu_ctx->dc_mtx);
+	}
+	for (i = 0; i < dbs->dbs_count; i++) {
+		dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbs->dbs_dbp[i];
+		if (db->db_state == DB_UNCACHED)
+			err = SET_ERROR(EIO);
+		if (err)
+			return (err);
 	}
 	return (0);
 }
