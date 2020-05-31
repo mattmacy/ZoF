@@ -2148,7 +2148,7 @@ dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 {
 
 	return (dmu_read_impl(dn, NULL, 0, uio->uio_loffset, size, uio,
-	    DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_NO_HOLD));
+	    DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_NO_HOLD|DMU_CTX_FLAG_PREFETCH));
 }
 
 /*
