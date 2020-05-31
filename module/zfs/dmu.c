@@ -585,9 +585,8 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 
 	read = dc->dc_flags & DMU_CTX_FLAG_READ;
 	prefetch = dc->dc_flags & DMU_CTX_FLAG_PREFETCH;
-	dbuf_flags = DB_RF_CANFAIL | DB_RF_NEVERWAIT | DB_RF_HAVESTRUCT;
-	if (!prefetch || dbs->dbs_size > zfetch_array_rd_sz)
-		dbuf_flags |= DB_RF_NOPREFETCH;
+	dbuf_flags = DB_RF_CANFAIL | DB_RF_NEVERWAIT | DB_RF_HAVESTRUCT |
+	    DB_RF_NOPREFETCH;
 
 	if (!restarted) {
 		dbs->dbs_zio = zio_root(dn->dn_objset->os_spa, NULL, NULL,
