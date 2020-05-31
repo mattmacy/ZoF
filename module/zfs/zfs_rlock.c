@@ -321,6 +321,11 @@ zfs_rangelock_new_proxy(avl_tree_t *tree, uint64_t off, uint64_t len)
 	lr->lr_proxy = B_TRUE;
 	lr->lr_write_wanted = B_FALSE;
 	lr->lr_read_wanted = B_FALSE;
+	list_create(&lr->lr_write_cb, sizeof (zfs_rangelock_cb_entry_t),
+	    offsetof(zfs_rangelock_cb_entry_t, zrce_node));
+	list_create(&lr->lr_read_cb, sizeof (zfs_rangelock_cb_entry_t),
+	    offsetof(zfs_rangelock_cb_entry_t, zrce_node));
+
 	avl_add(tree, lr);
 }
 
