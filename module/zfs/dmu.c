@@ -544,10 +544,11 @@ dmu_buf_set_rele(dmu_buf_ctx_t *dbs_ctx, int err)
 	/* If we are finished, schedule this buffer set for delivery. */
 	ASSERT(!zfs_refcount_is_zero(&dbs->dbs_holds));
 	count = zfs_refcount_remove(&dbs->dbs_holds, NULL);
-	if (count == 1)
-		cv_broadcast(&dmu_ctx->dc_cv_done);
-	if (drop_lock)
+	if (drop_lock) {
+		if (count == 1)
+			cv_broadcast(&dmu_ctx->dc_cv_done);
 		mutex_exit(&dmu_ctx->dc_mtx);
+	}
 	if (count != 0)
 		return;
 
