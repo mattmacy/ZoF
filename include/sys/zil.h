@@ -462,8 +462,6 @@ extern zil_stats_t zil_stats;
 #define	ZIL_STAT_BUMP(stat) \
     ZIL_STAT_INCR(stat, 1);
 
-typedef void (*zil_commit_cb_t)(void *);
-
 typedef int zil_parse_blk_func_t(zilog_t *zilog, blkptr_t *bp, void *arg,
     uint64_t txg);
 typedef int zil_parse_lr_func_t(zilog_t *zilog, lr_t *lr, void *arg,

@@ -2949,7 +2949,7 @@ zil_commit(zilog_t *zilog, uint64_t foid)
 typedef struct zil_commit_ctx {
 	zilog_t *zcc_zilog;
 	uint64_t zcc_foid;
-	zil_commit_cb_t zcc_cb;
+	callback_fn zcc_cb;
 	void *zcc_arg;
 	taskq_ent_t zcc_ent;
 } zil_commit_ctx_t;
@@ -2965,7 +2965,7 @@ do_zil_commit_impl_async(void *arg)
 }
 
 static void
-zil_commit_impl_async(zilog_t *zilog, uint64_t foid, zil_commit_cb_t cb,
+zil_commit_impl_async(zilog_t *zilog, uint64_t foid, callback_fn cb,
     void *arg)
 {
 	zil_commit_ctx_t *zcc;
@@ -2981,7 +2981,7 @@ zil_commit_impl_async(zilog_t *zilog, uint64_t foid, zil_commit_cb_t cb,
 }
 
 int
-zil_commit_async(zilog_t *zilog, uint64_t foid, zil_commit_cb_t cb, void *arg)
+zil_commit_async(zilog_t *zilog, uint64_t foid, callback_fn cb, void *arg)
 {
 	/*
 	 * We should never attempt to call zil_commit on a snapshot for
