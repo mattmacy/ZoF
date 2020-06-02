@@ -14,6 +14,13 @@ developed for Solaris and is now maintained by the OpenZFS community.
 OpenZFS is available in the FreeBSD ports tree as sysutils/openzfs and
 sysutils/openzfs-kmod. It can be installed on FreeBSD stable/12 or later.
 
+To load the module at boot, put `openzfs_load="YES"` in /boot/loader.conf, and
+remove `zfs_load="YES"` if migrating a ZFS install.
+
+Beware that the FreeBSD boot loader does not allow booting from root pools with
+encryption active (even if it is not in use), so do not try encryption on a
+pool you boot from.
+
 # Development on FreeBSD
 
 The following dependencies are required to build OpenZFS on FreeBSD:
@@ -58,9 +65,9 @@ gets adjusted accordingly. Though not required, `WITHOUT_ZFS` is a useful build
 option in FreeBSD to avoid building and installing the legacy zfs tools and
 kmod - see `src.conf(5)`.
 
-Beware that the FreeBSD boot loader does not allow booting from root pools with
-encryption active (even if it is not in use), so do not try encryption on a
-pool you boot from.
+For development it can be convenient to do a UFS install instead of ZFS when
+setting up the work environment. That way the module can be unloaded and loaded
+without rebooting.
 
 # Contributing
 
