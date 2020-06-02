@@ -14,6 +14,9 @@ developed for Solaris and is now maintained by the OpenZFS community.
 OpenZFS is available in the FreeBSD ports tree as sysutils/openzfs and
 sysutils/openzfs-kmod. It can be installed on FreeBSD stable/12 or later.
 
+The ZFS utilities will be installed in /usr/local/sbin/, so make sure your PATH
+gets adjusted accordingly.
+
 To load the module at boot, put `openzfs_load="YES"` in /boot/loader.conf, and
 remove `zfs_load="YES"` if migrating a ZFS install.
 
@@ -60,14 +63,12 @@ gmake -j$(sysctl -n hw.ncpu)
 # as root
 gmake install
 ```
-The ZFS utilities will be installed in /usr/local/sbin/, so make sure your PATH
-gets adjusted accordingly. Though not required, `WITHOUT_ZFS` is a useful build
-option in FreeBSD to avoid building and installing the legacy zfs tools and
-kmod - see `src.conf(5)`.
+Though not required, `WITHOUT_ZFS` is a useful build option in FreeBSD to avoid
+building and installing the legacy zfs tools and kmod - see `src.conf(5)`.
 
-For development it can be convenient to do a UFS install instead of ZFS when
-setting up the work environment. That way the module can be unloaded and loaded
-without rebooting.
+For rapid development it can be convenient to do a UFS install instead of ZFS
+when setting up the work environment. That way the module can be unloaded and
+loaded without rebooting.
 
 # Contributing
 
