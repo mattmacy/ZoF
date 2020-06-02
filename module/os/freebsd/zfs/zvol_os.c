@@ -494,6 +494,31 @@ zvol_done(struct bio *bp, int err)
 }
 
 static void
+zil_commit_done(void *arg)
+{
+	struct bio *bp = arg;
+	zvol_state_t *zv = bp->bio_to->private;
+
+	atomic_dec(&zv->zv_suspend_ref);
+	zvol_done(bp, 0);
+}
+
+static int
+zvol_commit(zvol_state_t *zv, struct bio *bp)
+{
+	int rc;
+
+	atomic_inc(&zv->zv_suspend_ref);
+	rc = zil_commit_async(zv->zv_zilog, ZVOL_OBJ, zil_commit_done, bp);
+	if (rc == 0)
+		atomic_dec(&zv->zv_suspend_ref);
+	else
+		rw_exit(&zv->zv_suspend_lock);
+
+	return (rc);
+}
+
+static void
 zvol_process_bio(zvol_state_t *zv, struct bio *bp)
 {
 	int err;
@@ -511,7 +536,8 @@ zvol_process_bio(zvol_state_t *zv, struct bio *bp)
 	err = 0;
 	switch (bp->bio_cmd) {
 	case BIO_FLUSH:
-		zil_commit(zv->zv_zilog, ZVOL_OBJ);
+		if (zvol_commit(zv, bp))
+			return;
 		break;
 	case BIO_DELETE:
 		err = zvol_geom_bio_delete(zv, bp);
