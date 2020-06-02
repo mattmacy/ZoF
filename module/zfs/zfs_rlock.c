@@ -582,7 +582,7 @@ zfs_rangelock_process_queued(zfs_rangelock_t *rl, list_t *cb_list)
 	while (!list_is_empty(cb_list)) {
 		entry = list_head(cb_list);
 		list_remove(cb_list, entry);
-		rc = zfs_rangelock_tryiter(rl, NULL, NULL, NULL, NULL, entry);
+		rc = zfs_rangelock_tryiter(rl, entry->zrce_lr, NULL, NULL, NULL, entry);
 		if (rc == 0)
 			list_insert_tail(&work, entry);
 	}
