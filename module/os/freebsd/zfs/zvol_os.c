@@ -766,7 +766,7 @@ zvol_geom_bio_readwrite(zvol_state_t *zv, struct bio *bp)
 	error = zvol_dmu_ctx_init(&zss->zds, bp->bio_data, bp->bio_offset,
 	    bp->bio_length, dmu_flags, zvol_strategy_dmu_done);
 
-	if (error == EWOULDBLOCK)
+	if (error == EINPROGRESS)
 		return;
 
 	if (error) {

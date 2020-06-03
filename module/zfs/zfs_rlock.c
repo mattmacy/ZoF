@@ -217,7 +217,7 @@ zfs_rangelock_enter_writer(zfs_rangelock_t *rl, zfs_locked_range_t *new,
 wait:
 		if (old != NULL) {
 			*old = lr;
-			return (EWOULDBLOCK);
+			return (EINPROGRESS);
 		}
 		if (!lr->lr_write_wanted) {
 			cv_init(&lr->lr_write_cv, NULL, CV_DEFAULT, NULL);
@@ -444,7 +444,7 @@ retry:
 		if ((prev->lr_type == RL_WRITER) || (prev->lr_write_wanted)) {
 			if (old != NULL) {
 				*old = prev;
-				return (EWOULDBLOCK);
+				return (EINPROGRESS);
 			}
 			if (!prev->lr_read_wanted) {
 				cv_init(&prev->lr_read_cv,
@@ -472,7 +472,7 @@ retry:
 		if ((next->lr_type == RL_WRITER) || (next->lr_write_wanted)) {
 			if (old != NULL) {
 				*old = next;
-				return (EWOULDBLOCK);
+				return (EINPROGRESS);
 			}
 			if (!next->lr_read_wanted) {
 				cv_init(&next->lr_read_cv,

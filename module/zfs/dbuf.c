@@ -1728,7 +1728,7 @@ dbuf_read_(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags,
 		DB_DNODE_EXIT(db);
 		DBUF_STAT_BUMP(hash_misses);
 		if (do_ewouldblock)
-			return (EWOULDBLOCK);
+			return (EINPROGRESS);
 
 		/*
 		 * If we created a zio_root we must execute it to avoid

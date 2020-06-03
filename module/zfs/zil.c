@@ -3025,11 +3025,11 @@ zil_commit_async(zilog_t *zilog, uint64_t foid, callback_fn cb, void *arg)
 	 */
 	if (zilog->zl_suspend > 0) {
 		txg_wait_synced_async(zilog->zl_dmu_pool, 0, cb, arg);
-		return (EWOULDBLOCK);
+		return (EINPROGRESS);
 	}
 
 	zil_commit_impl_async(zilog, foid, cb, arg);
-	return (EWOULDBLOCK);
+	return (EINPROGRESS);
 }
 
 void
