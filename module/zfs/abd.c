@@ -1,17 +1,26 @@
 /*
- * This file and its contents are supplied under the terms of the
- * Common Development and Distribution License ("CDDL"), version 1.0.
- * You may only use this file in accordance with the terms of version
- * 1.0 of the CDDL.
+ * CDDL HEADER START
  *
- * A full copy of the text of the CDDL should have accompanied this
- * source.  A copy of the CDDL is also available via the Internet at
- * http://www.illumos.org/license/CDDL.
+ * The contents of this file are subject to the terms of the
+ * Common Development and Distribution License (the "License").
+ * You may not use this file except in compliance with the License.
+ *
+ * You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+ * or http://www.opensolaris.org/os/licensing.
+ * See the License for the specific language governing permissions
+ * and limitations under the License.
+ *
+ * When distributing Covered Code, include this CDDL HEADER in each
+ * file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+ * If applicable, add the following below this CDDL HEADER, with the
+ * fields enclosed by brackets "[]" replaced with your own identifying
+ * information: Portions Copyright [yyyy] [name of copyright owner]
+ *
+ * CDDL HEADER END
  */
-
 /*
  * Copyright (c) 2014 by Chunwei Chen. All rights reserved.
- * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright (c) 2019 by Delphix. All rights reserved.
  */
 
 /*
@@ -50,11 +59,6 @@
  *                                      +----------------->| chunk N-1 |
  *                                                         +-----------+
  *
- * Using a large proportion of scattered ABDs decreases ARC fragmentation since
- * when we are at the limit of allocatable space, using equal-size chunks will
- * allow us to quickly reclaim enough space for a new large allocation (assuming
- * it is also scattered).
- *
  * In addition to directly allocating a linear or scattered ABD, it is also
  * possible to create an ABD by requesting the "sub-ABD" starting at an offset
  * within an existing ABD. In linear buffers this is simple (set abd_buf of
@@ -83,186 +87,73 @@
  * compare, copy, read, write, and fill with zeroes. If you need a custom
  * function which progressively accesses the whole ABD, use the abd_iterate_*
  * functions.
+ *
+ * As an additional feature, linear and scatter ABD's can be stitched together
+ * by using the gang ABD type (abd_alloc_gang_abd()). This allows for
+ * multiple ABDs to be viewed as a singular ABD.
+ *
+ * It is possible to make all ABDs linear by setting zfs_abd_scatter_enabled to
+ * B_FALSE.
  */
 
-#include <sys/abd.h>
+#include <sys/abd_impl.h>
 #include <sys/param.h>
 #include <sys/zio.h>
 #include <sys/zfs_context.h>
 #include <sys/zfs_znode.h>
 
-typedef struct abd_stats {
-	kstat_named_t abdstat_struct_size;
-	kstat_named_t abdstat_scatter_cnt;
-	kstat_named_t abdstat_scatter_data_size;
-	kstat_named_t abdstat_scatter_chunk_waste;
-	kstat_named_t abdstat_linear_cnt;
-	kstat_named_t abdstat_linear_data_size;
-} abd_stats_t;
+/* see block comment above for description */
+int zfs_abd_scatter_enabled = B_TRUE;
 
-static abd_stats_t abd_stats = {
-	/* Amount of memory occupied by all of the abd_t struct allocations */
-	{ "struct_size",			KSTAT_DATA_UINT64 },
-	/*
-	 * The number of scatter ABDs which are currently allocated, excluding
-	 * ABDs which don't own their data (for instance the ones which were
-	 * allocated through abd_get_offset()).
-	 */
-	{ "scatter_cnt",			KSTAT_DATA_UINT64 },
-	/* Amount of data stored in all scatter ABDs tracked by scatter_cnt */
-	{ "scatter_data_size",			KSTAT_DATA_UINT64 },
-	/*
-	 * The amount of space wasted at the end of the last chunk across all
-	 * scatter ABDs tracked by scatter_cnt.
-	 */
-	{ "scatter_chunk_waste",		KSTAT_DATA_UINT64 },
-	/*
-	 * The number of linear ABDs which are currently allocated, excluding
-	 * ABDs which don't own their data (for instance the ones which were
-	 * allocated through abd_get_offset() and abd_get_from_buf()). If an
-	 * ABD takes ownership of its buf then it will become tracked.
-	 */
-	{ "linear_cnt",				KSTAT_DATA_UINT64 },
-	/* Amount of data stored in all linear ABDs tracked by linear_cnt */
-	{ "linear_data_size",			KSTAT_DATA_UINT64 },
-};
-
-#define	ABDSTAT(stat)		(abd_stats.stat.value.ui64)
-#define	ABDSTAT_INCR(stat, val) \
-	atomic_add_64(&abd_stats.stat.value.ui64, (val))
-#define	ABDSTAT_BUMP(stat)	ABDSTAT_INCR(stat, 1)
-#define	ABDSTAT_BUMPDOWN(stat)	ABDSTAT_INCR(stat, -1)
-
-/*
- * It is possible to make all future ABDs be linear by setting this to B_FALSE.
- * Otherwise, ABDs are allocated scattered by default unless the caller uses
- * abd_alloc_linear().
- */
-boolean_t zfs_abd_scatter_enabled = B_TRUE;
-
-/*
- * The size of the chunks ABD allocates. Because the sizes allocated from the
- * kmem_cache can't change, this tunable can only be modified at boot. Changing
- * it at runtime would cause ABD iteration to work incorrectly for ABDs which
- * were allocated with the old size, so a safeguard has been put in place which
- * will cause the machine to panic if you change it and try to access the data
- * within a scattered ABD.
- */
-size_t zfs_abd_chunk_size = 4096;
-
-#if defined(_KERNEL)
-SYSCTL_DECL(_vfs_zfs);
-
-SYSCTL_INT(_vfs_zfs, OID_AUTO, abd_scatter_enabled, CTLFLAG_RWTUN,
-	&zfs_abd_scatter_enabled, 0, "Enable scattered ARC data buffers");
-SYSCTL_ULONG(_vfs_zfs, OID_AUTO, abd_chunk_size, CTLFLAG_RDTUN,
-	&zfs_abd_chunk_size, 0, "The size of the chunks ABD allocates");
-#endif
-
-kmem_cache_t *abd_chunk_cache;
-static kstat_t *abd_ksp;
-
-extern inline boolean_t abd_is_linear(abd_t *abd);
-extern inline void abd_copy(abd_t *dabd, abd_t *sabd, size_t size);
-extern inline void abd_copy_from_buf(abd_t *abd, const void *buf, size_t size);
-extern inline void abd_copy_to_buf(void* buf, abd_t *abd, size_t size);
-extern inline int abd_cmp_buf(abd_t *abd, const void *buf, size_t size);
-extern inline void abd_zero(abd_t *abd, size_t size);
-
-static void *
-abd_alloc_chunk()
+boolean_t
+abd_is_linear(abd_t *abd)
 {
-	void *c = kmem_cache_alloc(abd_chunk_cache, KM_PUSHPAGE);
-	ASSERT3P(c, !=, NULL);
-	return (c);
+	return ((abd->abd_flags & ABD_FLAG_LINEAR) != 0 ? B_TRUE : B_FALSE);
 }
 
-static void
-abd_free_chunk(void *c)
+boolean_t
+abd_is_linear_page(abd_t *abd)
 {
-	kmem_cache_free(abd_chunk_cache, c);
+	return ((abd->abd_flags & ABD_FLAG_LINEAR_PAGE) != 0 ?
+	    B_TRUE : B_FALSE);
+}
+
+boolean_t
+abd_is_gang(abd_t *abd)
+{
+	return ((abd->abd_flags & ABD_FLAG_GANG) != 0 ? B_TRUE :
+	    B_FALSE);
 }
 
 void
-abd_init(void)
-{
-	abd_chunk_cache = kmem_cache_create("abd_chunk", zfs_abd_chunk_size, 0,
-	    NULL, NULL, NULL, NULL, 0, KMC_NOTOUCH | KMC_NODEBUG);
-
-	abd_ksp = kstat_create("zfs", 0, "abdstats", "misc", KSTAT_TYPE_NAMED,
-	    sizeof (abd_stats) / sizeof (kstat_named_t), KSTAT_FLAG_VIRTUAL);
-	if (abd_ksp != NULL) {
-		abd_ksp->ks_data = &abd_stats;
-		kstat_install(abd_ksp);
-	}
-}
-
-void
-abd_fini(void)
-{
-	if (abd_ksp != NULL) {
-		kstat_delete(abd_ksp);
-		abd_ksp = NULL;
-	}
-
-	kmem_cache_destroy(abd_chunk_cache);
-	abd_chunk_cache = NULL;
-}
-
-static inline size_t
-abd_chunkcnt_for_bytes(size_t size)
-{
-	return (P2ROUNDUP(size, zfs_abd_chunk_size) / zfs_abd_chunk_size);
-}
-
-static inline size_t
-abd_scatter_chunkcnt(abd_t *abd)
-{
-	ASSERT(!abd_is_linear(abd));
-	return (abd_chunkcnt_for_bytes(
-	    abd->abd_u.abd_scatter.abd_offset + abd->abd_size));
-}
-
-static inline void
 abd_verify(abd_t *abd)
 {
 	ASSERT3U(abd->abd_size, >, 0);
 	ASSERT3U(abd->abd_size, <=, SPA_MAXBLOCKSIZE);
 	ASSERT3U(abd->abd_flags, ==, abd->abd_flags & (ABD_FLAG_LINEAR |
-	    ABD_FLAG_OWNER | ABD_FLAG_META));
+	    ABD_FLAG_OWNER | ABD_FLAG_META | ABD_FLAG_MULTI_ZONE |
+	    ABD_FLAG_MULTI_CHUNK | ABD_FLAG_LINEAR_PAGE | ABD_FLAG_GANG |
+	    ABD_FLAG_GANG_FREE | ABD_FLAG_ZEROS));
 	IMPLY(abd->abd_parent != NULL, !(abd->abd_flags & ABD_FLAG_OWNER));
 	IMPLY(abd->abd_flags & ABD_FLAG_META, abd->abd_flags & ABD_FLAG_OWNER);
 	if (abd_is_linear(abd)) {
-		ASSERT3P(abd->abd_u.abd_linear.abd_buf, !=, NULL);
-	} else {
-		ASSERT3U(abd->abd_u.abd_scatter.abd_offset, <,
-		    zfs_abd_chunk_size);
-		size_t n = abd_scatter_chunkcnt(abd);
-		for (int i = 0; i < n; i++) {
-			ASSERT3P(
-			    abd->abd_u.abd_scatter.abd_chunks[i], !=, NULL);
+		ASSERT3P(ABD_LINEAR_BUF(abd), !=, NULL);
+	} else if (abd_is_gang(abd)) {
+		for (abd_t *cabd = list_head(&ABD_GANG(abd).abd_gang_chain);
+		    cabd != NULL;
+		    cabd = list_next(&ABD_GANG(abd).abd_gang_chain, cabd)) {
+			abd_verify(cabd);
 		}
+	} else {
+		abd_verify_scatter(abd);
 	}
 }
 
-static inline abd_t *
-abd_alloc_struct(size_t chunkcnt)
+uint_t
+abd_get_size(abd_t *abd)
 {
-	size_t size = offsetof(abd_t, abd_u.abd_scatter.abd_chunks[chunkcnt]);
-	abd_t *abd = kmem_alloc(size, KM_PUSHPAGE);
-	ASSERT3P(abd, !=, NULL);
-	ABDSTAT_INCR(abdstat_struct_size, size);
-
-	return (abd);
-}
-
-static inline void
-abd_free_struct(abd_t *abd)
-{
-	size_t chunkcnt = abd_is_linear(abd) ? 0 : abd_scatter_chunkcnt(abd);
-	int size = offsetof(abd_t, abd_u.abd_scatter.abd_chunks[chunkcnt]);
-	kmem_free(abd, size);
-	ABDSTAT_INCR(abdstat_struct_size, -size);
+	abd_verify(abd);
+	return (abd->abd_size);
 }
 
 /*
@@ -272,15 +163,16 @@ abd_free_struct(abd_t *abd)
 abd_t *
 abd_alloc(size_t size, boolean_t is_metadata)
 {
-	if (!zfs_abd_scatter_enabled || size <= zfs_abd_chunk_size)
+	if (!zfs_abd_scatter_enabled || abd_size_alloc_linear(size))
 		return (abd_alloc_linear(size, is_metadata));
 
 	VERIFY3U(size, <=, SPA_MAXBLOCKSIZE);
 
-	size_t n = abd_chunkcnt_for_bytes(size);
-	abd_t *abd = abd_alloc_struct(n);
-
+	abd_t *abd = abd_alloc_struct(size);
 	abd->abd_flags = ABD_FLAG_OWNER;
+	abd->abd_u.abd_scatter.abd_offset = 0;
+	abd_alloc_chunks(abd, size);
+
 	if (is_metadata) {
 		abd->abd_flags |= ABD_FLAG_META;
 	}
@@ -288,19 +180,7 @@ abd_alloc(size_t size, boolean_t is_metadata)
 	abd->abd_parent = NULL;
 	zfs_refcount_create(&abd->abd_children);
 
-	abd->abd_u.abd_scatter.abd_offset = 0;
-	abd->abd_u.abd_scatter.abd_chunk_size = zfs_abd_chunk_size;
-
-	for (int i = 0; i < n; i++) {
-		void *c = abd_alloc_chunk();
-		ASSERT3P(c, !=, NULL);
-		abd->abd_u.abd_scatter.abd_chunks[i] = c;
-	}
-
-	ABDSTAT_BUMP(abdstat_scatter_cnt);
-	ABDSTAT_INCR(abdstat_scatter_data_size, size);
-	ABDSTAT_INCR(abdstat_scatter_chunk_waste,
-	    n * zfs_abd_chunk_size - size);
+	abd_update_scatter_stats(abd, ABDSTAT_INCR);
 
 	return (abd);
 }
@@ -308,17 +188,51 @@ abd_alloc(size_t size, boolean_t is_metadata)
 static void
 abd_free_scatter(abd_t *abd)
 {
-	size_t n = abd_scatter_chunkcnt(abd);
-	for (int i = 0; i < n; i++) {
-		abd_free_chunk(abd->abd_u.abd_scatter.abd_chunks[i]);
-	}
+	abd_free_chunks(abd);
 
 	zfs_refcount_destroy(&abd->abd_children);
-	ABDSTAT_BUMPDOWN(abdstat_scatter_cnt);
-	ABDSTAT_INCR(abdstat_scatter_data_size, -(int)abd->abd_size);
-	ABDSTAT_INCR(abdstat_scatter_chunk_waste,
-	    abd->abd_size - n * zfs_abd_chunk_size);
+	abd_update_scatter_stats(abd, ABDSTAT_DECR);
+	abd_free_struct(abd);
+}
 
+static void
+abd_put_gang_abd(abd_t *abd)
+{
+	ASSERT(abd_is_gang(abd));
+	abd_t *cabd;
+
+	while ((cabd = list_remove_head(&ABD_GANG(abd).abd_gang_chain))
+	    != NULL) {
+		ASSERT0(cabd->abd_flags & ABD_FLAG_GANG_FREE);
+		abd->abd_size -= cabd->abd_size;
+		abd_put(cabd);
+	}
+	ASSERT0(abd->abd_size);
+	list_destroy(&ABD_GANG(abd).abd_gang_chain);
+}
+
+/*
+ * Free an ABD allocated from abd_get_offset() or abd_get_from_buf(). Will not
+ * free the underlying scatterlist or buffer.
+ */
+void
+abd_put(abd_t *abd)
+{
+	if (abd == NULL)
+		return;
+
+	abd_verify(abd);
+	ASSERT(!(abd->abd_flags & ABD_FLAG_OWNER));
+
+	if (abd->abd_parent != NULL) {
+		(void) zfs_refcount_remove_many(&abd->abd_parent->abd_children,
+		    abd->abd_size, abd);
+	}
+
+	if (abd_is_gang(abd))
+		abd_put_gang_abd(abd);
+
+	zfs_refcount_destroy(&abd->abd_children);
 	abd_free_struct(abd);
 }
 
@@ -343,13 +257,12 @@ abd_alloc_linear(size_t size, boolean_t is_metadata)
 	zfs_refcount_create(&abd->abd_children);
 
 	if (is_metadata) {
-		abd->abd_u.abd_linear.abd_buf = zio_buf_alloc(size);
+		ABD_LINEAR_BUF(abd) = zio_buf_alloc(size);
 	} else {
-		abd->abd_u.abd_linear.abd_buf = zio_data_buf_alloc(size);
+		ABD_LINEAR_BUF(abd) = zio_data_buf_alloc(size);
 	}
 
-	ABDSTAT_BUMP(abdstat_linear_cnt);
-	ABDSTAT_INCR(abdstat_linear_data_size, size);
+	abd_update_linear_stats(abd, ABDSTAT_INCR);
 
 	return (abd);
 }
@@ -357,22 +270,47 @@ abd_alloc_linear(size_t size, boolean_t is_metadata)
 static void
 abd_free_linear(abd_t *abd)
 {
+	if (abd_is_linear_page(abd)) {
+		abd_free_linear_page(abd);
+		return;
+	}
 	if (abd->abd_flags & ABD_FLAG_META) {
-		zio_buf_free(abd->abd_u.abd_linear.abd_buf, abd->abd_size);
+		zio_buf_free(ABD_LINEAR_BUF(abd), abd->abd_size);
 	} else {
-		zio_data_buf_free(abd->abd_u.abd_linear.abd_buf, abd->abd_size);
+		zio_data_buf_free(ABD_LINEAR_BUF(abd), abd->abd_size);
 	}
 
 	zfs_refcount_destroy(&abd->abd_children);
-	ABDSTAT_BUMPDOWN(abdstat_linear_cnt);
-	ABDSTAT_INCR(abdstat_linear_data_size, -(int)abd->abd_size);
+	abd_update_linear_stats(abd, ABDSTAT_DECR);
 
 	abd_free_struct(abd);
 }
 
+static void
+abd_free_gang_abd(abd_t *abd)
+{
+	ASSERT(abd_is_gang(abd));
+	abd_t *cabd;
+
+	while ((cabd = list_remove_head(&ABD_GANG(abd).abd_gang_chain))
+	    != NULL) {
+		abd->abd_size -= cabd->abd_size;
+		if (cabd->abd_flags & ABD_FLAG_GANG_FREE) {
+			if (cabd->abd_flags & ABD_FLAG_OWNER)
+				abd_free(cabd);
+			else
+				abd_put(cabd);
+		}
+	}
+	ASSERT0(abd->abd_size);
+	list_destroy(&ABD_GANG(abd).abd_gang_chain);
+	zfs_refcount_destroy(&abd->abd_children);
+	abd_free_struct(abd);
+}
+
 /*
- * Free an ABD. Only use this on ABDs allocated with abd_alloc() or
- * abd_alloc_linear().
+ * Free an ABD. Only use this on ABDs allocated with abd_alloc(),
+ * abd_alloc_linear(), or abd_alloc_gang_abd().
  */
 void
 abd_free(abd_t *abd)
@@ -385,6 +323,8 @@ abd_free(abd_t *abd)
 	ASSERT(abd->abd_flags & ABD_FLAG_OWNER);
 	if (abd_is_linear(abd))
 		abd_free_linear(abd);
+	else if (abd_is_gang(abd))
+		abd_free_gang_abd(abd);
 	else
 		abd_free_scatter(abd);
 }
@@ -397,27 +337,115 @@ abd_t *
 abd_alloc_sametype(abd_t *sabd, size_t size)
 {
 	boolean_t is_metadata = (sabd->abd_flags & ABD_FLAG_META) != 0;
-	if (abd_is_linear(sabd)) {
+	if (abd_is_linear(sabd) &&
+	    !abd_is_linear_page(sabd)) {
 		return (abd_alloc_linear(size, is_metadata));
 	} else {
 		return (abd_alloc(size, is_metadata));
 	}
 }
 
+
 /*
- * If we're going to use this ABD for doing I/O using the block layer, the
- * consumer of the ABD data doesn't care if it's scattered or not, and we don't
- * plan to store this ABD in memory for a long period of time, we should
- * allocate the ABD type that requires the least data copying to do the I/O.
- *
- * Currently this is linear ABDs, however if ldi_strategy() can ever issue I/Os
- * using a scatter/gather list we should switch to that and replace this call
- * with vanilla abd_alloc().
+ * Create gang ABD that will be the head of a list of ABD's. This is used
+ * to "chain" scatter/gather lists together when constructing aggregated
+ * IO's. To free this abd, abd_free() must be called.
  */
 abd_t *
-abd_alloc_for_io(size_t size, boolean_t is_metadata)
+abd_alloc_gang_abd(void)
 {
-	return (abd_alloc_linear(size, is_metadata));
+	abd_t *abd;
+
+	abd = abd_alloc_struct(0);
+	abd->abd_flags = ABD_FLAG_GANG | ABD_FLAG_OWNER;
+	abd->abd_size = 0;
+	abd->abd_parent = NULL;
+	list_create(&ABD_GANG(abd).abd_gang_chain,
+	    sizeof (abd_t), offsetof(abd_t, abd_gang_link));
+	zfs_refcount_create(&abd->abd_children);
+	return (abd);
+}
+
+/*
+ * Add a child ABD to a gang ABD's chained list.
+ */
+void
+abd_gang_add(abd_t *pabd, abd_t *cabd, boolean_t free_on_free)
+{
+	ASSERT(abd_is_gang(pabd));
+	abd_t *child_abd = NULL;
+
+	/*
+	 * In order to verify that an ABD is not already part of
+	 * another gang ABD, we must lock the child ABD's abd_mtx
+	 * to check its abd_gang_link status. We unlock the abd_mtx
+	 * only after it is has been added to a gang ABD, which
+	 * will update the abd_gang_link's status. See comment below
+	 * for how an ABD can be in multiple gang ABD's simultaneously.
+	 */
+	mutex_enter(&cabd->abd_mtx);
+	if (list_link_active(&cabd->abd_gang_link)) {
+		/*
+		 * If the child ABD is already part of another
+		 * gang ABD then we must allocate a new
+		 * ABD to use a seperate link. We mark the newly
+		 * allocated ABD with ABD_FLAG_GANG_FREE, before
+		 * adding it to the gang ABD's list, to make the
+		 * gang ABD aware that it is responsible to call
+		 * abd_put(). We use abd_get_offset() in order
+		 * to just allocate a new ABD but avoid copying the
+		 * data over into the newly allocated ABD.
+		 *
+		 * An ABD may become part of multiple gang ABD's. For
+		 * example, when writting ditto bocks, the same ABD
+		 * is used to write 2 or 3 locations with 2 or 3
+		 * zio_t's. Each of the zio's may be aggregated with
+		 * different adjacent zio's. zio aggregation uses gang
+		 * zio's, so the single ABD can become part of multiple
+		 * gang zio's.
+		 *
+		 * The ASSERT below is to make sure that if
+		 * free_on_free is passed as B_TRUE, the ABD can
+		 * not be in mulitple gang ABD's. The gang ABD
+		 * can not be responsible for cleaning up the child
+		 * ABD memory allocation if the ABD can be in
+		 * multiple gang ABD's at one time.
+		 */
+		ASSERT3B(free_on_free, ==, B_FALSE);
+		child_abd = abd_get_offset(cabd, 0);
+		child_abd->abd_flags |= ABD_FLAG_GANG_FREE;
+	} else {
+		child_abd = cabd;
+		if (free_on_free)
+			child_abd->abd_flags |= ABD_FLAG_GANG_FREE;
+	}
+	ASSERT3P(child_abd, !=, NULL);
+
+	list_insert_tail(&ABD_GANG(pabd).abd_gang_chain, child_abd);
+	mutex_exit(&cabd->abd_mtx);
+	pabd->abd_size += child_abd->abd_size;
+}
+
+/*
+ * Locate the ABD for the supplied offset in the gang ABD.
+ * Return a new offset relative to the returned ABD.
+ */
+abd_t *
+abd_gang_get_offset(abd_t *abd, size_t *off)
+{
+	abd_t *cabd;
+
+	ASSERT(abd_is_gang(abd));
+	ASSERT3U(*off, <, abd->abd_size);
+	for (cabd = list_head(&ABD_GANG(abd).abd_gang_chain); cabd != NULL;
+	    cabd = list_next(&ABD_GANG(abd).abd_gang_chain, cabd)) {
+		if (*off >= cabd->abd_size)
+			*off -= cabd->abd_size;
+		else
+			return (cabd);
+	}
+	VERIFY3P(cabd, !=, NULL);
+	return (cabd);
 }
 
 /*
@@ -425,11 +453,10 @@ abd_alloc_for_io(size_t size, boolean_t is_metadata)
  * buffer data with sabd. Use abd_put() to free. sabd must not be freed while
  * any derived ABDs exist.
  */
-/* ARGSUSED */
-static inline abd_t *
+static abd_t *
 abd_get_offset_impl(abd_t *sabd, size_t off, size_t size)
 {
-	abd_t *abd;
+	abd_t *abd = NULL;
 
 	abd_verify(sabd);
 	ASSERT3U(off, <=, sabd->abd_size);
@@ -444,59 +471,59 @@ abd_get_offset_impl(abd_t *sabd, size_t off, size_t size)
 		 */
 		abd->abd_flags = ABD_FLAG_LINEAR;
 
-		abd->abd_u.abd_linear.abd_buf =
-		    (char *)sabd->abd_u.abd_linear.abd_buf + off;
+		ABD_LINEAR_BUF(abd) = (char *)ABD_LINEAR_BUF(sabd) + off;
+	} else if (abd_is_gang(sabd)) {
+		size_t left = size;
+		abd = abd_alloc_gang_abd();
+		abd->abd_flags &= ~ABD_FLAG_OWNER;
+		for (abd_t *cabd = abd_gang_get_offset(sabd, &off);
+		    cabd != NULL && left > 0;
+		    cabd = list_next(&ABD_GANG(sabd).abd_gang_chain, cabd)) {
+			int csize = MIN(left, cabd->abd_size - off);
+
+			abd_t *nabd = abd_get_offset_impl(cabd, off, csize);
+			abd_gang_add(abd, nabd, B_FALSE);
+			left -= csize;
+			off = 0;
+		}
+		ASSERT3U(left, ==, 0);
 	} else {
-		size_t new_offset = sabd->abd_u.abd_scatter.abd_offset + off;
-		size_t chunkcnt = abd_scatter_chunkcnt(sabd) -
-		    (new_offset / zfs_abd_chunk_size);
-
-		abd = abd_alloc_struct(chunkcnt);
-
-		/*
-		 * Even if this buf is filesystem metadata, we only track that
-		 * if we own the underlying data buffer, which is not true in
-		 * this case. Therefore, we don't ever use ABD_FLAG_META here.
-		 */
-		abd->abd_flags = 0;
-
-		abd->abd_u.abd_scatter.abd_offset =
-		    new_offset % zfs_abd_chunk_size;
-		abd->abd_u.abd_scatter.abd_chunk_size = zfs_abd_chunk_size;
-
-		/* Copy the scatterlist starting at the correct offset */
-		(void) memcpy(&abd->abd_u.abd_scatter.abd_chunks,
-		    &sabd->abd_u.abd_scatter.abd_chunks[new_offset /
-		    zfs_abd_chunk_size],
-		    chunkcnt * sizeof (void *));
+		abd = abd_get_offset_scatter(sabd, off);
 	}
 
-	if (size == 0)
-		abd->abd_size = sabd->abd_size - off;
-	else
-		abd->abd_size = size;
+	abd->abd_size = size;
 	abd->abd_parent = sabd;
 	zfs_refcount_create(&abd->abd_children);
 	(void) zfs_refcount_add_many(&sabd->abd_children, abd->abd_size, abd);
-
 	return (abd);
 }
 
 abd_t *
 abd_get_offset(abd_t *sabd, size_t off)
 {
-
-	return (abd_get_offset_impl(sabd, off, 0));
+	size_t size = sabd->abd_size > off ? sabd->abd_size - off : 0;
+	VERIFY3U(size, >, 0);
+	return (abd_get_offset_impl(sabd, off, size));
 }
 
 abd_t *
 abd_get_offset_size(abd_t *sabd, size_t off, size_t size)
 {
 	ASSERT3U(off + size, <=, sabd->abd_size);
-
 	return (abd_get_offset_impl(sabd, off, size));
 }
 
+/*
+ * Return a size scatter ABD. In order to free the returned
+ * ABD abd_put() must be called.
+ */
+abd_t *
+abd_get_zeros(size_t size)
+{
+	ASSERT3P(abd_zero_scatter, !=, NULL);
+	ASSERT3U(size, <=, SPA_MAXBLOCKSIZE);
+	return (abd_get_offset_size(abd_zero_scatter, 0, size));
+}
 
 /*
  * Allocate a linear ABD structure for buf. You must free this with abd_put()
@@ -519,30 +546,9 @@ abd_get_from_buf(void *buf, size_t size)
 	abd->abd_parent = NULL;
 	zfs_refcount_create(&abd->abd_children);
 
-	abd->abd_u.abd_linear.abd_buf = buf;
+	ABD_LINEAR_BUF(abd) = buf;
 
 	return (abd);
-}
-
-/*
- * Free an ABD allocated from abd_get_offset() or abd_get_from_buf(). Will not
- * free the underlying scatterlist or buffer.
- */
-void
-abd_put(abd_t *abd)
-{
-	if (abd == NULL)
-		return;
-	abd_verify(abd);
-	ASSERT(!(abd->abd_flags & ABD_FLAG_OWNER));
-
-	if (abd->abd_parent != NULL) {
-		(void) zfs_refcount_remove_many(&abd->abd_parent->abd_children,
-		    abd->abd_size, abd);
-	}
-
-	zfs_refcount_destroy(&abd->abd_children);
-	abd_free_struct(abd);
 }
 
 /*
@@ -553,7 +559,7 @@ abd_to_buf(abd_t *abd)
 {
 	ASSERT(abd_is_linear(abd));
 	abd_verify(abd);
-	return (abd->abd_u.abd_linear.abd_buf);
+	return (ABD_LINEAR_BUF(abd));
 }
 
 /*
@@ -574,7 +580,6 @@ abd_borrow_buf(abd_t *abd, size_t n)
 		buf = zio_buf_alloc(n);
 	}
 	(void) zfs_refcount_add_many(&abd->abd_children, n, buf);
-
 	return (buf);
 }
 
@@ -617,6 +622,31 @@ abd_return_buf_copy(abd_t *abd, void *buf, size_t n)
 	abd_return_buf(abd, buf, n);
 }
 
+void
+abd_release_ownership_of_buf(abd_t *abd)
+{
+	ASSERT(abd_is_linear(abd));
+	ASSERT(abd->abd_flags & ABD_FLAG_OWNER);
+
+	/*
+	 * abd_free() needs to handle LINEAR_PAGE ABD's specially.
+	 * Since that flag does not survive the
+	 * abd_release_ownership_of_buf() -> abd_get_from_buf() ->
+	 * abd_take_ownership_of_buf() sequence, we don't allow releasing
+	 * these "linear but not zio_[data_]buf_alloc()'ed" ABD's.
+	 */
+	ASSERT(!abd_is_linear_page(abd));
+
+	abd_verify(abd);
+
+	abd->abd_flags &= ~ABD_FLAG_OWNER;
+	/* Disable this flag since we no longer own the data buffer */
+	abd->abd_flags &= ~ABD_FLAG_META;
+
+	abd_update_linear_stats(abd, ABDSTAT_DECR);
+}
+
+
 /*
  * Give this ABD ownership of the buffer that it's storing. Can only be used on
  * linear ABDs which were allocated via abd_get_from_buf(), or ones allocated
@@ -635,130 +665,50 @@ abd_take_ownership_of_buf(abd_t *abd, boolean_t is_metadata)
 		abd->abd_flags |= ABD_FLAG_META;
 	}
 
-	ABDSTAT_BUMP(abdstat_linear_cnt);
-	ABDSTAT_INCR(abdstat_linear_data_size, abd->abd_size);
-}
-
-void
-abd_release_ownership_of_buf(abd_t *abd)
-{
-	ASSERT(abd_is_linear(abd));
-	ASSERT(abd->abd_flags & ABD_FLAG_OWNER);
-	abd_verify(abd);
-
-	abd->abd_flags &= ~ABD_FLAG_OWNER;
-	/* Disable this flag since we no longer own the data buffer */
-	abd->abd_flags &= ~ABD_FLAG_META;
-
-	ABDSTAT_BUMPDOWN(abdstat_linear_cnt);
-	ABDSTAT_INCR(abdstat_linear_data_size, -(int)abd->abd_size);
-}
-
-struct abd_iter {
-	abd_t		*iter_abd;	/* ABD being iterated through */
-	size_t		iter_pos;	/* position (relative to abd_offset) */
-	void		*iter_mapaddr;	/* addr corresponding to iter_pos */
-	size_t		iter_mapsize;	/* length of data valid at mapaddr */
-};
-
-static inline size_t
-abd_iter_scatter_chunk_offset(struct abd_iter *aiter)
-{
-	ASSERT(!abd_is_linear(aiter->iter_abd));
-	return ((aiter->iter_abd->abd_u.abd_scatter.abd_offset +
-	    aiter->iter_pos) % zfs_abd_chunk_size);
-}
-
-static inline size_t
-abd_iter_scatter_chunk_index(struct abd_iter *aiter)
-{
-	ASSERT(!abd_is_linear(aiter->iter_abd));
-	return ((aiter->iter_abd->abd_u.abd_scatter.abd_offset +
-	    aiter->iter_pos) / zfs_abd_chunk_size);
+	abd_update_linear_stats(abd, ABDSTAT_INCR);
 }
 
 /*
- * Initialize the abd_iter.
+ * Initializes an abd_iter based on whether the abd is a gang ABD
+ * or just a single ABD.
  */
-static void
-abd_iter_init(struct abd_iter *aiter, abd_t *abd)
+static inline abd_t *
+abd_init_abd_iter(abd_t *abd, struct abd_iter *aiter, size_t off)
 {
-	abd_verify(abd);
-	aiter->iter_abd = abd;
-	aiter->iter_pos = 0;
-	aiter->iter_mapaddr = NULL;
-	aiter->iter_mapsize = 0;
-}
+	abd_t *cabd = NULL;
 
-/*
- * Advance the iterator by a certain amount. Cannot be called when a chunk is
- * in use. This can be safely called when the aiter has already exhausted, in
- * which case this does nothing.
- */
-static void
-abd_iter_advance(struct abd_iter *aiter, size_t amount)
-{
-	ASSERT3P(aiter->iter_mapaddr, ==, NULL);
-	ASSERT0(aiter->iter_mapsize);
-
-	/* There's nothing left to advance to, so do nothing */
-	if (aiter->iter_pos == aiter->iter_abd->abd_size)
-		return;
-
-	aiter->iter_pos += amount;
-}
-
-/*
- * Map the current chunk into aiter. This can be safely called when the aiter
- * has already exhausted, in which case this does nothing.
- */
-static void
-abd_iter_map(struct abd_iter *aiter)
-{
-	void *paddr;
-	size_t offset = 0;
-
-	ASSERT3P(aiter->iter_mapaddr, ==, NULL);
-	ASSERT0(aiter->iter_mapsize);
-
-	/* Panic if someone has changed zfs_abd_chunk_size */
-	IMPLY(!abd_is_linear(aiter->iter_abd), zfs_abd_chunk_size ==
-	    aiter->iter_abd->abd_u.abd_scatter.abd_chunk_size);
-
-	/* There's nothing left to iterate over, so do nothing */
-	if (aiter->iter_pos == aiter->iter_abd->abd_size)
-		return;
-
-	if (abd_is_linear(aiter->iter_abd)) {
-		offset = aiter->iter_pos;
-		aiter->iter_mapsize = aiter->iter_abd->abd_size - offset;
-		paddr = aiter->iter_abd->abd_u.abd_linear.abd_buf;
+	if (abd_is_gang(abd)) {
+		cabd = abd_gang_get_offset(abd, &off);
+		if (cabd) {
+			abd_iter_init(aiter, cabd);
+			abd_iter_advance(aiter, off);
+		}
 	} else {
-		size_t index = abd_iter_scatter_chunk_index(aiter);
-		offset = abd_iter_scatter_chunk_offset(aiter);
-		aiter->iter_mapsize = MIN(zfs_abd_chunk_size - offset,
-		    aiter->iter_abd->abd_size - aiter->iter_pos);
-		paddr = aiter->iter_abd->abd_u.abd_scatter.abd_chunks[index];
+		abd_iter_init(aiter, abd);
+		abd_iter_advance(aiter, off);
 	}
-	aiter->iter_mapaddr = (char *)paddr + offset;
+	return (cabd);
 }
 
 /*
- * Unmap the current chunk from aiter. This can be safely called when the aiter
- * has already exhausted, in which case this does nothing.
+ * Advances an abd_iter. We have to be careful with gang ABD as
+ * advancing could mean that we are at the end of a particular ABD and
+ * must grab the ABD in the gang ABD's list.
  */
-static void
-abd_iter_unmap(struct abd_iter *aiter)
+static inline abd_t *
+abd_advance_abd_iter(abd_t *abd, abd_t *cabd, struct abd_iter *aiter,
+    size_t len)
 {
-	/* There's nothing left to unmap, so do nothing */
-	if (aiter->iter_pos == aiter->iter_abd->abd_size)
-		return;
-
-	ASSERT3P(aiter->iter_mapaddr, !=, NULL);
-	ASSERT3U(aiter->iter_mapsize, >, 0);
-
-	aiter->iter_mapaddr = NULL;
-	aiter->iter_mapsize = 0;
+	abd_iter_advance(aiter, len);
+	if (abd_is_gang(abd) && abd_iter_at_end(aiter)) {
+		ASSERT3P(cabd, !=, NULL);
+		cabd = list_next(&ABD_GANG(abd).abd_gang_chain, cabd);
+		if (cabd) {
+			abd_iter_init(aiter, cabd);
+			abd_iter_advance(aiter, 0);
+		}
+	}
+	return (cabd);
 }
 
 int
@@ -767,14 +717,20 @@ abd_iterate_func(abd_t *abd, size_t off, size_t size,
 {
 	int ret = 0;
 	struct abd_iter aiter;
+	boolean_t abd_multi;
+	abd_t *c_abd;
 
 	abd_verify(abd);
 	ASSERT3U(off + size, <=, abd->abd_size);
 
-	abd_iter_init(&aiter, abd);
-	abd_iter_advance(&aiter, off);
+	abd_multi = abd_is_gang(abd);
+	c_abd = abd_init_abd_iter(abd, &aiter, off);
 
 	while (size > 0) {
+		/* If we are at the end of the gang ABD we are done */
+		if (abd_multi && !c_abd)
+			break;
+
 		abd_iter_map(&aiter);
 
 		size_t len = MIN(aiter.iter_mapsize, size);
@@ -788,7 +744,7 @@ abd_iterate_func(abd_t *abd, size_t off, size_t size,
 			break;
 
 		size -= len;
-		abd_iter_advance(&aiter, len);
+		c_abd = abd_advance_abd_iter(abd, c_abd, &aiter, len);
 	}
 
 	return (ret);
@@ -895,6 +851,8 @@ abd_iterate_func2(abd_t *dabd, abd_t *sabd, size_t doff, size_t soff,
 {
 	int ret = 0;
 	struct abd_iter daiter, saiter;
+	boolean_t dabd_is_gang_abd, sabd_is_gang_abd;
+	abd_t *c_dabd, *c_sabd;
 
 	abd_verify(dabd);
 	abd_verify(sabd);
@@ -902,12 +860,17 @@ abd_iterate_func2(abd_t *dabd, abd_t *sabd, size_t doff, size_t soff,
 	ASSERT3U(doff + size, <=, dabd->abd_size);
 	ASSERT3U(soff + size, <=, sabd->abd_size);
 
-	abd_iter_init(&daiter, dabd);
-	abd_iter_init(&saiter, sabd);
-	abd_iter_advance(&daiter, doff);
-	abd_iter_advance(&saiter, soff);
+	dabd_is_gang_abd = abd_is_gang(dabd);
+	sabd_is_gang_abd = abd_is_gang(sabd);
+	c_dabd = abd_init_abd_iter(dabd, &daiter, doff);
+	c_sabd = abd_init_abd_iter(sabd, &saiter, soff);
 
 	while (size > 0) {
+		/* if we are at the end of the gang ABD we are done */
+		if ((dabd_is_gang_abd && !c_dabd) ||
+		    (sabd_is_gang_abd && !c_sabd))
+			break;
+
 		abd_iter_map(&daiter);
 		abd_iter_map(&saiter);
 
@@ -926,8 +889,10 @@ abd_iterate_func2(abd_t *dabd, abd_t *sabd, size_t doff, size_t soff,
 			break;
 
 		size -= len;
-		abd_iter_advance(&daiter, len);
-		abd_iter_advance(&saiter, len);
+		c_dabd =
+		    abd_advance_abd_iter(dabd, c_dabd, &daiter, len);
+		c_sabd =
+		    abd_advance_abd_iter(sabd, c_sabd, &saiter, len);
 	}
 
 	return (ret);
@@ -987,34 +952,55 @@ abd_raidz_gen_iterate(abd_t **cabds, abd_t *dabd,
 	struct abd_iter caiters[3];
 	struct abd_iter daiter = {0};
 	void *caddrs[3];
+	unsigned long flags __maybe_unused = 0;
+	abd_t *c_cabds[3];
+	abd_t *c_dabd = NULL;
+	boolean_t cabds_is_gang_abd[3];
+	boolean_t dabd_is_gang_abd = B_FALSE;
 
 	ASSERT3U(parity, <=, 3);
 
-	for (i = 0; i < parity; i++)
-		abd_iter_init(&caiters[i], cabds[i]);
+	for (i = 0; i < parity; i++) {
+		cabds_is_gang_abd[i] = abd_is_gang(cabds[i]);
+		c_cabds[i] = abd_init_abd_iter(cabds[i], &caiters[i], 0);
+	}
 
-	if (dabd)
-		abd_iter_init(&daiter, dabd);
+	if (dabd) {
+		dabd_is_gang_abd = abd_is_gang(dabd);
+		c_dabd = abd_init_abd_iter(dabd, &daiter, 0);
+	}
 
 	ASSERT3S(dsize, >=, 0);
 
-	critical_enter();
+	abd_enter_critical(flags);
 	while (csize > 0) {
+		/* if we are at the end of the gang ABD we are done */
+		if (dabd_is_gang_abd && !c_dabd)
+			break;
+
+		for (i = 0; i < parity; i++) {
+			/*
+			 * If we are at the end of the gang ABD we are
+			 * done.
+			 */
+			if (cabds_is_gang_abd[i] && !c_cabds[i])
+				break;
+			abd_iter_map(&caiters[i]);
+			caddrs[i] = caiters[i].iter_mapaddr;
+		}
+
 		len = csize;
 
 		if (dabd && dsize > 0)
 			abd_iter_map(&daiter);
 
-		for (i = 0; i < parity; i++) {
-			abd_iter_map(&caiters[i]);
-			caddrs[i] = caiters[i].iter_mapaddr;
-		}
-
 		switch (parity) {
 			case 3:
 				len = MIN(caiters[2].iter_mapsize, len);
+				/* falls through */
 			case 2:
 				len = MIN(caiters[1].iter_mapsize, len);
+				/* falls through */
 			case 1:
 				len = MIN(caiters[0].iter_mapsize, len);
 		}
@@ -1041,12 +1027,16 @@ abd_raidz_gen_iterate(abd_t **cabds, abd_t *dabd,
 
 		for (i = parity-1; i >= 0; i--) {
 			abd_iter_unmap(&caiters[i]);
-			abd_iter_advance(&caiters[i], len);
+			c_cabds[i] =
+			    abd_advance_abd_iter(cabds[i], c_cabds[i],
+			    &caiters[i], len);
 		}
 
 		if (dabd && dsize > 0) {
 			abd_iter_unmap(&daiter);
-			abd_iter_advance(&daiter, dlen);
+			c_dabd =
+			    abd_advance_abd_iter(dabd, c_dabd, &daiter,
+			    dlen);
 			dsize -= dlen;
 		}
 
@@ -1055,7 +1045,7 @@ abd_raidz_gen_iterate(abd_t **cabds, abd_t *dabd,
 		ASSERT3S(dsize, >=, 0);
 		ASSERT3S(csize, >=, 0);
 	}
-	critical_exit();
+	abd_exit_critical(flags);
 }
 
 /*
@@ -1080,18 +1070,35 @@ abd_raidz_rec_iterate(abd_t **cabds, abd_t **tabds,
 	struct abd_iter citers[3];
 	struct abd_iter xiters[3];
 	void *caddrs[3], *xaddrs[3];
+	unsigned long flags __maybe_unused = 0;
+	boolean_t cabds_is_gang_abd[3];
+	boolean_t tabds_is_gang_abd[3];
+	abd_t *c_cabds[3];
+	abd_t *c_tabds[3];
 
 	ASSERT3U(parity, <=, 3);
 
 	for (i = 0; i < parity; i++) {
-		abd_iter_init(&citers[i], cabds[i]);
-		abd_iter_init(&xiters[i], tabds[i]);
+		cabds_is_gang_abd[i] = abd_is_gang(cabds[i]);
+		tabds_is_gang_abd[i] = abd_is_gang(tabds[i]);
+		c_cabds[i] =
+		    abd_init_abd_iter(cabds[i], &citers[i], 0);
+		c_tabds[i] =
+		    abd_init_abd_iter(tabds[i], &xiters[i], 0);
 	}
 
-	critical_enter();
+	abd_enter_critical(flags);
 	while (tsize > 0) {
 
 		for (i = 0; i < parity; i++) {
+			/*
+			 * If we are at the end of the gang ABD we
+			 * are done.
+			 */
+			if (cabds_is_gang_abd[i] && !c_cabds[i])
+				break;
+			if (tabds_is_gang_abd[i] && !c_tabds[i])
+				break;
 			abd_iter_map(&citers[i]);
 			abd_iter_map(&xiters[i]);
 			caddrs[i] = citers[i].iter_mapaddr;
@@ -1103,9 +1110,11 @@ abd_raidz_rec_iterate(abd_t **cabds, abd_t **tabds,
 			case 3:
 				len = MIN(xiters[2].iter_mapsize, len);
 				len = MIN(citers[2].iter_mapsize, len);
+				/* falls through */
 			case 2:
 				len = MIN(xiters[1].iter_mapsize, len);
 				len = MIN(citers[1].iter_mapsize, len);
+				/* falls through */
 			case 1:
 				len = MIN(xiters[0].iter_mapsize, len);
 				len = MIN(citers[0].iter_mapsize, len);
@@ -1123,12 +1132,16 @@ abd_raidz_rec_iterate(abd_t **cabds, abd_t **tabds,
 		for (i = parity-1; i >= 0; i--) {
 			abd_iter_unmap(&xiters[i]);
 			abd_iter_unmap(&citers[i]);
-			abd_iter_advance(&xiters[i], len);
-			abd_iter_advance(&citers[i], len);
+			c_tabds[i] =
+			    abd_advance_abd_iter(tabds[i], c_tabds[i],
+			    &xiters[i], len);
+			c_cabds[i] =
+			    abd_advance_abd_iter(cabds[i], c_cabds[i],
+			    &citers[i], len);
 		}
 
 		tsize -= len;
 		ASSERT3S(tsize, >=, 0);
 	}
-	critical_exit();
+	abd_exit_critical(flags);
 }

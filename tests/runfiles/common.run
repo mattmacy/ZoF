@@ -169,6 +169,10 @@ tests = ['zfs_get_001_pos', 'zfs_get_002_pos', 'zfs_get_003_pos',
     'zfs_get_008_pos', 'zfs_get_009_pos', 'zfs_get_010_neg']
 tags = ['functional', 'cli_root', 'zfs_get']
 
+[tests/functional/cli_root/zfs_ids_to_path]
+tests = ['zfs_ids_to_path_001_pos']
+tags = ['functional', 'cli_root', 'zfs_ids_to_path']
+
 [tests/functional/cli_root/zfs_inherit]
 tests = ['zfs_inherit_001_neg', 'zfs_inherit_002_neg', 'zfs_inherit_003_pos',
     'zfs_inherit_mountpoint']
@@ -442,7 +446,7 @@ tags = ['functional', 'cli_root', 'zpool_set']
 [tests/functional/cli_root/zpool_split]
 tests = ['zpool_split_cliargs', 'zpool_split_devices',
     'zpool_split_encryption', 'zpool_split_props', 'zpool_split_vdevs',
-    'zpool_split_resilver']
+    'zpool_split_resilver', 'zpool_split_indirect']
 tags = ['functional', 'cli_root', 'zpool_split']
 
 [tests/functional/cli_root/zpool_status]
@@ -758,7 +762,7 @@ tests = ['reservation_001_pos', 'reservation_002_pos', 'reservation_003_pos',
 tags = ['functional', 'reservation']
 
 [tests/functional/resilver]
-tests = ['resilver_restart_001']
+tests = ['resilver_restart_001', 'resilver_restart_002']
 tags = ['functional', 'resilver']
 
 [tests/functional/rootpool]

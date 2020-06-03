@@ -441,8 +441,10 @@ extern int zpool_events_next(libzfs_handle_t *, nvlist_t **, int *, unsigned,
     int);
 extern int zpool_events_clear(libzfs_handle_t *, int *);
 extern int zpool_events_seek(libzfs_handle_t *, uint64_t, int);
+extern void zpool_obj_to_path_ds(zpool_handle_t *, uint64_t, uint64_t, char *,
+    size_t);
 extern void zpool_obj_to_path(zpool_handle_t *, uint64_t, uint64_t, char *,
-    size_t len);
+    size_t);
 extern int zfs_ioctl(libzfs_handle_t *, int, struct zfs_cmd *);
 extern int zpool_get_physpath(zpool_handle_t *, char *, size_t);
 extern void zpool_explain_recover(libzfs_handle_t *, const char *, int,
@@ -804,6 +806,13 @@ extern int zfs_mount_at(zfs_handle_t *, const char *, int, const char *);
 extern int zfs_unmount(zfs_handle_t *, const char *, int);
 extern int zfs_unmountall(zfs_handle_t *, int);
 
+#if defined(__linux__)
+extern int zfs_parse_mount_options(char *mntopts, unsigned long *mntflags,
+    unsigned long *zfsflags, int sloppy, char *badopt, char *mtabopt);
+extern void zfs_adjust_mount_options(zfs_handle_t *zhp, const char *mntpoint,
+    char *mntopts, char *mtabopt);
+#endif
+
 /*
  * Share support functions.
  */
@@ -865,6 +874,8 @@ extern int zpool_in_use(libzfs_handle_t *, int, pool_state_t *, char **,
  * Label manipulation.
  */
 extern int zpool_clear_label(int);
+extern int zpool_set_bootenv(zpool_handle_t *, const char *);
+extern int zpool_get_bootenv(zpool_handle_t *, char *, size_t, off_t);
 
 /*
  * Management interfaces for SMB ACL files

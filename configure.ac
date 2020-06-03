@@ -76,6 +76,7 @@ AC_CONFIG_FILES([
 	cmd/zed/Makefile
 	cmd/zed/zed.d/Makefile
 	cmd/zfs/Makefile
+	cmd/zfs_ids_to_path/Makefile
 	cmd/zgenhostid/Makefile
 	cmd/zhack/Makefile
 	cmd/zinject/Makefile
@@ -92,6 +93,8 @@ AC_CONFIG_FILES([
 	contrib/dracut/90zfs/Makefile
 	contrib/dracut/Makefile
 	contrib/initramfs/Makefile
+	contrib/initramfs/conf.d/Makefile
+	contrib/initramfs/conf-hooks.d/Makefile
 	contrib/initramfs/hooks/Makefile
 	contrib/initramfs/scripts/Makefile
 	contrib/initramfs/scripts/local-top/Makefile
@@ -256,6 +259,7 @@ AC_CONFIG_FILES([
 	tests/zfs-tests/tests/functional/cli_root/zfs_destroy/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zfs_diff/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zfs_get/Makefile
+	tests/zfs-tests/tests/functional/cli_root/zfs_ids_to_path/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zfs_inherit/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zfs_load-key/Makefile
 	tests/zfs-tests/tests/functional/cli_root/zfs_mount/Makefile
