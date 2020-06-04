@@ -162,6 +162,7 @@ SYSCTL_INT(_vfs_zfs_vol, OID_AUTO, unmap_enabled, CTLFLAG_RWTUN,
  */
 int zvol_maxphys = DMU_MAX_ACCESS / 2;
 
+static void zvol_done(struct bio *bp, int err);
 static void zvol_ensure_zilog(zvol_state_t *zv);
 static void zvol_ensure_zilog_async(zvol_state_t *zv);
 
@@ -201,9 +202,8 @@ static int zvol_geom_access(struct g_provider *pp, int acr, int acw, int ace);
 static void zvol_geom_worker(void *arg);
 static void zvol_geom_bio_start(struct bio *bp);
 static int zvol_geom_bio_getattr(struct bio *bp);
-static void zvol_geom_bio_check_zilog(struct bio *bp);
-static int zvol_geom_bio_delete(zvol_state_t *zv, struct bio *bp);
-static void zvol_geom_bio_readwrite(zvol_state_t *zv, struct bio *bp);
+static void zvol_geom_bio_sync(zvol_state_t *zv, struct bio *bp);
+static void zvol_geom_bio_async(zvol_state_t *zv, struct bio *bp);
 
 /* static d_strategy_t	zvol_geom_bio_strategy; (declared elsewhere) */
 
@@ -247,9 +247,8 @@ retry:
 		 * We need to guarantee that the namespace lock is held
 		 * to avoid spurious failures in zvol_first_open
 		 */
-		int locked = mutex_tryenter(&spa_namespace_lock);
 		drop_namespace = B_TRUE;
-		if (!locked) {
+		if (!mutex_tryenter(&spa_namespace_lock)) {
 			rw_exit(&zvol_state_lock);
 			mutex_enter(&spa_namespace_lock);
 			goto retry;
@@ -486,43 +485,15 @@ zvol_geom_access(struct g_provider *pp, int acr, int acw, int ace)
 }
 
 static void
-zvol_done(struct bio *bp, int err)
-{
-	if (bp->bio_to)
-		g_io_deliver(bp, err);
-	else
-		biofinish(bp, NULL, err);
-}
-
-static void
 zvol_process_bio(zvol_state_t *zv, struct bio *bp)
 {
-	int err;
-
 	switch (bp->bio_cmd) {
 	case BIO_READ:
 	case BIO_WRITE:
-		zvol_geom_bio_readwrite(zv, bp);
-		return;
+		return (zvol_geom_bio_async(zv, bp));
 	default:
-		break;
+		return (zvol_geom_bio_sync(zv, bp));
 	}
-	rw_enter(&zv->zv_suspend_lock, ZVOL_RW_READER);
-	zvol_geom_bio_check_zilog(bp);
-	err = 0;
-	switch (bp->bio_cmd) {
-	case BIO_FLUSH:
-		zil_commit(zv->zv_zilog, ZVOL_OBJ);
-		break;
-	case BIO_DELETE:
-		err = zvol_geom_bio_delete(zv, bp);
-		break;
-	default:
-		err = EOPNOTSUPP;
-		break;
-	}
-	rw_exit(&zv->zv_suspend_lock);
-	zvol_done(bp, err);
 }
 
 static void
@@ -570,20 +541,6 @@ zvol_geom_bio_start(struct bio *bp)
 		return;
 	}
 
-#ifdef notyet
-	/*
-	 * The underlying code is to dependent on zio_wait
-	 * to work in a non-sleepable context
-	 */
-	switch (bp->bio_cmd) {
-	case BIO_READ:
-	case BIO_WRITE:
-		zvol_geom_bio_readwrite(zv, bp);
-		return;
-	default:
-		;
-	}
-#endif
 	if (!THREAD_CAN_SLEEP()) {
 		mtx_lock(&zsg->zsg_queue_mtx);
 		first = (bioq_first(&zsg->zsg_queue) == NULL);
@@ -634,31 +591,27 @@ zvol_geom_bio_getattr(struct bio *bp)
 }
 
 static void
-zvol_geom_bio_check_zilog(struct bio *bp)
-{
-	zvol_state_t *zv;
-
-	zv = bp->bio_to->private;
-	ASSERT(zv != NULL);
-
-	switch (bp->bio_cmd) {
-	case BIO_FLUSH:
-	case BIO_WRITE:
-	case BIO_DELETE:
-		zvol_ensure_zilog(zv);
-	default:
-		break;
-	}
-}
-
-static int
-zvol_geom_bio_delete(zvol_state_t *zv, struct bio *bp)
+zvol_geom_bio_sync(zvol_state_t *zv, struct bio *bp)
 {
 	zfs_locked_range_t *lr;
 	uint64_t off, volsize;
 	boolean_t sync;
 	size_t resid;
 	int error = 0;
+
+	rw_enter(&zv->zv_suspend_lock, ZVOL_RW_READER);
+
+	switch (bp->bio_cmd) {
+	case BIO_DELETE:
+	case BIO_FLUSH:
+		zvol_ensure_zilog(zv);
+		if (bp->bio_cmd == BIO_FLUSH)
+			goto sync;
+		break;
+	default:
+		error = SET_ERROR(EOPNOTSUPP);
+		goto resume;
+	}
 
 	sync = (zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS);
 	off = bp->bio_offset;
@@ -686,17 +639,21 @@ zvol_geom_bio_delete(zvol_state_t *zv, struct bio *bp)
 
 	bp->bio_completed = bp->bio_length - resid;
 	if (bp->bio_completed < bp->bio_length && off > volsize)
-		error = EINVAL;
+		error = SET_ERROR(EINVAL);
 
-	if (sync)
+	if (sync) {
+sync:
 		zil_commit(zv->zv_zilog, ZVOL_OBJ);
-	return (error);
+	}
+resume:
+	rw_exit(&zv->zv_suspend_lock);
+	zvol_done(bp, error);
 }
 
 /*
  * Use another layer on top of zvol_dmu_state_t to provide additional
- * context specific to zvol_freebsd_strategy(), namely, the bio and the done
- * callback, which calls zvol_dmu_done, as is done for zvol_dmu_state_t.
+ * context specific to FreeBSD, namely, the bio and the done callback,
+ * which calls zvol_dmu_done, as is done for zvol_dmu_state_t.
  */
 typedef struct zvol_strategy_state {
 	zvol_dmu_state_t zds;
@@ -738,7 +695,7 @@ zvol_strategy_dmu_done(dmu_ctx_t *dc)
 }
 
 static void
-zvol_geom_bio_readwrite(zvol_state_t *zv, struct bio *bp)
+zvol_geom_bio_async(zvol_state_t *zv, struct bio *bp)
 {
 	zvol_strategy_state_t *zss;
 	int error = 0;
@@ -1169,6 +1126,15 @@ zvol_cdev_ioctl(struct cdev *dev, ulong_t cmd, caddr_t data,
 /*
  * Misc. helpers
  */
+
+static void
+zvol_done(struct bio *bp, int err)
+{
+	if (bp->bio_to)
+		g_io_deliver(bp, err);
+	else
+		biofinish(bp, NULL, err);
+}
 
 static void
 zvol_ensure_zilog(zvol_state_t *zv)
