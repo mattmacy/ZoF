@@ -220,7 +220,8 @@ dmu_tx_check_ioerr(zio_t *zio, dnode_t *dn, int level, uint64_t blkid)
 
 /* ARGSUSED */
 static void
-dmu_tx_count_write(dmu_tx_hold_t *txh, uint64_t off, uint64_t len)
+dmu_tx_count_write(dmu_tx_hold_t *txh, uint64_t off, uint64_t len,
+    boolean_t sync)
 {
 	dnode_t *dn = txh->txh_dnode;
 	int err = 0;
@@ -233,7 +234,7 @@ dmu_tx_count_write(dmu_tx_hold_t *txh, uint64_t off, uint64_t len)
 	if (zfs_refcount_count(&txh->txh_space_towrite) > 2 * DMU_MAX_ACCESS)
 		err = SET_ERROR(EFBIG);
 
-	if (dn == NULL)
+	if (dn == NULL || sync == B_FALSE)
 		return;
 
 	/*
@@ -311,13 +312,14 @@ dmu_tx_hold_write(dmu_tx_t *tx, uint64_t object, uint64_t off, int len)
 	txh = dmu_tx_hold_object_impl(tx, tx->tx_objset,
 	    object, THT_WRITE, off, len);
 	if (txh != NULL) {
-		dmu_tx_count_write(txh, off, len);
+		dmu_tx_count_write(txh, off, len, B_TRUE);
 		dmu_tx_count_dnode(txh);
 	}
 }
 
 void
-dmu_tx_hold_write_by_dnode(dmu_tx_t *tx, dnode_t *dn, uint64_t off, int len)
+dmu_tx_hold_write_by_dnode(dmu_tx_t *tx, dnode_t *dn, uint64_t off, int len,
+    boolean_t sync)
 {
 	dmu_tx_hold_t *txh;
 
@@ -327,7 +329,7 @@ dmu_tx_hold_write_by_dnode(dmu_tx_t *tx, dnode_t *dn, uint64_t off, int len)
 
 	txh = dmu_tx_hold_dnode_impl(tx, dn, THT_WRITE, off, len);
 	if (txh != NULL) {
-		dmu_tx_count_write(txh, off, len);
+		dmu_tx_count_write(txh, off, len, sync);
 		dmu_tx_count_dnode(txh);
 	}
 }
@@ -375,14 +377,14 @@ dmu_tx_hold_free_impl(dmu_tx_hold_t *txh, uint64_t off, uint64_t len)
 	 */
 	if (dn->dn_datablkshift == 0) {
 		if (off != 0 || len < dn->dn_datablksz)
-			dmu_tx_count_write(txh, 0, dn->dn_datablksz);
+			dmu_tx_count_write(txh, 0, dn->dn_datablksz, B_TRUE);
 	} else {
 		/* first block will be modified if it is not aligned */
 		if (!IS_P2ALIGNED(off, 1 << dn->dn_datablkshift))
-			dmu_tx_count_write(txh, off, 1);
+			dmu_tx_count_write(txh, off, 1, B_TRUE);
 		/* last block will be modified if it is not aligned */
 		if (!IS_P2ALIGNED(off + len, 1 << dn->dn_datablkshift))
-			dmu_tx_count_write(txh, off + len, 1);
+			dmu_tx_count_write(txh, off + len, 1, B_TRUE);
 	}
 
 	/*
