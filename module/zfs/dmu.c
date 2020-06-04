@@ -1909,15 +1909,6 @@ dmu_write(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 	dmu_write_impl(/* dnode */ NULL, os, object, offset, size, buf, tx, 0);
 }
 
-void
-dmu_write_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size,
-    const void *buf, dmu_tx_t *tx)
-{
-
-	dmu_write_impl(dn, dn->dn_objset, dn->dn_object, offset, size, buf,
-	    tx, 0);
-}
-
 int
 dmu_prealloc(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
     dmu_tx_t *tx)
@@ -3148,7 +3139,6 @@ EXPORT_SYMBOL(dmu_free_long_object);
 EXPORT_SYMBOL(dmu_read);
 EXPORT_SYMBOL(dmu_read_by_dnode);
 EXPORT_SYMBOL(dmu_write);
-EXPORT_SYMBOL(dmu_write_by_dnode);
 EXPORT_SYMBOL(dmu_prealloc);
 EXPORT_SYMBOL(dmu_object_info);
 EXPORT_SYMBOL(dmu_object_info_from_dnode);
