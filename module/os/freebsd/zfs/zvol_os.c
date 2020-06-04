@@ -882,7 +882,7 @@ zvol_cdev_write(struct cdev *dev, struct uio *uio, int ioflag)
 		if (bytes > volsize - off)	/* don't write past the end */
 			bytes = volsize - off;
 
-		dmu_tx_hold_write_by_dnode(tx, zv->zv_dn, off, bytes);
+		dmu_tx_hold_write_by_dnode(tx, zv->zv_dn, off, bytes, B_TRUE);
 		error = dmu_tx_assign(tx, TXG_WAIT);
 		if (error) {
 			dmu_tx_abort(tx);

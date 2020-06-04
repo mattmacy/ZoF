@@ -1685,7 +1685,7 @@ flush_write_batch_impl(struct receive_writer_arg *rwa)
 	dmu_tx_t *tx = dmu_tx_create(rwa->os);
 	dmu_tx_hold_write_by_dnode(tx, dn, first_drrw->drr_offset,
 	    last_drrw->drr_offset - first_drrw->drr_offset +
-	    last_drrw->drr_logical_size);
+	    last_drrw->drr_logical_size, B_TRUE);
 	err = dmu_tx_assign(tx, TXG_WAIT);
 	if (err != 0) {
 		dmu_tx_abort(tx);

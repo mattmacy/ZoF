@@ -144,7 +144,7 @@ zvol_write(void *arg)
 		if (bytes > volsize - off)	/* don't write past the end */
 			bytes = volsize - off;
 
-		dmu_tx_hold_write_by_dnode(tx, zv->zv_dn, off, bytes);
+		dmu_tx_hold_write_by_dnode(tx, zv->zv_dn, off, bytes, B_TRUE);
 
 		/* This will only fail for ENOSPC */
 		error = dmu_tx_assign(tx, TXG_WAIT);
