@@ -47,6 +47,7 @@ AC_CONFIG_HEADERS([zfs_config.h], [
 
 AC_PROG_INSTALL
 AC_PROG_CC
+AC_PROG_CXX
 AC_PROG_LIBTOOL
 PKG_PROG_PKG_CONFIG
 AM_PROG_AS
@@ -77,6 +78,7 @@ AC_CONFIG_FILES([
 	cmd/zed/zed.d/Makefile
 	cmd/zfs/Makefile
 	cmd/zfs_ids_to_path/Makefile
+	cmd/zfsd/Makefile
 	cmd/zgenhostid/Makefile
 	cmd/zhack/Makefile
 	cmd/zinject/Makefile
