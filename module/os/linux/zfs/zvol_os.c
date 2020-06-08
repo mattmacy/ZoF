@@ -330,10 +330,10 @@ zvol_strategy_dmu_done(dmu_ctx_t *dc)
 	reader = !!(dc->dc_flags & DMU_CTX_FLAG_READ);
 
 	if (reader) {
-		dataset_kstats_update_read_kstats(&zv->zv_zso->zvo_kstat, len);
+		dataset_kstats_update_read_kstats(&zv->zv_kstat, len);
 		task_io_account_read(len);
 	} else {
-		dataset_kstats_update_write_kstats(&zv->zv_zso->zvo_kstat, len);
+		dataset_kstats_update_write_kstats(&zv->zv_kstat, len);
 		task_io_account_write(len);
 
 	}
