@@ -613,7 +613,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 		    dc->dc_tag, &db, dc->dc_dn_offset, &dbs->dbs_ctx,
 		    dbs->dbs_resid, async_zio, dmu_issue_restart);
 
-		if (err == EWOULDBLOCK) {
+		if (err == EINPROGRESS) {
 			ASSERT(dc->dc_flags & DMU_CTX_FLAG_ASYNC);
 			return (err);
 		}
@@ -812,7 +812,7 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	err = dmu_buf_set_setup_buffers(dbs, restarted);
 	if (err  == 0) {
 		*buf_set_p = dbs;
-	} else  if (err == EWOULDBLOCK) {
+	} else  if (err == EINPROGRESS) {
 		rw_exit(&dn->dn_struct_rwlock);
 		return (err);
 	} else {
@@ -928,7 +928,7 @@ dmu_issue(dmu_ctx_t *dc)
 		dprintf("%s(%p@%lu+%lu) chunk %lu\n", __func__, dc,
 		    dc->dc_dn_offset, dc->dc_resid, io_size);
 		err = dmu_buf_set_init(dc, &dbs, io_size);
-		if (err == EWOULDBLOCK)
+		if (err == EINPROGRESS)
 			return (0);
 		/* Process the I/O requests, if the initialization passed. */
 		if (err == 0) {
@@ -980,7 +980,7 @@ dmu_issue_restart(dmu_buf_ctx_t *dbs_ctx, int err)
 		dprintf("%s(%p@%lu+%lu) chunk %lu\n", __func__, dc,
 		    dc->dc_dn_offset, dc->dc_resid, io_size);
 		err = dmu_buf_set_init(dc, &dbs, io_size);
-		if (err == EWOULDBLOCK)
+		if (err == EINPROGRESS)
 			return;
 		/* Process the I/O requests, if the initialization passed. */
 		if (err == 0)

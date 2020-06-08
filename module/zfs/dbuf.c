@@ -1699,11 +1699,11 @@ dbuf_read_(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags,
 	} else if (db->db_state == DB_UNCACHED) {
 		spa_t *spa = dn->dn_objset->os_spa;
 		boolean_t need_wait = B_FALSE;
-		boolean_t do_ewouldblock = B_FALSE;
+		boolean_t do_einprogress = B_FALSE;
 
 		db_lock_type_t dblt = dmu_buf_lock_parent(db, RW_READER, FTAG);
 
-		do_ewouldblock  = (buf_ctx != NULL &&
+		do_einprogress  = (buf_ctx != NULL &&
 		    db->db_blkptr != NULL && !BP_IS_HOLE(db->db_blkptr));
 
 		if (zio == NULL &&
@@ -1711,7 +1711,7 @@ dbuf_read_(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags,
 			zio = zio_root(spa, NULL, NULL, ZIO_FLAG_CANFAIL);
 			need_wait = B_TRUE;
 		}
-		if (do_ewouldblock) {
+		if (do_einprogress) {
 			ASSERT(zio != NULL);
 			dmu_buf_ctx_node_add(&db->db_buf_ctxs, buf_ctx, buf_cb);
 		}
@@ -1727,8 +1727,8 @@ dbuf_read_(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags,
 
 		DB_DNODE_EXIT(db);
 		DBUF_STAT_BUMP(hash_misses);
-		if (do_ewouldblock)
-			return (EWOULDBLOCK);
+		if (do_einprogress)
+			return (EINPROGRESS);
 
 		/*
 		 * If we created a zio_root we must execute it to avoid
