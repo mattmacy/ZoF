@@ -357,6 +357,7 @@ typedef struct dmu_buf {
 struct dmu_ctx;
 struct dmu_buf_set;
 struct zio;
+struct zfs_locked_range;
 typedef void (*dmu_ctx_cb_t)(struct dmu_ctx *);
 typedef void (*dmu_buf_set_cb_t)(struct dmu_buf_set *);
 typedef uint64_t (*dmu_buf_transfer_cb_t)(struct dmu_buf_set *, dmu_buf_t *,
@@ -371,6 +372,7 @@ typedef enum {
 	DMU_CTX_FLAG_NOFILL	= 1 << 6,
 	DMU_CTX_FLAG_ASYNC	= 1 << 7,
 	DMU_CTX_FLAG_NODECRYPT	= 1 << 8,
+	DMU_CTX_FLAG_PAGES	= 1 << 9,
 	DMU_CTX_WRITER_FLAGS	= DMU_CTX_FLAG_SUN_PAGES,
 	DMU_CTX_READER_FLAGS	= DMU_CTX_FLAG_PREFETCH
 } dmu_ctx_flag_t;
@@ -396,6 +398,10 @@ typedef struct dmu_ctx {
 
 	objset_t *dc_os;	/* Object set associated with the dnode. */
 	uint64_t dc_object;	/* Object ID associated with the dnode. */
+
+	/* DEBUG */
+	struct zfs_locked_range *dc_lr; /* associated locked range */
+	struct dmu_buf_set *dc_dbs;
 
 	/* Number of buffer sets left to complete. */
 	zfs_refcount_t dc_holds;
@@ -445,6 +451,10 @@ enum dmu_buf_ctx_type {
 	DBC_DBUF_HOLD
 };
 
+enum dmu_buf_ctx_flags {
+	DBC_ENQUEUED = 1 << 2,
+};
+
 typedef struct dmu_buf_ctx {
 	uint32_t dbc_flags;
 	uint8_t dbc_type;
@@ -482,6 +492,8 @@ typedef struct dmu_buf_set {
 	/* number of buffers held so far */
 	int dbs_async_holds;
 
+	kthread_t *dbs_owner; /* thread context */
+
 	/* The ZIO associated with this context. */
 	struct zio *dbs_zio;
 
@@ -503,8 +515,10 @@ void dmu_buf_set_transfer_write(dmu_buf_set_t *dbs);
 static inline boolean_t
 dmu_ctx_buf_is_char(dmu_ctx_t *dc)
 {
-	return ((dc->dc_flags & (DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_SUN_PAGES)) ?
-	    B_FALSE : B_TRUE);
+	int flags = DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_SUN_PAGES|
+	    DMU_CTX_FLAG_PAGES;
+
+	return ((dc->dc_flags & flags) ? B_FALSE : B_TRUE);
 }
 
 /* Optional context setters; use after calling dmu_ctx_init*(). */

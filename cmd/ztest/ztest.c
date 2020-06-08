@@ -4619,7 +4619,6 @@ ztest_dmu_read_write(ztest_ds_t *zd, uint64_t id)
 	umem_free(od, size);
 }
 
-static void
 typedef struct ztest_dmu_ctx {
 	/* must be first for callback to find rest of context */
 	dmu_ctx_t	zdc_dc;
@@ -4930,7 +4929,7 @@ done:
 	mutex_destroy(&zd_lock);
 }
 
-void
+static void
 compare_and_update_pbbufs(uint64_t s, bufwad_t *packbuf, bufwad_t *bigbuf,
     uint64_t bigsize, uint64_t n, uint64_t chunksize, uint64_t txg)
 {

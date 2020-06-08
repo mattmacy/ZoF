@@ -307,6 +307,28 @@ typedef struct zvol_strategy_state {
 	uio_t uio;
 } zvol_strategy_state_t;
 
+
+static void
+zvol_strategy_epilogue(void *arg)
+{
+	zvol_strategy_state_t *zss = arg;
+	dmu_ctx_t *dc = arg;
+	zv_request_t *zr = zss->zr;
+	zvol_state_t *zv = zr->zv;
+	int err;
+	boolean_t reader;
+
+	reader = !!(dc->dc_flags & DMU_CTX_FLAG_READ);
+	err = dc->dc_err;
+	blk_generic_end_io_acct(zv->zv_zso->zvo_queue, reader ? READ : WRITE,
+	    &zv->zv_zso->zvo_disk->part0, zss->start_jif);
+	BIO_END_IO(zr->bio, -err);
+	ASSERT(atomic_read(&zv->zv_suspend_ref) > 0);
+	atomic_dec(&zv->zv_suspend_ref);
+	kmem_free(zr, sizeof (zv_request_t));
+	kmem_free(zss, sizeof (zvol_strategy_state_t));
+}
+
 static void
 zvol_strategy_dmu_done(dmu_ctx_t *dc)
 {
@@ -326,25 +348,21 @@ zvol_strategy_dmu_done(dmu_ctx_t *dc)
 	else
 		len = dc->dc_size;
 
-	err = dc->dc_err;
 	reader = !!(dc->dc_flags & DMU_CTX_FLAG_READ);
 
 	if (reader) {
-		dataset_kstats_update_read_kstats(&zv->zv_zso->zvo_kstat, len);
+		dataset_kstats_update_read_kstats(&zv->zv_kstat, len);
 		task_io_account_read(len);
 	} else {
-		dataset_kstats_update_write_kstats(&zv->zv_zso->zvo_kstat, len);
+		dataset_kstats_update_write_kstats(&zv->zv_kstat, len);
 		task_io_account_write(len);
 
 	}
-	zvol_dmu_done(dc);
+	err = zvol_dmu_done(dc, zvol_strategy_epilogue, dc);
 	rw_exit(&zv->zv_suspend_lock);
-
-	blk_generic_end_io_acct(zv->zv_zso->zvo_queue, reader ? READ : WRITE,
-	    &zv->zv_zso->zvo_disk->part0, zss->start_jif);
-	BIO_END_IO(zr->bio, -err);
-	kmem_free(zr, sizeof (zv_request_t));
-	kmem_free(zss, sizeof (zvol_strategy_state_t));
+	if (err == EINPROGRESS)
+		return;
+	zvol_strategy_epilogue(dc);
 }
 
 static void
@@ -358,12 +376,13 @@ zvol_strategy(void *arg)
 	struct bio *bio = zr->bio;
 	int rw, error;
 
-	/*
-	 * There is no readily apparent way to make zil_commit async
-	 */
-	if (bio_is_flush(bio))
-		zil_commit(zr->zv->zv_zilog, ZVOL_OBJ);
-
+	if (bio_is_flush(bio) && !zr->flushed) {
+		zr->flushed = B_TRUE;
+		int rc = zil_commit_async(zv->zv_zilog, ZVOL_OBJ,
+		    zvol_strategy, arg);
+		if (rc == EINPROGRESS)
+			return;
+	}
 	/* Some requests are just for flush and nothing else. */
 	if (BIO_BI_SIZE(bio) == 0) {
 		rw_exit(&zv->zv_suspend_lock);
@@ -389,6 +408,8 @@ zvol_strategy(void *arg)
 
 	error = zvol_dmu_ctx_init(&zss->zds, uio, uio->uio_loffset,
 	    uio->uio_resid, dmu_flags, zvol_strategy_dmu_done);
+	if (error == EINPROGRESS)
+		return;
 	if (error) {
 		zss->zds.zds_dc.dc_err = error;
 		zvol_strategy_dmu_done(&zss->zds.zds_dc);

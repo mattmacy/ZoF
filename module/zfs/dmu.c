@@ -195,16 +195,24 @@ DEBUG_REFCOUNT(_vfs_zfs_dmu, buf_set_in_flight, "Buffer sets in flight");
 /* Used for TSD for processing completed asynchronous I/Os. */
 uint_t zfs_async_io_key;
 
-void
-dmu_buf_ctx_node_add(list_t *list, dmu_buf_ctx_t *ctx, dmu_buf_ctx_cb_t cb)
+static void
+dmu_buf_ctx_node_add_err(list_t *list, dmu_buf_ctx_t *ctx, dmu_buf_ctx_cb_t cb,
+    int err)
 {
 	dmu_buf_ctx_node_t *dbsn = kmem_zalloc(sizeof (dmu_buf_ctx_node_t),
 	    KM_SLEEP);
 	list_link_init(&dbsn->dbsn_link);
 	dbsn->dbsn_ctx = ctx;
 	dbsn->dbsn_cb = cb;
+	dbsn->dbsn_err = err;
 	list_insert_tail(list, dbsn);
 	DEBUG_REFCOUNT_ADD(dbsn_in_flight);
+}
+
+void
+dmu_buf_ctx_node_add(list_t *list, dmu_buf_ctx_t *ctx, dmu_buf_ctx_cb_t cb)
+{
+	dmu_buf_ctx_node_add_err(list, ctx, cb, 0);
 }
 
 void
@@ -410,6 +418,12 @@ dmu_ctx_rele(dmu_ctx_t *dmu_ctx)
 	    (dmu_ctx->dc_dn != NULL))
 		dnode_rele(dmu_ctx->dc_dn, dmu_ctx->dc_tag);
 
+	if (dmu_ctx->dc_lr != NULL) {
+		ASSERT(dmu_ctx->dc_lr->lr_context == dmu_ctx);
+		dmu_ctx->dc_lr->lr_context = NULL;
+		dmu_ctx->dc_lr->lr_owner = curthread;
+	}
+
 	/* At this point, there are no buffer sets left.  Call back. */
 	if (dmu_ctx->dc_complete_cb != NULL)
 		dmu_ctx->dc_complete_cb(dmu_ctx);
@@ -423,18 +437,19 @@ dmu_ctx_rele(dmu_ctx_t *dmu_ctx)
  *       dmu_buf_set's elements doesn't need a lock.
  */
 static void
-dmu_buf_set_ready(dmu_buf_ctx_t *dbs_ctx)
+dmu_buf_set_ready(dmu_buf_ctx_t *dbs_ctx, int err)
 {
 	dmu_buf_set_t *dbs = (dmu_buf_set_t *)dbs_ctx;
 	dmu_ctx_t *dc = dbs->dbs_dc;
 
 	/* Only perform I/O if no errors occurred for the buffer set. */
-	if (dbs->dbs_err == 0) {
+	if (err == 0) {
 		dc->dc_buf_set_transfer_cb(dbs);
 		if (dbs->dbs_err == 0)
 			atomic_add_64(&dc->dc_completed_size, dbs->dbs_size);
+		err = dbs->dbs_err;
 	}
-	dmu_ctx_set_error(dc, dbs->dbs_err);
+	dmu_ctx_set_error(dc, err);
 
 	for (int i = 0; i < dbs->dbs_count; i++) {
 		dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbs->dbs_dbp[i];
@@ -444,6 +459,7 @@ dmu_buf_set_ready(dmu_buf_ctx_t *dbs_ctx)
 	}
 
 	DEBUG_REFCOUNT_DEC(buf_set_in_flight);
+	ASSERT(dbs_ctx->dbc_flags == 0);
 	kmem_free(dbs, sizeof (dmu_buf_set_t) +
 	    dbs->dbs_dbp_length * sizeof (dmu_buf_t *));
 	dmu_ctx_rele(dc);
@@ -497,6 +513,9 @@ dmu_thread_context_process(void)
 {
 	dmu_cb_state_t *dcs = tsd_get(zfs_async_io_key);
 	dmu_buf_ctx_node_t *dbsn, *next;
+	dmu_buf_ctx_cb_t cb;
+	dmu_buf_ctx_t *ctx;
+	int err;
 
 	/*
 	 * If the current thread didn't register, it doesn't handle queued
@@ -505,12 +524,17 @@ dmu_thread_context_process(void)
 	 */
 	if (dcs == NULL)
 		return;
-
+retry:
 	for (dbsn = list_head(&dcs->dcs_io_list); dbsn != NULL; dbsn = next) {
+		ctx = dbsn->dbsn_ctx;
+		cb = dbsn->dbsn_cb;
+		err = dbsn->dbsn_err;
 		next = list_next(&dcs->dcs_io_list, dbsn);
-		dmu_buf_set_ready(dbsn->dbsn_ctx);
 		dmu_buf_ctx_node_remove(&dcs->dcs_io_list, dbsn);
+		cb(ctx, err);
 	}
+	if (!list_is_empty(&dcs->dcs_io_list))
+		goto retry;
 }
 
 /*
@@ -533,8 +557,6 @@ dmu_buf_set_rele(dmu_buf_ctx_t *dbs_ctx, int err)
 	if (dbs == NULL)
 		return;
 	/* Report an error, if any. */
-	if (err)
-		dmu_buf_set_set_error(dbs, err);
 	dmu_ctx = dbs->dbs_dc;
 	if ((dmu_ctx->dc_flags & (DMU_CTX_FLAG_ASYNC|DMU_CTX_FLAG_READ)) ==
 	    DMU_CTX_FLAG_READ && zfs_refcount_count(&dbs->dbs_holds) > 1) {
@@ -554,15 +576,16 @@ dmu_buf_set_rele(dmu_buf_ctx_t *dbs_ctx, int err)
 
 	dcs = tsd_get(zfs_async_io_key);
 	if (dcs != NULL && (dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC)) {
-		dmu_buf_ctx_node_add(&dcs->dcs_io_list, &dbs->dbs_ctx,
-		    dmu_buf_set_rele);
+		dbs->dbs_owner = curthread;
+		dmu_buf_ctx_node_add_err(&dcs->dcs_io_list, &dbs->dbs_ctx,
+		    dmu_buf_set_ready, err);
 	} else {
 		/*
 		 * The current thread doesn't have anything
 		 * registered in its TSD, so it must not handle
 		 * queued delivery.  Dispatch this set now.
 		 */
-		dmu_buf_set_ready(&dbs->dbs_ctx);
+		dmu_buf_set_ready(&dbs->dbs_ctx, err);
 	}
 }
 
@@ -613,7 +636,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 		    dc->dc_tag, &db, dc->dc_dn_offset, &dbs->dbs_ctx,
 		    dbs->dbs_resid, async_zio, dmu_issue_restart);
 
-		if (err == EWOULDBLOCK) {
+		if (err == EINPROGRESS) {
 			ASSERT(dc->dc_flags & DMU_CTX_FLAG_ASYNC);
 			return (err);
 		}
@@ -643,6 +666,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 		/* Update the caller's data to let them know what's next. */
 		dc->dc_dn_offset += bufsiz;
 		dc->dc_resid -= bufsiz;
+		dc->dc_dbs = dbs;
 		/* Put this dbuf in the buffer set's list. */
 		dbs->dbs_dbp[i] = &db->db;
 	}
@@ -812,7 +836,7 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	err = dmu_buf_set_setup_buffers(dbs, restarted);
 	if (err  == 0) {
 		*buf_set_p = dbs;
-	} else  if (err == EWOULDBLOCK) {
+	} else  if (err == EINPROGRESS) {
 		rw_exit(&dn->dn_struct_rwlock);
 		return (err);
 	} else {
@@ -928,7 +952,7 @@ dmu_issue(dmu_ctx_t *dc)
 		dprintf("%s(%p@%lu+%lu) chunk %lu\n", __func__, dc,
 		    dc->dc_dn_offset, dc->dc_resid, io_size);
 		err = dmu_buf_set_init(dc, &dbs, io_size);
-		if (err == EWOULDBLOCK)
+		if (err == EINPROGRESS)
 			return (0);
 		/* Process the I/O requests, if the initialization passed. */
 		if (err == 0) {
@@ -980,7 +1004,7 @@ dmu_issue_restart(dmu_buf_ctx_t *dbs_ctx, int err)
 		dprintf("%s(%p@%lu+%lu) chunk %lu\n", __func__, dc,
 		    dc->dc_dn_offset, dc->dc_resid, io_size);
 		err = dmu_buf_set_init(dc, &dbs, io_size);
-		if (err == EWOULDBLOCK)
+		if (err == EINPROGRESS)
 			return;
 		/* Process the I/O requests, if the initialization passed. */
 		if (err == 0)
@@ -1207,7 +1231,7 @@ dmu_write_async(dmu_ctx_t *dc, objset_t *os, uint64_t object, uint64_t offset,
 	    buf, /* flags */ 0, tx, done_cb));
 }
 
-int
+static int
 dmu_buf_hold_noread_by_dnode(dnode_t *dn, uint64_t offset,
     void *tag, dmu_buf_t **dbp)
 {
