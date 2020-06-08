@@ -334,8 +334,7 @@ dmu_buf_transfer_write(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
 	if (sz == db->db_size)
 		dmu_buf_will_fill(db, tx);
 	else
-		dmu_buf_will_dirty(db, tx);
-	// dmu_buf_will_dirty_range(db, tx, off, sz);
+		dmu_buf_will_dirty_range(db, tx, off, sz);
 	adv = dbs->dbs_dc->dc_data_transfer_cb(dbs, db, off, sz);
 	/* XXX -- need to handle error condition */
 	dmu_buf_fill_done(db, tx);
@@ -610,8 +609,8 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 		db = NULL;
 
 		int err = dbuf_hold_level_async(dn, /* level */ 0, blkid + i,
-		    dc->dc_tag, &db, dc->dc_dn_offset, &dbs->dbs_ctx,
-		    dbs->dbs_resid, async_zio, dmu_issue_restart);
+		    dc->dc_tag, &db, &dbs->dbs_ctx,
+		    async_zio, dmu_issue_restart);
 
 		if (err == EWOULDBLOCK) {
 			ASSERT(dc->dc_flags & DMU_CTX_FLAG_ASYNC);
@@ -636,8 +635,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 		dbs->dbs_resid -= bufsiz;
 
 		/* initiate async i/o */
-		if (read || (bufsiz != db->db.db_size &&
-		    db->db_state != DB_CACHED))
+		if (read)
 			(void) dbuf_read(db, dbs->dbs_zio, dbuf_flags);
 
 		/* Update the caller's data to let them know what's next. */
@@ -762,7 +760,7 @@ dmu_buf_set_allocate(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	zfs_refcount_create_untracked(&dbs->dbs_holds);
 
 	/* Include a refcount for the initiator. */
-	if (dmu_ctx->dc_flags & (DMU_CTX_FLAG_READ|DMU_CTX_FLAG_ASYNC))
+	if (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ)
 		zfs_refcount_add_many(&dbs->dbs_holds, nblks + 1, NULL);
 	else
 		/* For synchronous writes, dbufs never need to call us back. */
@@ -821,7 +819,7 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 		set_size = sizeof (dmu_buf_set_t) +
 		    nblks * sizeof (dmu_buf_t *);
 
-		if (dmu_ctx->dc_flags & (DMU_CTX_FLAG_READ|DMU_CTX_FLAG_ASYNC))
+		if (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ)
 			zfs_refcount_destroy_many(&dbs->dbs_holds, nblks + 1);
 		else
 			/* For writes, dbufs never need to call us back. */
