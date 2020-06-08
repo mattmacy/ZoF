@@ -162,7 +162,9 @@ SYSCTL_INT(_vfs_zfs_vol, OID_AUTO, unmap_enabled, CTLFLAG_RWTUN,
  */
 int zvol_maxphys = DMU_MAX_ACCESS / 2;
 
+static void zvol_done(struct bio *bp, int err);
 static void zvol_ensure_zilog(zvol_state_t *zv);
+static void zvol_ensure_zilog_async(zvol_state_t *zv);
 
 static d_open_t		zvol_cdev_open;
 static d_close_t	zvol_cdev_close;
@@ -200,6 +202,9 @@ static int zvol_geom_access(struct g_provider *pp, int acr, int acw, int ace);
 static void zvol_geom_worker(void *arg);
 static void zvol_geom_bio_start(struct bio *bp);
 static int zvol_geom_bio_getattr(struct bio *bp);
+static void zvol_geom_bio_sync(zvol_state_t *zv, struct bio *bp);
+static void zvol_geom_bio_async(zvol_state_t *zv, struct bio *bp);
+
 /* static d_strategy_t	zvol_geom_bio_strategy; (declared elsewhere) */
 
 /*
@@ -213,6 +218,7 @@ zvol_geom_open(struct g_provider *pp, int flag, int count)
 	zvol_state_t *zv;
 	int err = 0;
 	boolean_t drop_suspend = B_TRUE;
+	boolean_t drop_namespace = B_FALSE;
 
 	if (!zpool_on_zvol && tsd_get(zfs_geom_probe_vdev_key) != NULL) {
 		/*
@@ -226,13 +232,28 @@ zvol_geom_open(struct g_provider *pp, int flag, int count)
 		return (SET_ERROR(EOPNOTSUPP));
 	}
 
+
+retry:
 	rw_enter(&zvol_state_lock, ZVOL_RW_READER);
 	zv = pp->private;
 	if (zv == NULL) {
+		if (drop_namespace)
+			mutex_exit(&spa_namespace_lock);
 		rw_exit(&zvol_state_lock);
 		return (SET_ERROR(ENXIO));
 	}
-
+	if (zv->zv_open_count == 0 && !mutex_owned(&spa_namespace_lock)) {
+		/*
+		 * We need to guarantee that the namespace lock is held
+		 * to avoid spurious failures in zvol_first_open
+		 */
+		drop_namespace = B_TRUE;
+		if (!mutex_tryenter(&spa_namespace_lock)) {
+			rw_exit(&zvol_state_lock);
+			mutex_enter(&spa_namespace_lock);
+			goto retry;
+		}
+	}
 	mutex_enter(&zv->zv_state_lock);
 
 	ASSERT(zv->zv_zso->zso_volmode == ZFS_VOLMODE_GEOM);
@@ -276,17 +297,17 @@ zvol_geom_open(struct g_provider *pp, int flag, int count)
 	 */
 	if ((flag & FWRITE) && ((zv->zv_flags & ZVOL_RDONLY) ||
 	    dmu_objset_incompatible_encryption_version(zv->zv_objset))) {
-		err = EROFS;
+		err = SET_ERROR(EROFS);
 		goto out_open_count;
 	}
 	if (zv->zv_flags & ZVOL_EXCL) {
-		err = EBUSY;
+		err = SET_ERROR(EBUSY);
 		goto out_open_count;
 	}
 #ifdef FEXCL
 	if (flag & FEXCL) {
 		if (zv->zv_open_count != 0) {
-			err = EBUSY;
+			err = SET_ERROR(EBUSY);
 			goto out_open_count;
 		}
 		zv->zv_flags |= ZVOL_EXCL;
@@ -294,6 +315,8 @@ zvol_geom_open(struct g_provider *pp, int flag, int count)
 #endif
 
 	zv->zv_open_count += count;
+	if (drop_namespace)
+		mutex_exit(&spa_namespace_lock);
 	mutex_exit(&zv->zv_state_lock);
 	if (drop_suspend)
 		rw_exit(&zv->zv_suspend_lock);
@@ -303,10 +326,12 @@ out_open_count:
 	if (zv->zv_open_count == 0)
 		zvol_last_close(zv);
 out_mutex:
+	if (drop_namespace)
+		mutex_exit(&spa_namespace_lock);
 	mutex_exit(&zv->zv_state_lock);
 	if (drop_suspend)
 		rw_exit(&zv->zv_suspend_lock);
-	return (SET_ERROR(err));
+	return (err);
 }
 
 /*ARGSUSED*/
@@ -460,6 +485,18 @@ zvol_geom_access(struct g_provider *pp, int acr, int acw, int ace)
 }
 
 static void
+zvol_process_bio(zvol_state_t *zv, struct bio *bp)
+{
+	switch (bp->bio_cmd) {
+	case BIO_READ:
+	case BIO_WRITE:
+		return (zvol_geom_bio_async(zv, bp));
+	default:
+		return (zvol_geom_bio_sync(zv, bp));
+	}
+}
+
+static void
 zvol_geom_worker(void *arg)
 {
 	zvol_state_t *zv = arg;
@@ -487,7 +524,7 @@ zvol_geom_worker(void *arg)
 			continue;
 		}
 		mtx_unlock(&zsg->zsg_queue_mtx);
-		zvol_geom_bio_strategy(bp);
+		zvol_process_bio(zv, bp);
 	}
 }
 
@@ -513,8 +550,7 @@ zvol_geom_bio_start(struct bio *bp)
 			wakeup_one(&zsg->zsg_queue);
 		return;
 	}
-
-	zvol_geom_bio_strategy(bp);
+	zvol_process_bio(zv, bp);
 }
 
 static int
@@ -555,127 +591,93 @@ zvol_geom_bio_getattr(struct bio *bp)
 }
 
 static void
-zvol_geom_bio_strategy(struct bio *bp)
+zvol_geom_bio_sync(zvol_state_t *zv, struct bio *bp)
 {
-	zvol_state_t *zv;
-	uint64_t off, volsize;
-	size_t resid;
-	char *addr;
-	objset_t *os;
 	zfs_locked_range_t *lr;
-	int error = 0;
-	boolean_t doread = B_FALSE;
-	boolean_t is_dumpified;
+	uint64_t off, volsize;
 	boolean_t sync;
-
-	if (bp->bio_to)
-		zv = bp->bio_to->private;
-	else
-		zv = bp->bio_dev->si_drv2;
-
-	if (zv == NULL) {
-		error = SET_ERROR(ENXIO);
-		goto out;
-	}
+	size_t resid;
+	int error = 0;
 
 	rw_enter(&zv->zv_suspend_lock, ZVOL_RW_READER);
 
 	switch (bp->bio_cmd) {
-	case BIO_READ:
-		doread = B_TRUE;
-		break;
-	case BIO_WRITE:
-	case BIO_FLUSH:
 	case BIO_DELETE:
-		if (zv->zv_flags & ZVOL_RDONLY) {
-			error = SET_ERROR(EROFS);
-			goto resume;
-		}
+	case BIO_FLUSH:
 		zvol_ensure_zilog(zv);
 		if (bp->bio_cmd == BIO_FLUSH)
 			goto sync;
 		break;
 	default:
-		error = EOPNOTSUPP;
+		error = SET_ERROR(EOPNOTSUPP);
 		goto resume;
 	}
 
+	sync = (zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS);
 	off = bp->bio_offset;
-	volsize = zv->zv_volsize;
-
-	os = zv->zv_objset;
-	ASSERT(os != NULL);
-
-	addr = bp->bio_data;
 	resid = bp->bio_length;
-
-	if (resid > 0 && (off < 0 || off >= volsize)) {
-		error = SET_ERROR(EIO);
-		goto resume;
-	}
-
-	is_dumpified = B_FALSE;
-	sync = !doread && !is_dumpified &&
-	    zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS;
-
+	volsize = zv->zv_volsize;
 	/*
 	 * There must be no buffer changes when doing a dmu_sync() because
 	 * we can't change the data whilst calculating the checksum.
 	 */
 	lr = zfs_rangelock_enter(&zv->zv_rangelock, off, resid,
-	    doread ? RL_READER : RL_WRITER);
+	    RL_WRITER);
 
-	if (bp->bio_cmd == BIO_DELETE) {
-		dmu_tx_t *tx = dmu_tx_create(zv->zv_objset);
-		error = dmu_tx_assign(tx, TXG_WAIT);
-		if (error != 0) {
-			dmu_tx_abort(tx);
-		} else {
-			zvol_log_truncate(zv, tx, off, resid, sync);
-			dmu_tx_commit(tx);
-			error = dmu_free_long_range(zv->zv_objset, ZVOL_OBJ,
-			    off, resid);
-			resid = 0;
-		}
-		goto unlock;
+	dmu_tx_t *tx = dmu_tx_create(zv->zv_objset);
+	error = dmu_tx_assign(tx, TXG_WAIT);
+	if (error != 0) {
+		dmu_tx_abort(tx);
+	} else {
+		zvol_log_truncate(zv, tx, off, resid, sync);
+		dmu_tx_commit(tx);
+		error = dmu_free_long_range(zv->zv_objset, ZVOL_OBJ,
+		    off, resid);
+		resid = 0;
 	}
-	while (resid != 0 && off < volsize) {
-		size_t size = MIN(resid, zvol_maxphys);
-		if (doread) {
-			error = dmu_read(os, ZVOL_OBJ, off, size, addr,
-			    DMU_READ_PREFETCH);
-		} else {
-			dmu_tx_t *tx = dmu_tx_create(os);
-			dmu_tx_hold_write_by_dnode(tx, zv->zv_dn, off, size);
-			error = dmu_tx_assign(tx, TXG_WAIT);
-			if (error) {
-				dmu_tx_abort(tx);
-			} else {
-				dmu_write(os, ZVOL_OBJ, off, size, addr, tx);
-				zvol_log_write(zv, tx, off, size, sync);
-				dmu_tx_commit(tx);
-			}
-		}
-		if (error) {
-			/* convert checksum errors into IO errors */
-			if (error == ECKSUM)
-				error = SET_ERROR(EIO);
-			break;
-		}
-		off += size;
-		addr += size;
-		resid -= size;
-	}
-unlock:
 	zfs_rangelock_exit(lr);
 
 	bp->bio_completed = bp->bio_length - resid;
 	if (bp->bio_completed < bp->bio_length && off > volsize)
-		error = EINVAL;
+		error = SET_ERROR(EINVAL);
+
+	if (sync) {
+sync:
+		zil_commit(zv->zv_zilog, ZVOL_OBJ);
+	}
+resume:
+	rw_exit(&zv->zv_suspend_lock);
+	zvol_done(bp, error);
+}
+
+/*
+ * Use another layer on top of zvol_dmu_state_t to provide additional
+ * context specific to FreeBSD, namely, the bio and the done callback,
+ * which calls zvol_dmu_done, as is done for zvol_dmu_state_t.
+ */
+typedef struct zvol_strategy_state {
+	zvol_dmu_state_t zds;
+	struct bio *bp;
+} zvol_strategy_state_t;
+
+static void
+zvol_strategy_dmu_done(dmu_ctx_t *dc)
+{
+	zvol_strategy_state_t *zss = (zvol_strategy_state_t *)dc;
+	zvol_state_t *zv = zss->zds.zds_zv;
+	struct bio *bp = zss->bp;
+
+	zvol_dmu_done(dc);
+	/*
+	 * Reading zeroes past the end of dnode allocated blocks
+	 * needs to be treated as success
+	 */
+	if (dc->dc_resid_init == dc->dc_size)
+		bp->bio_completed = dc->dc_completed_size;
+	else
+		bp->bio_completed = dc->dc_size;
 
 	switch (bp->bio_cmd) {
-	case BIO_FLUSH:
-		break;
 	case BIO_READ:
 		dataset_kstats_update_read_kstats(&zv->zv_kstat,
 		    bp->bio_completed);
@@ -684,23 +686,65 @@ unlock:
 		dataset_kstats_update_write_kstats(&zv->zv_kstat,
 		    bp->bio_completed);
 		break;
-	case BIO_DELETE:
-		break;
 	default:
 		break;
 	}
 
-	if (sync) {
-sync:
-		zil_commit(zv->zv_zilog, ZVOL_OBJ);
-	}
-resume:
-	rw_exit(&zv->zv_suspend_lock);
-out:
-	if (bp->bio_to)
-		g_io_deliver(bp, error);
+	zvol_done(bp, dc->dc_err);
+	kmem_free(zss, sizeof (zvol_strategy_state_t));
+}
+
+static void
+zvol_geom_bio_async(zvol_state_t *zv, struct bio *bp)
+{
+	zvol_strategy_state_t *zss;
+	int error = 0;
+	uint32_t dmu_flags = DMU_CTX_FLAG_ASYNC;
+
+	if (bp->bio_cmd == BIO_READ)
+		dmu_flags |= DMU_CTX_FLAG_READ;
 	else
-		biofinish(bp, NULL, error);
+		zvol_ensure_zilog_async(zv);
+
+	zss = kmem_zalloc(sizeof (zvol_strategy_state_t), KM_SLEEP);
+	zss->bp = bp;
+	zss->zds.zds_zv = zv;
+
+	error = zvol_dmu_ctx_init(&zss->zds, bp->bio_data, bp->bio_offset,
+	    bp->bio_length, dmu_flags, zvol_strategy_dmu_done);
+	if (error) {
+		kmem_free(zss, sizeof (zvol_strategy_state_t));
+		atomic_dec(&zv->zv_suspend_ref);
+		zvol_done(bp, SET_ERROR(ENXIO));
+		return;
+	}
+
+	/* Errors are reported via the callback. */
+	zvol_dmu_issue(&zss->zds);
+}
+
+static void
+zvol_geom_bio_strategy(struct bio *bp)
+{
+	zvol_state_t *zv;
+
+	if (bp->bio_to)
+		zv = bp->bio_to->private;
+	else
+		zv = bp->bio_dev->si_drv2;
+
+	if (zv == NULL) {
+		zvol_done(bp, SET_ERROR(ENXIO));
+		return;
+	}
+
+	if ((bp->bio_cmd != BIO_READ) &&
+	    (zv->zv_flags & ZVOL_RDONLY)) {
+		zvol_done(bp, SET_ERROR(EROFS));
+		return;
+	}
+
+	zvol_process_bio(zv, bp);
 }
 
 /*
@@ -735,7 +779,7 @@ zvol_cdev_read(struct cdev *dev, struct uio *uio, int ioflag)
 		if (bytes > volsize - uio->uio_loffset)
 			bytes = volsize - uio->uio_loffset;
 
-		error =  dmu_read_uio_dnode(zv->zv_dn, uio, bytes);
+		error = dmu_read_uio_dnode(zv->zv_dn, uio, bytes);
 		if (error) {
 			/* convert checksum errors into IO errors */
 			if (error == ECKSUM)
@@ -852,17 +896,17 @@ zvol_cdev_open(struct cdev *dev, int flags, int fmt, struct thread *td)
 	}
 
 	if ((flags & FWRITE) && (zv->zv_flags & ZVOL_RDONLY)) {
-		err = EROFS;
+		err = SET_ERROR(EROFS);
 		goto out_opened;
 	}
 	if (zv->zv_flags & ZVOL_EXCL) {
-		err = EBUSY;
+		err = SET_ERROR(EBUSY);
 		goto out_opened;
 	}
 #ifdef FEXCL
 	if (flags & FEXCL) {
 		if (zv->zv_open_count != 0) {
-			err = EBUSY;
+			err = SET_ERROR(EBUSY);
 			goto out_opened;
 		}
 		zv->zv_flags |= ZVOL_EXCL;
@@ -889,7 +933,7 @@ out_locked:
 	mutex_exit(&zv->zv_state_lock);
 	if (drop_suspend)
 		rw_exit(&zv->zv_suspend_lock);
-	return (SET_ERROR(err));
+	return (err);
 }
 
 static int
@@ -1004,7 +1048,7 @@ zvol_cdev_ioctl(struct cdev *dev, ulong_t cmd, caddr_t data,
 		    length <= 0) {
 			printf("%s: offset=%jd length=%jd\n", __func__, offset,
 			    length);
-			error = EINVAL;
+			error = SET_ERROR(EINVAL);
 			break;
 		}
 		rw_enter(&zv->zv_suspend_lock, ZVOL_RW_READER);
@@ -1058,7 +1102,7 @@ zvol_cdev_ioctl(struct cdev *dev, ulong_t cmd, caddr_t data,
 			refd = metaslab_class_get_alloc(spa_normal_class(spa));
 			arg->value.off = refd / DEV_BSIZE;
 		} else
-			error = ENOIOCTL;
+			error = SET_ERROR(ENOIOCTL);
 		break;
 	}
 	case FIOSEEKHOLE:
@@ -1074,7 +1118,7 @@ zvol_cdev_ioctl(struct cdev *dev, ulong_t cmd, caddr_t data,
 		break;
 	}
 	default:
-		error = ENOIOCTL;
+		error = SET_ERROR(ENOIOCTL);
 	}
 
 	return (error);
@@ -1083,6 +1127,15 @@ zvol_cdev_ioctl(struct cdev *dev, ulong_t cmd, caddr_t data,
 /*
  * Misc. helpers
  */
+
+static void
+zvol_done(struct bio *bp, int err)
+{
+	if (bp->bio_to)
+		g_io_deliver(bp, err);
+	else
+		biofinish(bp, NULL, err);
+}
 
 static void
 zvol_ensure_zilog(zvol_state_t *zv)
@@ -1106,6 +1159,20 @@ zvol_ensure_zilog(zvol_state_t *zv)
 			zv->zv_flags |= ZVOL_WRITTEN_TO;
 		}
 		rw_downgrade(&zv->zv_suspend_lock);
+	}
+}
+
+static void
+zvol_ensure_zilog_async(zvol_state_t *zv)
+{
+	if (zv->zv_zilog == NULL) {
+		rw_enter(&zv->zv_suspend_lock, RW_WRITER);
+		if (zv->zv_zilog == NULL) {
+			zv->zv_zilog = zil_open(zv->zv_objset,
+			    zvol_get_data);
+			zv->zv_flags |= ZVOL_WRITTEN_TO;
+		}
+		rw_exit(&zv->zv_suspend_lock);
 	}
 }
 
