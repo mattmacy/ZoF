@@ -201,8 +201,6 @@ dmu_buf_ctx_node_add(list_t *list, dmu_buf_ctx_t *ctx, dmu_buf_ctx_cb_t cb)
 	dbsn->dbsn_ctx = ctx;
 	dbsn->dbsn_cb = cb;
 	list_insert_tail(list, dbsn);
-	ASSERT((ctx->dbc_flags & DBC_ENQUEUED) == 0);
-	ctx->dbc_flags |= DBC_ENQUEUED;
 	DEBUG_REFCOUNT_ADD(dbsn_in_flight);
 }
 
@@ -210,7 +208,6 @@ void
 dmu_buf_ctx_node_remove(list_t *list, dmu_buf_ctx_node_t *dbsn)
 {
 	list_remove(list, dbsn);
-	dbsn->dbsn_ctx->dbc_flags &= ~DBC_ENQUEUED;
 	kmem_free(dbsn, sizeof (dmu_buf_ctx_node_t));
 	ASSERT(dbsn_in_flight > 0);
 	DEBUG_REFCOUNT_DEC(dbsn_in_flight);
