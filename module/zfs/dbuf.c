@@ -789,12 +789,16 @@ static void
 dbuf_process_buf_ctxs_(list_t *list, int err, const char *function)
 {
 	dmu_buf_ctx_node_t *dbsn, *next;
+	dmu_buf_ctx_cb_t cb;
+	dmu_buf_ctx_t *ctx;
 	int count = 0;
 
 	for (dbsn = list_head(list); dbsn != NULL; dbsn = next) {
+		ctx = dbsn->dbsn_ctx;
+		cb = dbsn->dbsn_cb;
 		next = list_next(list, dbsn);
-		dbsn->dbsn_cb(dbsn->dbsn_ctx, err);
 		dmu_buf_ctx_node_remove(list, dbsn);
+		cb(ctx, err);
 		count++;
 	}
 #if 0
