@@ -389,7 +389,7 @@ zvol_strategy(void *arg)
 
 	error = zvol_dmu_ctx_init(&zss->zds, uio, uio->uio_loffset,
 	    uio->uio_resid, dmu_flags, zvol_strategy_dmu_done);
-	if (error == EWOULDBLOCK)
+	if (error == EINPROGRESS)
 		return;
 	if (error) {
 		zss->zds.zds_dc.dc_err = error;
