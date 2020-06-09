@@ -201,6 +201,8 @@ dmu_buf_ctx_node_add(list_t *list, dmu_buf_ctx_t *ctx, dmu_buf_ctx_cb_t cb)
 	dbsn->dbsn_ctx = ctx;
 	dbsn->dbsn_cb = cb;
 	list_insert_tail(list, dbsn);
+	ASSERT((ctx->dbc_flags & DBC_ENQUEUED) == 0);
+	ctx->dbc_flags |= DBC_ENQUEUED;
 	DEBUG_REFCOUNT_ADD(dbsn_in_flight);
 }
 
@@ -208,6 +210,7 @@ void
 dmu_buf_ctx_node_remove(list_t *list, dmu_buf_ctx_node_t *dbsn)
 {
 	list_remove(list, dbsn);
+	dbsn->dbsn_ctx->dbc_flags &= ~DBC_ENQUEUED;
 	kmem_free(dbsn, sizeof (dmu_buf_ctx_node_t));
 	ASSERT(dbsn_in_flight > 0);
 	DEBUG_REFCOUNT_DEC(dbsn_in_flight);
@@ -440,6 +443,7 @@ dmu_buf_set_ready(dmu_buf_ctx_t *dbs_ctx)
 	}
 
 	DEBUG_REFCOUNT_DEC(buf_set_in_flight);
+	ASSERT(dbs_ctx->dbc_flags == 0);
 	kmem_free(dbs, sizeof (dmu_buf_set_t) +
 	    dbs->dbs_dbp_length * sizeof (dmu_buf_t *));
 	dmu_ctx_rele(dc);
@@ -493,6 +497,7 @@ dmu_thread_context_process(void)
 {
 	dmu_cb_state_t *dcs = tsd_get(zfs_async_io_key);
 	dmu_buf_ctx_node_t *dbsn, *next;
+	dmu_buf_ctx_t *ctx;
 
 	/*
 	 * If the current thread didn't register, it doesn't handle queued
@@ -503,9 +508,10 @@ dmu_thread_context_process(void)
 		return;
 
 	for (dbsn = list_head(&dcs->dcs_io_list); dbsn != NULL; dbsn = next) {
+		ctx = dbsn->dbsn_ctx;
 		next = list_next(&dcs->dcs_io_list, dbsn);
-		dmu_buf_set_ready(dbsn->dbsn_ctx);
 		dmu_buf_ctx_node_remove(&dcs->dcs_io_list, dbsn);
+		dmu_buf_set_ready(ctx);
 	}
 }
 

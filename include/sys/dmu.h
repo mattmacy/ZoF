@@ -445,6 +445,10 @@ enum dmu_buf_ctx_type {
 	DBC_DBUF_HOLD
 };
 
+enum dmu_buf_ctx_flags {
+	DBC_ENQUEUED = 1 << 2,
+};
+
 typedef struct dmu_buf_ctx {
 	uint32_t dbc_flags;
 	uint8_t dbc_type;
