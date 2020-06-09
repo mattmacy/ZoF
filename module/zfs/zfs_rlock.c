@@ -564,7 +564,8 @@ zfs_rangelock_tryiter(zfs_rangelock_t *rl, zfs_locked_range_t *new,
 		rc = zfs_rangelock_enter_writer(rl, new, &old);
 	}
 	if (unlikely(rc != 0))
-		zfs_rangelock_enqueue_callback(old, new, cb, arg, lrp, oldentry);
+		zfs_rangelock_enqueue_callback(old, new, cb, arg, lrp,
+		    oldentry);
 	return (rc);
 }
 
@@ -582,7 +583,8 @@ zfs_rangelock_process_queued(zfs_rangelock_t *rl, list_t *cb_list)
 	while (!list_is_empty(cb_list)) {
 		entry = list_head(cb_list);
 		list_remove(cb_list, entry);
-		rc = zfs_rangelock_tryiter(rl, entry->zrce_lr, NULL, NULL, NULL, entry);
+		rc = zfs_rangelock_tryiter(rl, entry->zrce_lr, NULL, NULL, NULL,
+		    entry);
 		if (rc == 0)
 			list_insert_tail(&work, entry);
 	}
