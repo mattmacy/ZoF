@@ -586,7 +586,7 @@ zfs_rangelock_process_queued(zfs_rangelock_t *rl, list_t *cb_list)
 		rc = zfs_rangelock_tryiter(rl, entry->zrce_lr, NULL, NULL, NULL,
 		    entry);
 		if (rc == 0) {
-			entry->zrce_lr->lr_owner = current;
+			entry->zrce_lr->lr_owner = curthread;
 			list_insert_tail(&work, entry);
 		}
 	}
@@ -634,7 +634,7 @@ zfs_rangelock_enter(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
 		/* RL_WRITER or RL_APPEND */
 		zfs_rangelock_enter_writer(rl, new, NULL);
 	}
-	new->lr_owner = current;
+	new->lr_owner = curthread;
 	mutex_exit(&rl->rl_lock);
 	return (new);
 }
@@ -652,7 +652,7 @@ zfs_rangelock_tryenter(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
 	rc = zfs_rangelock_tryiter(rl, new, cb, arg, lrp, NULL);
 	mutex_exit(&rl->rl_lock);
 	if (rc == 0) {
-		new->lr_owner = current;
+		new->lr_owner = curthread;
 		*lrp = new;
 	}
 	return (rc);
