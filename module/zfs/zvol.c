@@ -846,6 +846,8 @@ zvol_suspend(const char *name)
 	ASSERT(MUTEX_HELD(&zv->zv_state_lock));
 	ASSERT(RW_WRITE_HELD(&zv->zv_suspend_lock));
 
+
+	ASSERT(atomic_read(&zv->zv_suspend_ref) >= 0);
 	atomic_inc(&zv->zv_suspend_ref);
 
 	if (zv->zv_open_count > 0)
@@ -888,6 +890,7 @@ zvol_resume(zvol_state_t *zv)
 	 * zv_suspend_lock to determine it is safe to free because rwlock is
 	 * not inherent atomic.
 	 */
+	ASSERT(atomic_read(&zv->zv_suspend_ref) > 0);
 	atomic_dec(&zv->zv_suspend_ref);
 
 	return (SET_ERROR(error));
@@ -1718,8 +1721,9 @@ zvol_dmu_ctx_init(zvol_dmu_state_t *zds, void *data, uint64_t off,
 	int error;
 
 	ASSERT(zv->zv_objset != NULL);
-	atomic_inc(&zv->zv_suspend_ref);
 
+	ASSERT(atomic_read(&zv->zv_suspend_ref) >= 0);
+	atomic_inc(&zv->zv_suspend_ref);
 	zds->zds_sync |= !reader &&
 	    (zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS);
 	if (reader)
@@ -1760,11 +1764,12 @@ zvol_dmu_issue(zvol_dmu_state_t *zds)
 	dmu_ctx_rele(&zds->zds_dc);
 }
 
-void
-zvol_dmu_done(dmu_ctx_t *dc)
+int
+zvol_dmu_done(dmu_ctx_t *dc, callback_fn cb, void *arg)
 {
 	zvol_dmu_state_t *zds = (zvol_dmu_state_t *)dc;
 	zvol_state_t *zv = zds->zds_zv;
+	int rc = 0;
 
 	/*
 	 * Initialization failed
@@ -1772,14 +1777,14 @@ zvol_dmu_done(dmu_ctx_t *dc)
 	if (zds->zds_lr != NULL)
 		zfs_rangelock_exit(zds->zds_lr);
 
-	if ((dc->dc_flags & DMU_CTX_FLAG_READ) == 0 &&
-	    (zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS))
-		zil_commit(zv->zv_zilog, ZVOL_OBJ);
 	if (dc->dc_completed_size < dc->dc_size &&
 	    dc->dc_dn_offset > zv->zv_volsize)
 		dc->dc_err = zio_worst_error(dc->dc_err, SET_ERROR(EINVAL));
-
-	atomic_dec(&zv->zv_suspend_ref);
+	if ((dc->dc_flags & DMU_CTX_FLAG_READ) == 0 &&
+	    (zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS))
+		rc = zil_commit_async(zv->zv_zilog, ZVOL_OBJ,
+		    cb, arg);
+	return (rc);
 }
 
 int
