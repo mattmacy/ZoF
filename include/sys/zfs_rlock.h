@@ -54,6 +54,7 @@ typedef struct zfs_rangelock {
 
 typedef struct zfs_locked_range {
 	zfs_rangelock_t *lr_rangelock; /* rangelock that this lock applies to */
+	kthread_t *lr_owner; /* thread holding the locked range */
 	avl_node_t lr_node;	/* avl node link */
 	uint64_t lr_offset;	/* file range offset */
 	uint64_t lr_length;	/* file range length */

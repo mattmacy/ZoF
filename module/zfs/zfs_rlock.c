@@ -589,8 +589,10 @@ zfs_rangelock_process_queued(zfs_rangelock_t *rl, list_t *cb_list)
 		list_remove(cb_list, entry);
 		rc = zfs_rangelock_tryiter(rl, entry->zrce_lr, NULL,
 		    NULL, NULL, entry, B_FALSE);
-		if (rc == 0)
+		if (rc == 0) {
+			entry->zrce_lr->lr_owner = curthread;
 			list_insert_tail(&work, entry);
+		}
 	}
 	list_move_tail(cb_list, &work);
 }
@@ -636,6 +638,7 @@ zfs_rangelock_enter(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
 		/* RL_WRITER or RL_APPEND */
 		zfs_rangelock_enter_writer(rl, new, NULL);
 	}
+	new->lr_owner = curthread;
 	mutex_exit(&rl->rl_lock);
 	return (new);
 }
@@ -653,8 +656,10 @@ zfs_rangelock_tryenter_async(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
 	mutex_enter(&rl->rl_lock);
 	rc = zfs_rangelock_tryiter(rl, new, cb, arg, lrp, NULL, cb != NULL);
 	mutex_exit(&rl->rl_lock);
-	if (rc == 0)
+	if (rc == 0) {
+		new->lr_owner = curthread;
 		*lrp = new;
+	}
 	return (rc);
 }
 
@@ -776,6 +781,7 @@ zfs_rangelock_exit(zfs_locked_range_t *lr)
 	    offsetof(zfs_locked_range_t, lr_node));
 
 	mutex_enter(&rl->rl_lock);
+	lr->lr_owner = NULL;
 	if (lr->lr_type == RL_WRITER) {
 		/* writer locks can't be shared or split */
 		avl_remove(&rl->rl_tree, lr);
