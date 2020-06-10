@@ -376,9 +376,9 @@ zvol_strategy(void *arg)
 	struct bio *bio = zr->bio;
 	int rw, error;
 
-	if (bio_is_flush(bio) && !zss->zss_flushed) {
-		zss->zss_flushed = B_TRUE;
-		rc = zil_commit_async(zr->zv->zv_zilog, ZVOL_OBJ,
+	if (bio_is_flush(bio) && !zr->flushed) {
+		zr->flushed = B_TRUE;
+		int rc = zil_commit_async(zv->zv_zilog, ZVOL_OBJ,
 		    zvol_strategy, arg);
 		if (rc == EINPROGRESS)
 			return;
