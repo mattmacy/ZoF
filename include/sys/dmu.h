@@ -371,6 +371,7 @@ typedef enum {
 	DMU_CTX_FLAG_NOFILL	= 1 << 6,
 	DMU_CTX_FLAG_ASYNC	= 1 << 7,
 	DMU_CTX_FLAG_NODECRYPT	= 1 << 8,
+	DMU_CTX_FLAG_PAGES	= 1 << 9,
 	DMU_CTX_WRITER_FLAGS	= DMU_CTX_FLAG_SUN_PAGES,
 	DMU_CTX_READER_FLAGS	= DMU_CTX_FLAG_PREFETCH
 } dmu_ctx_flag_t;
@@ -507,8 +508,10 @@ void dmu_buf_set_transfer_write(dmu_buf_set_t *dbs);
 static inline boolean_t
 dmu_ctx_buf_is_char(dmu_ctx_t *dc)
 {
-	return ((dc->dc_flags & (DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_SUN_PAGES)) ?
-	    B_FALSE : B_TRUE);
+	int flags = DMU_CTX_FLAG_UIO|DMU_CTX_FLAG_SUN_PAGES|
+	    DMU_CTX_FLAG_PAGES;
+
+	return ((dc->dc_flags & flags) ? B_FALSE : B_TRUE);
 }
 
 /* Optional context setters; use after calling dmu_ctx_init*(). */
