@@ -409,6 +409,12 @@ dmu_ctx_rele(dmu_ctx_t *dmu_ctx)
 	    (dmu_ctx->dc_dn != NULL))
 		dnode_rele(dmu_ctx->dc_dn, dmu_ctx->dc_tag);
 
+	if (dmu_ctx->dc_lr != NULL) {
+		ASSERT(dmu_ctx->dc_lr->lr_context == dmu_ctx);
+		dmu_ctx->dc_lr->lr_context = NULL;
+		dmu_ctx->dc_lr->lr_owner = curthread;
+	}
+
 	/* At this point, there are no buffer sets left.  Call back. */
 	if (dmu_ctx->dc_complete_cb != NULL)
 		dmu_ctx->dc_complete_cb(dmu_ctx);
@@ -644,6 +650,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 		/* Update the caller's data to let them know what's next. */
 		dc->dc_dn_offset += bufsiz;
 		dc->dc_resid -= bufsiz;
+		dc->dc_dbs = dbs;
 		/* Put this dbuf in the buffer set's list. */
 		dbs->dbs_dbp[i] = &db->db;
 	}

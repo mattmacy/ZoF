@@ -357,6 +357,7 @@ typedef struct dmu_buf {
 struct dmu_ctx;
 struct dmu_buf_set;
 struct zio;
+struct zfs_locked_range;
 typedef void (*dmu_ctx_cb_t)(struct dmu_ctx *);
 typedef void (*dmu_buf_set_cb_t)(struct dmu_buf_set *);
 typedef uint64_t (*dmu_buf_transfer_cb_t)(struct dmu_buf_set *, dmu_buf_t *,
@@ -396,6 +397,10 @@ typedef struct dmu_ctx {
 
 	objset_t *dc_os;	/* Object set associated with the dnode. */
 	uint64_t dc_object;	/* Object ID associated with the dnode. */
+
+	/* DEBUG */
+	struct zfs_locked_range *dc_lr; /* associated locked range */
+	struct dmu_buf_set *dc_dbs;
 
 	/* Number of buffer sets left to complete. */
 	zfs_refcount_t dc_holds;
