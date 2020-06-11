@@ -328,6 +328,8 @@ typedef struct dmu_buf_ctx_node {
 	/* This entry's buffer context pointer. */
 	dmu_buf_ctx_t *dbsn_ctx;
 
+	/* error  received in processing */
+	int dbsn_err;
 } dmu_buf_ctx_node_t;
 
 
