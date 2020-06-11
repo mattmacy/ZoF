@@ -192,16 +192,24 @@ DEBUG_REFCOUNT(_vfs_zfs_dmu, buf_set_in_flight, "Buffer sets in flight");
 /* Used for TSD for processing completed asynchronous I/Os. */
 uint_t zfs_async_io_key;
 
-void
-dmu_buf_ctx_node_add(list_t *list, dmu_buf_ctx_t *ctx, dmu_buf_ctx_cb_t cb)
+static void
+dmu_buf_ctx_node_add_err(list_t *list, dmu_buf_ctx_t *ctx, dmu_buf_ctx_cb_t cb,
+    int err)
 {
 	dmu_buf_ctx_node_t *dbsn = kmem_zalloc(sizeof (dmu_buf_ctx_node_t),
 	    KM_SLEEP);
 	list_link_init(&dbsn->dbsn_link);
 	dbsn->dbsn_ctx = ctx;
 	dbsn->dbsn_cb = cb;
+	dbsn->dbsn_err = err;
 	list_insert_tail(list, dbsn);
 	DEBUG_REFCOUNT_ADD(dbsn_in_flight);
+}
+
+void
+dmu_buf_ctx_node_add(list_t *list, dmu_buf_ctx_t *ctx, dmu_buf_ctx_cb_t cb)
+{
+	dmu_buf_ctx_node_add_err(list, ctx, cb, 0);
 }
 
 void
@@ -406,6 +414,12 @@ dmu_ctx_rele(dmu_ctx_t *dmu_ctx)
 	    (dmu_ctx->dc_dn != NULL))
 		dnode_rele(dmu_ctx->dc_dn, dmu_ctx->dc_tag);
 
+	if (dmu_ctx->dc_lr != NULL) {
+		ASSERT(dmu_ctx->dc_lr->lr_context == dmu_ctx);
+		dmu_ctx->dc_lr->lr_context = NULL;
+		dmu_ctx->dc_lr->lr_owner = curthread;
+	}
+
 	/* At this point, there are no buffer sets left.  Call back. */
 	if (dmu_ctx->dc_complete_cb != NULL)
 		dmu_ctx->dc_complete_cb(dmu_ctx);
@@ -419,18 +433,19 @@ dmu_ctx_rele(dmu_ctx_t *dmu_ctx)
  *       dmu_buf_set's elements doesn't need a lock.
  */
 static void
-dmu_buf_set_ready(dmu_buf_ctx_t *dbs_ctx)
+dmu_buf_set_ready(dmu_buf_ctx_t *dbs_ctx, int err)
 {
 	dmu_buf_set_t *dbs = (dmu_buf_set_t *)dbs_ctx;
 	dmu_ctx_t *dc = dbs->dbs_dc;
 
 	/* Only perform I/O if no errors occurred for the buffer set. */
-	if (dbs->dbs_err == 0) {
+	if (err == 0) {
 		dc->dc_buf_set_transfer_cb(dbs);
 		if (dbs->dbs_err == 0)
 			atomic_add_64(&dc->dc_completed_size, dbs->dbs_size);
+		err = dbs->dbs_err;
 	}
-	dmu_ctx_set_error(dc, dbs->dbs_err);
+	dmu_ctx_set_error(dc, err);
 
 	for (int i = 0; i < dbs->dbs_count; i++) {
 		dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbs->dbs_dbp[i];
@@ -494,7 +509,9 @@ dmu_thread_context_process(void)
 {
 	dmu_cb_state_t *dcs = tsd_get(zfs_async_io_key);
 	dmu_buf_ctx_node_t *dbsn, *next;
+	dmu_buf_ctx_cb_t cb;
 	dmu_buf_ctx_t *ctx;
+	int err;
 
 	/*
 	 * If the current thread didn't register, it doesn't handle queued
@@ -503,13 +520,17 @@ dmu_thread_context_process(void)
 	 */
 	if (dcs == NULL)
 		return;
-
+retry:
 	for (dbsn = list_head(&dcs->dcs_io_list); dbsn != NULL; dbsn = next) {
 		ctx = dbsn->dbsn_ctx;
+		cb = dbsn->dbsn_cb;
+		err = dbsn->dbsn_err;
 		next = list_next(&dcs->dcs_io_list, dbsn);
 		dmu_buf_ctx_node_remove(&dcs->dcs_io_list, dbsn);
-		dmu_buf_set_ready(ctx);
+		cb(ctx, err);
 	}
+	if (!list_is_empty(&dcs->dcs_io_list))
+		goto retry;
 }
 
 /*
@@ -532,8 +553,6 @@ dmu_buf_set_rele(dmu_buf_ctx_t *dbs_ctx, int err)
 	if (dbs == NULL)
 		return;
 	/* Report an error, if any. */
-	if (err)
-		dmu_buf_set_set_error(dbs, err);
 	dmu_ctx = dbs->dbs_dc;
 	if ((dmu_ctx->dc_flags & (DMU_CTX_FLAG_ASYNC|DMU_CTX_FLAG_READ)) ==
 	    DMU_CTX_FLAG_READ && zfs_refcount_count(&dbs->dbs_holds) > 1) {
@@ -553,15 +572,16 @@ dmu_buf_set_rele(dmu_buf_ctx_t *dbs_ctx, int err)
 
 	dcs = tsd_get(zfs_async_io_key);
 	if (dcs != NULL && (dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC)) {
-		dmu_buf_ctx_node_add(&dcs->dcs_io_list, &dbs->dbs_ctx,
-		    dmu_buf_set_rele);
+		dbs->dbs_owner = curthread;
+		dmu_buf_ctx_node_add_err(&dcs->dcs_io_list, &dbs->dbs_ctx,
+		    dmu_buf_set_ready, err);
 	} else {
 		/*
 		 * The current thread doesn't have anything
 		 * registered in its TSD, so it must not handle
 		 * queued delivery.  Dispatch this set now.
 		 */
-		dmu_buf_set_ready(&dbs->dbs_ctx);
+		dmu_buf_set_ready(&dbs->dbs_ctx, err);
 	}
 }
 
@@ -641,6 +661,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 		/* Update the caller's data to let them know what's next. */
 		dc->dc_dn_offset += bufsiz;
 		dc->dc_resid -= bufsiz;
+		dc->dc_dbs = dbs;
 		/* Put this dbuf in the buffer set's list. */
 		dbs->dbs_dbp[i] = &db->db;
 	}

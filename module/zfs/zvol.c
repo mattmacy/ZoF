@@ -69,7 +69,6 @@
  * for this zvol are going to proceed in the order of issue.
  *
  */
-
 #include <sys/dataset_kstats.h>
 #include <sys/dbuf.h>
 #include <sys/dmu_traverse.h>
@@ -1751,7 +1750,6 @@ zvol_dmu_ctx_init(zvol_dmu_state_t *zds, void *data, uint64_t off,
 	error = zfs_rangelock_tryenter_async(&zv->zv_rangelock, off, io_size,
 	    reader ? RL_READER : RL_WRITER, &zds->zds_lr,
 	    (callback_fn)zvol_dmu_issue, zds);
-
 	return (error);
 }
 
@@ -1759,6 +1757,9 @@ void
 zvol_dmu_issue(zvol_dmu_state_t *zds)
 {
 
+	ASSERT(zds->zds_lr->lr_owner == curthread);
+	zds->zds_dc.dc_lr = zds->zds_lr;
+	zds->zds_dc.dc_lr->lr_context = &zds->zds_dc;
 	/* Errors are reported to the done callback via dmu_ctx->err. */
 	(void) dmu_issue(&zds->zds_dc);
 	dmu_ctx_rele(&zds->zds_dc);
