@@ -1566,8 +1566,8 @@ zio_write_bp_init(zio_t *zio)
 		blkptr_t *bp = zio->io_bp;
 		zio_prop_t *zp = &zio->io_prop;
 
-		ASSERT(bp->blk_birth != zio->io_txg);
-		ASSERT(BP_GET_DEDUP(zio->io_bp_override) == 0);
+		ASSERT3U(bp->blk_birth, !=, zio->io_txg);
+		ASSERT0(BP_GET_DEDUP(zio->io_bp_override));
 
 		*bp = *zio->io_bp_override;
 		zio->io_pipeline = ZIO_INTERLOCK_PIPELINE;
