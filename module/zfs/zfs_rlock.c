@@ -547,9 +547,7 @@ zfs_rangelock_process_cb(list_t *cb_list)
 {
 	zfs_rangelock_cb_entry_t *entry;
 
-	while (!list_is_empty(cb_list)) {
-		entry = list_head(cb_list);
-		list_remove(cb_list, entry);
+	while ((entry = list_remove_head(cb_list)) != NULL) {
 		if (entry->zrce_lrp != NULL)
 			*(entry->zrce_lrp) = entry->zrce_lr;
 		entry->zrce_cb(entry->zrce_arg);
@@ -562,19 +560,15 @@ zfs_rangelock_process_queued(zfs_rangelock_t *rl, list_t *cb_list)
 {
 	zfs_rangelock_cb_entry_t *entry;
 	zfs_locked_range_t *lr;
-	list_t work, tmp;
+	list_t tmp;
 	int rc;
 
 	if (list_is_empty(cb_list))
 		return;
-	list_create(&work, sizeof (zfs_rangelock_cb_entry_t),
-	    offsetof(zfs_rangelock_cb_entry_t, zrce_node));
 	list_create(&tmp, sizeof (zfs_rangelock_cb_entry_t),
 	    offsetof(zfs_rangelock_cb_entry_t, zrce_node));
 	list_move_tail(&tmp, cb_list);
-	while (!list_is_empty(&tmp)) {
-		entry = list_head(&tmp);
-		list_remove(&tmp, entry);
+	while ((entry = list_remove_head(&tmp)) != NULL) {
 		lr = entry->zrce_lr;
 		if (lr->lr_type != RL_READER) {
 			lr->lr_type = lr->lr_orig_type;
@@ -585,20 +579,17 @@ zfs_rangelock_process_queued(zfs_rangelock_t *rl, list_t *cb_list)
 		    B_FALSE);
 		if (rc == 0) {
 			lr->lr_owner = curthread;
-			list_insert_tail(&work, entry);
+			list_insert_tail(cb_list, entry);
 		}
 	}
-	list_move_tail(&work, cb_list);
-	list_move_tail(cb_list, &work);
 	list_destroy(&tmp);
-	list_destroy(&work);
 }
 
 static void
 zfs_rangelock_process_queued_reduce(zfs_rangelock_t *rl, list_t *cb_list)
 {
-	zfs_rangelock_cb_entry_t *entry, *next;
-	list_t work;
+	zfs_rangelock_cb_entry_t *entry;
+	list_t work, tmp;
 	int rc;
 
 	if (list_is_empty(cb_list))
@@ -606,18 +597,21 @@ zfs_rangelock_process_queued_reduce(zfs_rangelock_t *rl, list_t *cb_list)
 	mutex_enter(&rl->rl_lock);
 	list_create(&work, sizeof (zfs_rangelock_cb_entry_t),
 	    offsetof(zfs_rangelock_cb_entry_t, zrce_node));
-	for (entry = list_head(cb_list); entry != NULL; entry = next) {
-		next = list_next(cb_list, entry);
+	list_create(&tmp, sizeof (zfs_rangelock_cb_entry_t),
+	    offsetof(zfs_rangelock_cb_entry_t, zrce_node));
+	list_move_tail(&tmp, cb_list);
+	while ((entry = list_remove_head(&tmp)) != NULL) {
 		rc = zfs_rangelock_tryiter(rl, entry->zrce_lr, NULL, NULL, NULL,
 		    entry, B_FALSE);
 		if (rc == 0) {
-			list_remove(cb_list, entry);
 			list_insert_tail(&work, entry);
 			entry->zrce_lr->lr_owner = curthread;
 		}
 	}
 	mutex_exit(&rl->rl_lock);
 	zfs_rangelock_process_cb(&work);
+	list_destroy(&work);
+	list_destroy(&tmp);
 }
 
 /*
