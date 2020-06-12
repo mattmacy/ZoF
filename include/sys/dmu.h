@@ -491,6 +491,8 @@ typedef struct dmu_buf_set {
 	/* number of buffers held so far */
 	int dbs_async_holds;
 
+	kthread_t *dbs_owner; /* thread context */
+
 	/* The ZIO associated with this context. */
 	struct zio *dbs_zio;
 
