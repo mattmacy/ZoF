@@ -765,7 +765,6 @@ zfs_rangelock_exit(zfs_locked_range_t *lr)
 {
 	zfs_rangelock_t *rl = lr->lr_rangelock;
 	list_t free_list;
-	avl_index_t where __maybe_unused;
 
 	ASSERT(lr->lr_type == RL_WRITER || lr->lr_type == RL_READER);
 	ASSERT(lr->lr_count == 1 || lr->lr_count == 0);
@@ -785,7 +784,6 @@ zfs_rangelock_exit(zfs_locked_range_t *lr)
 	if (lr->lr_type == RL_WRITER) {
 		/* writer locks can't be shared or split */
 		avl_remove(&rl->rl_tree, lr);
-		ASSERT(avl_find(&rl->rl_tree, lr, &where) == NULL);
 		zfs_rangelock_process_queued(rl, &lr->lr_cb);
 		list_insert_tail(&free_list, lr);
 	} else {
