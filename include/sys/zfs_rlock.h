@@ -50,6 +50,8 @@ typedef struct zfs_rangelock {
 	kmutex_t rl_lock;
 	zfs_rangelock_cb_t *rl_cb;
 	void *rl_arg;
+	list_t rl_free;
+	uint8_t rl_processing;
 } zfs_rangelock_t;
 
 typedef struct zfs_locked_range {
@@ -64,9 +66,9 @@ typedef struct zfs_locked_range {
 	uint_t lr_count;	/* range reference count in tree */
 	zfs_rangelock_type_t lr_type; /* range type */
 	zfs_rangelock_type_t lr_orig_type; /* range type */
-	list_t lr_write_cb; /* list of write callbacks */
-	list_t lr_read_cb; /* list of read callbacks */
+	list_t lr_cb; /* list of waiters */
 	uint8_t lr_proxy;	/* acting for original range */
+	uint8_t lr_write_wanted; /* writer wants to lock this range */
 } zfs_locked_range_t;
 
 void zfs_rangelock_init(zfs_rangelock_t *, zfs_rangelock_cb_t *, void *);
