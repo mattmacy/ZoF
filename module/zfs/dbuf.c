@@ -3637,7 +3637,7 @@ dbuf_undirty_write(zio_t *zio, dbuf_dirty_record_t *dr, uint64_t txg)
 		dn = DB_DNODE(db);
 		ASSERT(dn->dn_phys->dn_flags & DNODE_FLAG_SPILL_BLKPTR);
 		ASSERT(!BP_IS_HOLE(db->db_blkptr));
-		ASSERT3U(db->db_blkptr, ==, &dn->dn_phys->dn_spill);
+		ASSERT3P(db->db_blkptr, ==, &dn->dn_phys->dn_spill);
 		DB_DNODE_EXIT(db);
 	}
 #endif
