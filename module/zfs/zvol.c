@@ -1702,7 +1702,7 @@ zvol_dmu_buf_set_transfer_write(dmu_buf_set_t *dbs)
 	zvol_state_t *zv = zds->zds_zv;
 	dmu_tx_t *tx = dmu_buf_set_tx(dbs);
 
-	dmu_buf_set_transfer_write(dbs);
+	dmu_buf_set_transfer(dbs);
 
 	/* Log this write. */
 	if (zds->zds_sync)
@@ -1717,6 +1717,7 @@ zvol_dmu_ctx_init(zvol_dmu_state_t *zds, void *data, uint64_t off,
 {
 	zvol_state_t *zv = zds->zds_zv;
 	boolean_t reader = (dmu_flags & DMU_CTX_FLAG_READ) != 0;
+	dmu_tx_t	*tx;
 	int error;
 
 	ASSERT(zv->zv_objset != NULL);
@@ -1725,6 +1726,7 @@ zvol_dmu_ctx_init(zvol_dmu_state_t *zds, void *data, uint64_t off,
 	atomic_inc(&zv->zv_suspend_ref);
 	zds->zds_sync |= !reader &&
 	    (zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS);
+	dmu_flags |= DMU_CTX_FLAG_NO_HOLD;
 	if (reader)
 		dmu_flags |= DMU_CTX_FLAG_PREFETCH;
 	else if (zv->zv_flags & ZVOL_RDONLY)
@@ -1737,14 +1739,24 @@ zvol_dmu_ctx_init(zvol_dmu_state_t *zds, void *data, uint64_t off,
 	/* Truncate I/Os to the end of the volume, if needed. */
 	io_size = MIN(io_size, zv->zv_volsize - off);
 
-	error = dmu_ctx_init(&zds->zds_dc, /* dnode */ NULL, zv->zv_objset,
+	error = dmu_ctx_init(&zds->zds_dc, zv->zv_dn, zv->zv_objset,
 	    ZVOL_OBJ, off, io_size, data, FTAG, dmu_flags);
 	if (error)
 		return (error);
 	/* Override the writer case to log the writes. */
-	if (!reader)
+	if (!reader) {
+		tx = dmu_tx_create(zv->zv_objset);
+		dmu_tx_hold_write_by_dnode_impl(tx, zv->zv_dn, off,
+		    io_size, B_FALSE);
+		error = dmu_tx_assign(tx, TXG_WAIT);
+		if (error) {
+			dmu_tx_abort(tx);
+			return (error);
+		}
+		dmu_ctx_set_dmu_tx(&zds->zds_dc, tx);
 		dmu_ctx_set_buf_set_transfer_cb(&zds->zds_dc,
 		    zvol_dmu_buf_set_transfer_write);
+	}
 	dmu_ctx_set_complete_cb(&zds->zds_dc, done_cb);
 
 	error = zfs_rangelock_tryenter_async(&zv->zv_rangelock,
