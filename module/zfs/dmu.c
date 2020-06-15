@@ -691,14 +691,16 @@ dmu_ctx_setup_tx(dmu_ctx_t *dmu_ctx, dmu_tx_t **txp, dnode_t **dnp,
     uint64_t size)
 {
 	int err;
+	boolean_t sync;
 
 	/* Readers and writers with a context transaction do not apply. */
 	if ((dmu_ctx->dc_flags & DMU_CTX_FLAG_READ) || dmu_ctx->dc_tx != NULL)
 		return (0);
 
+	sync = !(dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC);
 	*txp = dmu_tx_create(dmu_ctx->dc_os);
-	dmu_tx_hold_write(*txp, dmu_ctx->dc_object,
-	    dmu_ctx->dc_dn_offset, size);
+	dmu_tx_hold_write_impl(*txp, dmu_ctx->dc_object,
+	    dmu_ctx->dc_dn_offset, size, sync);
 	err = dmu_tx_assign(*txp, TXG_WAIT);
 	if (err)
 		goto out;
