@@ -546,10 +546,13 @@ static void
 zfs_rangelock_process_cb(list_t *cb_list)
 {
 	zfs_rangelock_cb_entry_t *entry;
+	zfs_locked_range_t *lr;
 
 	while ((entry = list_remove_head(cb_list)) != NULL) {
+		lr = entry->zrce_lr;
 		if (entry->zrce_lrp != NULL)
-			*(entry->zrce_lrp) = entry->zrce_lr;
+			*(entry->zrce_lrp) = lr;
+		lr->lr_owner = curthread;
 		entry->zrce_cb(entry->zrce_arg);
 		kmem_free(entry, sizeof (*entry));
 	}
@@ -578,7 +581,6 @@ zfs_rangelock_process_queued(zfs_rangelock_t *rl, list_t *cb_list)
 		rc = zfs_rangelock_tryiter(rl, lr, NULL, NULL, NULL, entry,
 		    B_FALSE);
 		if (rc == 0) {
-			lr->lr_owner = curthread;
 			list_insert_tail(cb_list, entry);
 		}
 	}
