@@ -980,8 +980,12 @@ void dmu_buf_set_crypt_params(dmu_buf_t *db_fake, boolean_t byteorder,
 
 dmu_tx_t *dmu_tx_create(objset_t *os);
 void dmu_tx_hold_write(dmu_tx_t *tx, uint64_t object, uint64_t off, int len);
+void dmu_tx_hold_write_impl(dmu_tx_t *tx, uint64_t object, uint64_t off,
+    int len, boolean_t sync);
 void dmu_tx_hold_write_by_dnode(dmu_tx_t *tx, dnode_t *dn, uint64_t off,
     int len);
+void dmu_tx_hold_write_by_dnode_impl(dmu_tx_t *tx, dnode_t *dn,
+    uint64_t off, int len, boolean_t sync);
 void dmu_tx_hold_free(dmu_tx_t *tx, uint64_t object, uint64_t off,
     uint64_t len);
 void dmu_tx_hold_free_by_dnode(dmu_tx_t *tx, dnode_t *dn, uint64_t off,
