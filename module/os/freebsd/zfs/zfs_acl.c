@@ -2535,7 +2535,7 @@ zfs_zaccess(znode_t *zp, int mode, int flags, boolean_t skipaclchk, cred_t *cr)
 
 /*
  * Translate traditional unix VREAD/VWRITE/VEXEC mode into
- * native ACL format and call zfs_zaccess()
+ * NFSv4-style ZFS ACL format and call zfs_zaccess()
  */
 int
 zfs_zaccess_rwx(znode_t *zp, mode_t mode, int flags, cred_t *cr)
