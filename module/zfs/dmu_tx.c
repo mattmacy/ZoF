@@ -251,7 +251,11 @@ dmu_tx_count_write(dmu_tx_hold_t *txh, uint64_t off, uint64_t len,
 				txh->txh_tx->tx_err = err;
 			}
 		}
-	} else if (sync) {
+	} else /* if (sync) */ {
+		/*
+		 * For unknown reasons slower platforms will deadlock
+		 * without this
+		 */
 		zio_t *zio = zio_root(dn->dn_objset->os_spa,
 		    NULL, NULL, ZIO_FLAG_CANFAIL);
 
@@ -286,10 +290,13 @@ dmu_tx_count_write(dmu_tx_hold_t *txh, uint64_t off, uint64_t len,
 			}
 		}
 
-		err = zio_wait(zio);
-		if (err != 0) {
-			txh->txh_tx->tx_err = err;
-		}
+		if (sync) {
+			err = zio_wait(zio);
+			if (err != 0) {
+				txh->txh_tx->tx_err = err;
+			}
+		} else
+			zio_nowait(zio);
 	}
 }
 
