@@ -3998,6 +3998,8 @@ dbuf_fill_done(dmu_buf_impl_t *db, dmu_tx_t *tx)
 #pragma weak dmu_buf_fill_done = dbuf_fill_done
 
 
+#pragma weak dmu_buf_fill_done = dbuf_fill_done
+
 void
 dmu_buf_write_embedded(dmu_buf_t *dbuf, void *data,
     bp_embedded_type_t etype, enum zio_compress comp,
