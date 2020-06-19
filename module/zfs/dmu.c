@@ -547,7 +547,8 @@ retry:
 }
 
 static void
-dmu_thread_context_dispatch(dmu_buf_ctx_t *dbs_ctx, int err, dmu_buf_ctx_cb_t cb)
+dmu_thread_context_dispatch(dmu_buf_ctx_t *dbs_ctx, int err,
+    dmu_buf_ctx_cb_t cb)
 {
 	dmu_cb_state_t *dcs;
 
