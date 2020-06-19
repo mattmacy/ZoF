@@ -403,6 +403,15 @@ dmu_ctx_rele(dmu_ctx_t *dmu_ctx)
 	if (zfs_refcount_remove(&dmu_ctx->dc_holds, NULL) != 0)
 		return;
 
+	if ((dmu_ctx->dc_flags & (DMU_CTX_FLAG_ASYNC|DMU_CTX_FLAG_READ)) ==
+	    DMU_CTX_FLAG_READ) {
+		/*
+		 * Avoid race with dmu_buf_set_rele on
+		 * synchronous reads.
+		 */
+		mutex_enter(&dmu_ctx->dc_mtx);
+		mutex_exit(&dmu_ctx->dc_mtx);
+	}
 	mutex_destroy(&dmu_ctx->dc_mtx);
 	if ((dmu_ctx->dc_flags & (DMU_CTX_FLAG_ASYNC|DMU_CTX_FLAG_READ)) ==
 	    DMU_CTX_FLAG_READ)
