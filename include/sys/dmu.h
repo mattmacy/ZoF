@@ -456,6 +456,7 @@ enum dmu_buf_ctx_flags {
 };
 
 typedef struct dmu_buf_ctx {
+	kthread_t *dbc_owner; /* thread context */
 	uint32_t dbc_flags;
 	uint8_t dbc_type;
 } dmu_buf_ctx_t;
@@ -491,8 +492,6 @@ typedef struct dmu_buf_set {
 
 	/* number of buffers held so far */
 	int dbs_async_holds;
-
-	kthread_t *dbs_owner; /* thread context */
 
 	/* The ZIO associated with this context. */
 	struct zio *dbs_zio;
@@ -1046,7 +1045,6 @@ int dmu_free_long_object(objset_t *os, uint64_t object);
  * nonrecoverable I/O error.
  */
 int dmu_issue(dmu_ctx_t *dc);
-void dmu_issue_restart(dmu_buf_ctx_t *dbs, int err);
 int dmu_read(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 	void *buf, uint32_t flags);
 int dmu_read_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size, void *buf,
