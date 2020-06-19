@@ -191,6 +191,7 @@ DEBUG_REFCOUNT(_vfs_zfs_dmu, buf_set_in_flight, "Buffer sets in flight");
 /*
  * DMU Context based functions.
  */
+static void dmu_issue_restart(dmu_buf_ctx_t *dbs_ctx, int err);
 
 /* Used for TSD for processing completed asynchronous I/Os. */
 uint_t zfs_async_io_key;
@@ -459,7 +460,6 @@ dmu_buf_set_ready(dmu_buf_ctx_t *dbs_ctx, int err)
 	}
 
 	DEBUG_REFCOUNT_DEC(buf_set_in_flight);
-	ASSERT(dbs_ctx->dbc_flags == 0);
 	kmem_free(dbs, sizeof (dmu_buf_set_t) +
 	    dbs->dbs_dbp_length * sizeof (dmu_buf_t *));
 	dmu_ctx_rele(dc);
@@ -537,6 +537,25 @@ retry:
 		goto retry;
 }
 
+static void
+dmu_thread_context_dispatch(dmu_buf_ctx_t *dbs_ctx, int err, dmu_buf_ctx_cb_t cb)
+{
+	dmu_cb_state_t *dcs;
+
+	dcs = tsd_get(zfs_async_io_key);
+	if (dcs != NULL && (dbs_ctx->dbc_flags & DMU_CTX_FLAG_ASYNC)) {
+		dbs_ctx->dbc_owner = curthread;
+		dmu_buf_ctx_node_add_err(&dcs->dcs_io_list, dbs_ctx, cb, err);
+	} else {
+		/*
+		 * The current thread doesn't have anything
+		 * registered in its TSD, so it must not handle
+		 * queued delivery.  Dispatch this set now.
+		 */
+		cb(dbs_ctx, err);
+	}
+}
+
 /*
  * Release a buffer set for a given dbuf.
  *
@@ -550,7 +569,6 @@ dmu_buf_set_rele(dmu_buf_ctx_t *dbs_ctx, int err)
 {
 	dmu_buf_set_t *dbs = (dmu_buf_set_t *)dbs_ctx;
 	dmu_ctx_t *dmu_ctx;
-	dmu_cb_state_t *dcs;
 	boolean_t drop_lock = B_FALSE;
 	int count;
 
@@ -574,19 +592,13 @@ dmu_buf_set_rele(dmu_buf_ctx_t *dbs_ctx, int err)
 	if (count != 0)
 		return;
 
-	dcs = tsd_get(zfs_async_io_key);
-	if (dcs != NULL && (dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC)) {
-		dbs->dbs_owner = curthread;
-		dmu_buf_ctx_node_add_err(&dcs->dcs_io_list, &dbs->dbs_ctx,
-		    dmu_buf_set_ready, err);
-	} else {
-		/*
-		 * The current thread doesn't have anything
-		 * registered in its TSD, so it must not handle
-		 * queued delivery.  Dispatch this set now.
-		 */
-		dmu_buf_set_ready(&dbs->dbs_ctx, err);
-	}
+	dmu_thread_context_dispatch(dbs_ctx, err, dmu_buf_set_ready);
+}
+
+static void
+dmu_issue_restart_cb(dmu_buf_ctx_t *dbs_ctx, int err)
+{
+	dmu_thread_context_dispatch(dbs_ctx, err, dmu_issue_restart);
 }
 
 /*
@@ -634,7 +646,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 
 		int err = dbuf_hold_level_async(dn, /* level */ 0, blkid + i,
 		    dc->dc_tag, &db, dc->dc_dn_offset, &dbs->dbs_ctx,
-		    dbs->dbs_resid, async_zio, dmu_issue_restart);
+		    dbs->dbs_resid, async_zio, dmu_issue_restart_cb);
 
 		if (err == EINPROGRESS) {
 			ASSERT(dc->dc_flags & DMU_CTX_FLAG_ASYNC);
@@ -785,6 +797,7 @@ dmu_buf_set_allocate(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	dbs->dbs_count = nblks;
 	dbs->dbs_dbp_length = nblks;
 	dbs->dbs_tx = tx;
+	dbs->dbs_ctx.dbc_flags |= (dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC);
 	zfs_refcount_create_untracked(&dbs->dbs_holds);
 
 	/* Include a refcount for the initiator. */
@@ -979,7 +992,7 @@ dmu_issue(dmu_ctx_t *dc)
 	return (dc->dc_err);
 }
 
-void
+static void
 dmu_issue_restart(dmu_buf_ctx_t *dbs_ctx, int err)
 {
 	dmu_buf_set_t *dbs = (dmu_buf_set_t *)dbs_ctx;
