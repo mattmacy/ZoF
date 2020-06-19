@@ -1651,13 +1651,19 @@ dbuf_read_complete(dmu_buf_impl_t *db, arc_buf_t *buf, boolean_t is_hole_read)
 
 	} else {
 		/*
-		 * The block was free'd or filled before this read could
-		 * complete.  Note that in this case, it satisfies the reader
-		 * since the frontend must already be populated.
+		 * The block was free'd or filled before this read  completed.
+		 * If it was filled, it is either CACHED or FILL.  If it was
+		 * freed, it is CACHED and already zero filled.
 		 */
+		ASSERT(db->db_state == DB_CACHED || db->db_state == DB_FILL);
+		/*
+		 * The filler may still be running, but it can only have one
+		 * dirty record; otherwise, a resolve must occur.
+		 */
+		ASSERT(db->db_state != DB_FILL || db->db_dirtycnt == 1);
+
+		/* Regardless, the frontend must already be populated. */
 		ASSERT(db->db_buf != NULL);
-		ASSERT(db->db_state == DB_CACHED ||
-		    db->db_state == DB_UNCACHED);
 		arc_discard_buf(buf, db);
 	}
 }
