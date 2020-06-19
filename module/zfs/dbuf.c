@@ -3970,7 +3970,7 @@ dbuf_fill_done(dmu_buf_impl_t *db, dmu_tx_t *tx)
 			db->db_state = DB_CACHED;
 			DTRACE_SET_STATE(db,
 			    "fill done handling freed in flight");
-		} else {
+		} else if (db->db_state == DB_FILL) {
 
 			/*
 			 * This function can be called with another state bit
@@ -3978,21 +3978,18 @@ dbuf_fill_done(dmu_buf_impl_t *db, dmu_tx_t *tx)
 			 * buffer has been fully filled.  Otherwise, clear the
 			 * FILL bit, so it goes back to the steady state.
 			 */
-			if (db->db_state == DB_FILL) {
-				dr = list_tail(&db->db_dirty_records);
-				boolean_t is_empty __maybe_unused =
-				    list_is_empty(&dr->dt.dl.write_ranges);
-				if (db->db_level == 0)
-					ASSERT(dr == NULL || is_empty);
-				db->db_state = DB_CACHED;
-				DTRACE_SET_STATE(db,
-				    "filler finished, complete buffer");
-			} else {
-				db->db_state &= ~DB_FILL;
-				DTRACE_SET_STATE(db,
-				    "filler finished, incomplete buffer");
-				ASSERT(db->db_state & (DB_PARTIAL|DB_READ));
-			}
+
+			/*
+			 * XXX is it OK if we have unresolved ranges here?
+			 */
+			db->db_state = DB_CACHED;
+			DTRACE_SET_STATE(db,
+			    "filler finished, complete buffer");
+		} else {
+			db->db_state &= ~DB_FILL;
+			DTRACE_SET_STATE(db,
+			    "filler finished, incomplete buffer");
+			ASSERT(db->db_state & (DB_PARTIAL|DB_READ));
 		}
 		cv_broadcast(&db->db_changed);
 	}
