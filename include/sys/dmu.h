@@ -447,8 +447,8 @@ typedef struct dmu_ctx {
 } dmu_ctx_t;
 
 enum dmu_buf_ctx_type {
-	DBC_DMU_ISSUE,
-	DBC_DBUF_HOLD
+	DBC_DMU_ISSUE = 1,
+	DBC_DBUF_HOLD = 2,
 };
 
 enum dmu_buf_ctx_flags {

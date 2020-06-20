@@ -544,7 +544,7 @@ dmu_buf_impl_t *dbuf_hold_level(struct dnode *dn, int level, uint64_t blkid,
     void *tag);
 int dbuf_hold_level_async(struct dnode *dn, int level, uint64_t blkid,
     void *tag, dmu_buf_impl_t **dbp, dmu_buf_ctx_t *ctx,
-    zio_t *zio, dmu_buf_ctx_cb_t buf_cb);
+    zio_t *zio, dmu_buf_ctx_cb_t cb_restart, dmu_buf_ctx_cb_t cb_done);
 int dbuf_hold_impl(struct dnode *dn, uint8_t level, uint64_t blkid,
     boolean_t fail_sparse, boolean_t fail_uncached,
     void *tag, dmu_buf_impl_t **dbp);
@@ -563,6 +563,8 @@ void dbuf_rele_and_unlock(dmu_buf_impl_t *db, void *tag, boolean_t evicting);
 dmu_buf_impl_t *dbuf_find(struct objset *os, uint64_t object, uint8_t level,
     uint64_t blkid);
 
+int dbuf_read_async(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags,
+    dmu_buf_ctx_t *buf_ctx, dmu_buf_ctx_cb_t buf_cb);
 int dbuf_read(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags);
 void dbuf_transition_to_read(dmu_buf_impl_t *db);
 void dbuf_will_dirty_range(dmu_buf_impl_t *db, dmu_tx_t *tx, int offset,
