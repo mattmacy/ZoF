@@ -171,7 +171,6 @@ const dmu_object_byteswap_info_t dmu_ot_byteswap[DMU_BSWAP_NUMFUNCS] = {
 #define	DEBUG_REFCOUNT_DEC(b)
 #endif
 
-
 DEBUG_REFCOUNT(_vfs_zfs_dmu, dbsn_in_flight, "DMU buf set nodes in flight");
 DEBUG_COUNTER_U(_vfs_zfs_dmu, dmu_ctx_total, "Total DMU contexts");
 DEBUG_COUNTER_U(_vfs_zfs_dmu, buf_set_total, "Total buffer sets");
@@ -630,6 +629,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 	uint64_t bufoff, bufsiz;
 	int i, dbuf_flags;
 	boolean_t read, prefetch;
+	dmu_buf_ctx_cb_t done_cb = NULL;
 
 	read = dc->dc_flags & DMU_CTX_FLAG_READ;
 	prefetch = dc->dc_flags & DMU_CTX_FLAG_PREFETCH;
@@ -642,6 +642,8 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 	}
 	blkid = dbuf_whichblock(dn, 0, dbs->dbs_dn_start);
 	dbs->dbs_ctx.dbc_type = DBC_DMU_ISSUE;
+	if (read)
+		done_cb = dmu_buf_set_rele;
 
 	if (dc->dc_flags & DMU_CTX_FLAG_ASYNC)
 		async_zio = dbs->dbs_zio;
@@ -655,8 +657,8 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 		db = NULL;
 
 		int err = dbuf_hold_level_async(dn, /* level */ 0, blkid + i,
-		    dc->dc_tag, &db, dc->dc_dn_offset, &dbs->dbs_ctx,
-		    dbs->dbs_resid, async_zio, dmu_issue_restart_cb);
+		    dc->dc_tag, &db, &dbs->dbs_ctx,
+		    async_zio, dmu_issue_restart_cb, done_cb);
 
 		if (err == EINPROGRESS) {
 			ASSERT(dc->dc_flags & DMU_CTX_FLAG_ASYNC);
@@ -681,8 +683,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 		dbs->dbs_resid -= bufsiz;
 
 		/* initiate async i/o */
-		if (read || (bufsiz != db->db.db_size &&
-		    db->db_state != DB_CACHED))
+		if (read)
 			(void) dbuf_read(db, dbs->dbs_zio, dbuf_flags);
 
 		/* Update the caller's data to let them know what's next. */
@@ -811,10 +812,10 @@ dmu_buf_set_allocate(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 	zfs_refcount_create_untracked(&dbs->dbs_holds);
 
 	/* Include a refcount for the initiator. */
-	if (dmu_ctx->dc_flags & (DMU_CTX_FLAG_READ|DMU_CTX_FLAG_ASYNC))
+	if (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ)
 		zfs_refcount_add_many(&dbs->dbs_holds, nblks + 1, NULL);
 	else
-		/* For synchronous writes, dbufs never need to call us back. */
+		/* For writes, dbufs never need to call us back. */
 		zfs_refcount_add(&dbs->dbs_holds, NULL);
 	dbs->dbs_dc = dmu_ctx;
 	zfs_refcount_add(&dmu_ctx->dc_holds, NULL);
@@ -870,7 +871,7 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 		set_size = sizeof (dmu_buf_set_t) +
 		    nblks * sizeof (dmu_buf_t *);
 
-		if (dmu_ctx->dc_flags & (DMU_CTX_FLAG_READ|DMU_CTX_FLAG_ASYNC))
+		if (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ)
 			zfs_refcount_destroy_many(&dbs->dbs_holds, nblks + 1);
 		else
 			/* For writes, dbufs never need to call us back. */
@@ -2191,6 +2192,7 @@ xuio_stat_wbuf_nocopy(void)
 {
 	XUIOSTAT_BUMP(xuiostat_wbuf_nocopy);
 }
+
 int
 dmu_read_uio_dnode(dnode_t *dn, uio_t *uio, uint64_t size)
 {

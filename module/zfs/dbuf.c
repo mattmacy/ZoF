@@ -150,10 +150,10 @@ dbuf_stats_t dbuf_stats = {
 
 typedef struct dbuf_hold_async_ctx {
 	dmu_buf_ctx_t *buf_ctx;
-	dmu_buf_ctx_cb_t buf_cb;
+	dmu_buf_ctx_cb_t cb_restart;
+	dmu_buf_ctx_cb_t cb_done;
 	zio_t *zio;
-	uint64_t dn_off;
-	uint64_t resid;
+	int leaf_level;
 } dbuf_hold_async_ctx_t;
 
 static boolean_t dbuf_undirty(dmu_buf_impl_t *db, dmu_tx_t *tx);
@@ -1639,8 +1639,8 @@ dbuf_fix_old_data(dmu_buf_impl_t *db, uint64_t txg)
 	}
 }
 
-static int
-dbuf_read_(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags,
+int
+dbuf_read_async(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags,
     dmu_buf_ctx_t *buf_ctx, dmu_buf_ctx_cb_t buf_cb)
 {
 	int err = 0;
@@ -1785,7 +1785,7 @@ dbuf_read_(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags,
 int
 dbuf_read(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags)
 {
-	return (dbuf_read_(db, zio, flags, NULL, NULL));
+	return (dbuf_read_async(db, zio, flags, NULL, NULL));
 }
 
 static void
@@ -2934,7 +2934,7 @@ dbuf_findbp(dnode_t *dn, int level, uint64_t blkid, int fail_sparse,
 		/* this block is referenced from an indirect block */
 		int err, flags;
 		dmu_buf_ctx_t *buf_ctx = NULL;
-		dmu_buf_ctx_cb_t buf_cb = NULL;
+		dmu_buf_ctx_cb_t cb_restart = NULL;
 		zio_t *zio = NULL;
 
 		err = dbuf_hold_impl_(dn, level + 1,
@@ -2945,9 +2945,10 @@ dbuf_findbp(dnode_t *dn, int level, uint64_t blkid, int fail_sparse,
 		if (ctx != NULL && ctx->zio != NULL) {
 			zio = ctx->zio;
 			buf_ctx = ctx->buf_ctx;
-			buf_cb = ctx->buf_cb;
+			cb_restart = ctx->cb_restart;
 		}
-		err = dbuf_read_(*parentp, zio, flags, buf_ctx, buf_cb);
+		err = dbuf_read_async(*parentp, zio, flags, buf_ctx,
+		    cb_restart);
 		if (err) {
 			dbuf_rele(*parentp, NULL);
 			*parentp = NULL;
@@ -3389,48 +3390,29 @@ dbuf_hold_copy(dnode_t *dn, dmu_buf_impl_t *db)
 	rw_exit(&db->db_rwlock);
 }
 
-static void
-dbuf_hold_update_buf_set(dbuf_hold_async_ctx_t *ctx, dmu_buf_impl_t *db)
+static boolean_t
+dbuf_hold_update_done(dbuf_hold_async_ctx_t *ctx, dmu_buf_impl_t *db, int level)
 {
-	dmu_ctx_t *dc;
-	uint64_t bufoff, tocpy;
 	dmu_buf_ctx_t *buf_ctx;
-	dmu_buf_set_t *dbs;
-	uint64_t resid, dn_off;
+	dmu_buf_ctx_cb_t cb_done;
+	boolean_t unlocked = B_FALSE;
 
-	if (ctx == NULL)
-		return;
+	if (ctx == NULL || ctx->leaf_level != level || ctx->cb_done == NULL)
+		return (B_FALSE);
+
 	buf_ctx = ctx->buf_ctx;
-	if (buf_ctx->dbc_type != DBC_DMU_ISSUE)
-		return;
-
-	resid = ctx->resid;
-	dn_off = ctx->dn_off;
-	dbs = (dmu_buf_set_t *)buf_ctx;
-	dc = dbs->dbs_dc;
-	ASSERT(dn_off >= db->db.db_offset);
+	cb_done = ctx->cb_done;
 
 	/* If a reading buffer set is associated, add the callback now. */
-	if (dc->dc_flags & DMU_CTX_FLAG_READ) {
-		if (db->db_state == DB_CACHED) {
-			/* Dbuf is already at the desired state. */
-			dmu_buf_set_rele(&dbs->dbs_ctx, /* err */ 0);
-		} else {
-			dmu_buf_ctx_node_add(&db->db_buf_ctxs, &dbs->dbs_ctx,
-			    dmu_buf_set_rele);
-		}
-	} else if (dc->dc_flags & DMU_CTX_FLAG_ASYNC) {
-		/* Calculate the amount of data this buffer contributes. */
-		bufoff = dn_off - db->db.db_offset;
-		tocpy = (int)MIN(db->db.db_size - bufoff, resid);
-		if (db->db_state == DB_CACHED || tocpy == db->db.db_size) {
-			/* Dbuf is resident or will be overwritten. */
-			dmu_buf_set_rele(&dbs->dbs_ctx, /* err */ 0);
-		} else {
-			dmu_buf_ctx_node_add(&db->db_buf_ctxs, &dbs->dbs_ctx,
-			    dmu_buf_set_rele);
-		}
+	if (db->db_state == DB_CACHED) {
+		mutex_exit(&db->db_mtx);
+		unlocked = B_TRUE;
+		/* Dbuf is already at the desired state. */
+		cb_done(buf_ctx, /* err */ 0);
+	} else {
+		dmu_buf_ctx_node_add(&db->db_buf_ctxs, buf_ctx, cb_done);
 	}
+	return (unlocked);
 }
 
 /*
@@ -3531,9 +3513,8 @@ dbuf_hold_impl_(dnode_t *dn, uint8_t level, uint64_t blkid,
 	}
 	(void) zfs_refcount_add(&db->db_holds, tag);
 	DBUF_VERIFY(db);
-	if (level == 0)
-		dbuf_hold_update_buf_set(ctx, db);
-	mutex_exit(&db->db_mtx);
+	if (!dbuf_hold_update_done(ctx, db, level))
+		mutex_exit(&db->db_mtx);
 
 	/* NOTE: we can't rele the parent until after we drop the db_mtx */
 	if (parent)
@@ -3574,16 +3555,16 @@ dbuf_hold_level(dnode_t *dn, int level, uint64_t blkid, void *tag)
 
 int
 dbuf_hold_level_async(struct dnode *dn, int level, uint64_t blkid,
-    void *tag, dmu_buf_impl_t **dbp, uint64_t dn_off, dmu_buf_ctx_t *buf_ctx,
-    uint64_t resid, zio_t *zio,  dmu_buf_ctx_cb_t buf_cb)
+    void *tag, dmu_buf_impl_t **dbp, dmu_buf_ctx_t *buf_ctx,
+    zio_t *zio,  dmu_buf_ctx_cb_t cb_restart, dmu_buf_ctx_cb_t cb_done)
 {
 	dbuf_hold_async_ctx_t ctx;
 
-	ctx.dn_off = dn_off;
 	ctx.buf_ctx = buf_ctx;
-	ctx.resid = resid;
 	ctx.zio = zio;
-	ctx.buf_cb = buf_cb;
+	ctx.cb_restart = cb_restart;
+	ctx.cb_done = cb_done;
+	ctx.leaf_level = level;
 	return (dbuf_hold_impl_(dn, level, blkid, FALSE, FALSE,
 	    tag, dbp, &ctx));
 }
