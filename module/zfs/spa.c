@@ -2866,6 +2866,12 @@ spa_load(spa_t *spa, spa_load_state_t state, spa_import_type_t type)
 	char *ereport = FM_EREPORT_ZFS_POOL;
 	int error;
 
+	/*
+	 * Skip the spa activity check if we aren't actually importing.
+	 */
+	if (state == SPA_LOAD_TRYIMPORT)
+		spa->spa_import_flags |= ZFS_IMPORT_SKIP_MMP;
+
 	spa->spa_load_state = state;
 	(void) spa_import_progress_set_state(spa_guid(spa),
 	    spa_load_state(spa));
