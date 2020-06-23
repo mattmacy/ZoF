@@ -240,7 +240,6 @@ extern arc_stats_t arc_stats;
 #define	arc_dnode_limit	ARCSTAT(arcstat_dnode_limit) /* max size for dnodes */
 #define	arc_meta_min	ARCSTAT(arcstat_meta_min) /* min size for metadata */
 #define	arc_meta_max	ARCSTAT(arcstat_meta_max) /* max size of metadata */
-#define	arc_need_free	ARCSTAT(arcstat_need_free) /* bytes to be freed */
 #define	arc_sys_free	ARCSTAT(arcstat_sys_free) /* target system free bytes */
 
 static int
