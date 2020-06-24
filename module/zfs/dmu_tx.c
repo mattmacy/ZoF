@@ -1572,17 +1572,8 @@ dmu_tx_prefault_impl(dmu_buf_ctx_t *ctx, int inerr)
 		if (err)
 			goto fail_out;
 		dtbs->dtbs_async_holds++;
+		dbuf_read(db, zio, dbuf_flags);
 		dbid[i].dbi_buf = &db->db;
-
-		err = dbuf_read_async(db, zio, dbuf_flags, buf_ctx,
-		    dmu_tx_prefault_cb);
-
-		if (err == EINPROGRESS) {
-			ASSERT(async);
-			goto early_out;
-		}
-		if (err)
-			goto fail_out;
 	}
 	if (drop_struct_rwlock)
 		rw_exit(&dn->dn_struct_rwlock);
