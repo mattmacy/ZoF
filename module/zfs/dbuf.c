@@ -786,30 +786,19 @@ dbuf_fetch_buf_ctxs(dmu_buf_impl_t *db, list_t *list)
 }
 
 static void
-dbuf_process_buf_ctxs_(list_t *list, int err, const char *function)
+dbuf_process_buf_ctxs(list_t *list, int err)
 {
-	dmu_buf_ctx_node_t *dbsn, *next;
+	dmu_buf_ctx_node_t *dbsn;
 	dmu_buf_ctx_cb_t cb;
 	dmu_buf_ctx_t *ctx;
-	int count = 0;
 
-	for (dbsn = list_head(list); dbsn != NULL; dbsn = next) {
+	while ((dbsn = list_remove_head(list)) != NULL) {
 		ctx = dbsn->dbsn_ctx;
 		cb = dbsn->dbsn_cb;
-		next = list_next(list, dbsn);
-		dmu_buf_ctx_node_remove(list, dbsn);
+		dmu_buf_ctx_node_remove(dbsn);
 		cb(ctx, err);
-		count++;
 	}
-#if 0
-	if (count)
-		printf("processed %d buf_sets for %p in %s\n",
-		    count, db, function);
-#endif
 }
-
-#define	dbuf_process_buf_ctxs(a, b)				\
-	dbuf_process_buf_ctxs_((a), (b), __func__)
 
 void
 dbuf_init(void)

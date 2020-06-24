@@ -370,6 +370,7 @@ zvol_strategy(void *arg)
 {
 	zv_request_t *zr = arg;
 	zvol_strategy_state_t *zss;
+	zvol_dmu_state_t *zds;
 	zvol_state_t *zv = zr->zv;
 	uio_t *uio;
 	uint32_t dmu_flags = DMU_CTX_FLAG_ASYNC | DMU_CTX_FLAG_UIO;
@@ -399,15 +400,21 @@ zvol_strategy(void *arg)
 	    bio_sectors(bio), &zv->zv_zso->zvo_disk->part0);
 
 	zss = kmem_zalloc(sizeof (zvol_strategy_state_t), KM_SLEEP);
+	zds = &zss->zss_zds;
 	zss->zr = zr;
 	zss->start_jif = jiffies;
 	zss->zds.zds_zv = zr->zv;
 	zss->zds.zds_sync = bio_is_fua(zr->bio);
 	uio = &zss->uio;
 	uio_from_bio(uio, zr->bio);
+	zds->zds_off = uio->uio_loffset;
+	zds->zds_io_size = uio->uio_resid;
+	zds->zds_data = uio;
+	zds->zds_dmu_flags = dmu_flags;
+	zds->zds_dmu_done = zvol_strategy_dmu_done;
+	zds->zds_dmu_err = zvol_strategy_dmu_done;
 
-	error = zvol_dmu_ctx_init(&zss->zds, uio, uio->uio_loffset,
-	    uio->uio_resid, dmu_flags, zvol_strategy_dmu_done);
+	error = zvol_dmu_ctx_init(zds);
 	if (error == EINPROGRESS)
 		return;
 	if (error) {

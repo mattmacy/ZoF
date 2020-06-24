@@ -160,22 +160,31 @@ const dmu_object_byteswap_info_t dmu_ot_byteswap[DMU_BSWAP_NUMFUNCS] = {
 #endif
 
 #ifdef ZFS_DEBUG
-#define	DEBUG_REFCOUNT(a, b, c) uint32_t b
 #define	DEBUG_COUNTER_U(a, b, c) uint64_t b
 #define	DEBUG_REFCOUNT_ADD(b) atomic_inc_32(&(b))
 #define	DEBUG_REFCOUNT_DEC(b) atomic_dec_32(&(b))
+
+/* BEGIN CSTYLED */
+static uint32_t dbsn_in_flight;
+ZFS_MODULE_PARAM(zfs_dmu,  , dbsn_in_flight, UINT, ZMOD_RD,
+    "DMU buf set nodes in flight");
+static uint32_t dmu_ctx_in_flight;
+ZFS_MODULE_PARAM(zfs_dmu, , dmu_ctx_in_flight, UINT, ZMOD_RD,
+    "DMU contexts in flight");
+static uint32_t buf_set_in_flight;
+ZFS_MODULE_PARAM(zfs_dmu, , buf_set_in_flight, UINT, ZMOD_RD,
+    "Buffer sets in flight");
+/* END CSTYLED */
 #else
-#define	DEBUG_REFCOUNT(a, b, c)
 #define	DEBUG_COUNTER_U(a, b, c)
 #define	DEBUG_REFCOUNT_ADD(b)
 #define	DEBUG_REFCOUNT_DEC(b)
 #endif
 
-DEBUG_REFCOUNT(_vfs_zfs_dmu, dbsn_in_flight, "DMU buf set nodes in flight");
+
+
 DEBUG_COUNTER_U(_vfs_zfs_dmu, dmu_ctx_total, "Total DMU contexts");
 DEBUG_COUNTER_U(_vfs_zfs_dmu, buf_set_total, "Total buffer sets");
-DEBUG_REFCOUNT(_vfs_zfs_dmu, dmu_ctx_in_flight, "DMU contexts in flight");
-DEBUG_REFCOUNT(_vfs_zfs_dmu, buf_set_in_flight, "Buffer sets in flight");
 
 #if defined(_KERNEL) && defined(__FreeBSD__)
 #define	dmu_uiomove(data, sz, dir, uio)			\
@@ -184,8 +193,6 @@ DEBUG_REFCOUNT(_vfs_zfs_dmu, buf_set_in_flight, "Buffer sets in flight");
 #define	dmu_uiomove(data, sz, dir, uio)			\
 	uiomove((data), (sz), (dir), (uio))
 #endif
-
-
 
 /*
  * DMU Context based functions.
@@ -216,9 +223,8 @@ dmu_buf_ctx_node_add(list_t *list, dmu_buf_ctx_t *ctx, dmu_buf_ctx_cb_t cb)
 }
 
 void
-dmu_buf_ctx_node_remove(list_t *list, dmu_buf_ctx_node_t *dbsn)
+dmu_buf_ctx_node_remove(dmu_buf_ctx_node_t *dbsn)
 {
-	list_remove(list, dbsn);
 	kmem_free(dbsn, sizeof (dmu_buf_ctx_node_t));
 	ASSERT(dbsn_in_flight > 0);
 	DEBUG_REFCOUNT_DEC(dbsn_in_flight);
@@ -497,11 +503,14 @@ dmu_thread_context_create(void)
 }
 
 void
-dmu_thread_context_destroy(void *context __maybe_unused)
+dmu_thread_context_destroy(void *context)
 {
 	dmu_cb_state_t *dcs;
 
-	dcs = tsd_get(zfs_async_io_key);
+	if (context == NULL)
+		dcs = tsd_get(zfs_async_io_key);
+	else
+		dcs = context;
 	/* This function may be called on a thread that didn't call create. */
 	if (dcs == NULL)
 		return;
@@ -513,14 +522,15 @@ dmu_thread_context_destroy(void *context __maybe_unused)
 	ASSERT(list_is_empty(&dcs->dcs_io_list));
 
 	kmem_free(dcs, sizeof (dmu_cb_state_t));
-	VERIFY(tsd_set(zfs_async_io_key, NULL) == 0);
+	if (context == NULL)
+		VERIFY(tsd_set(zfs_async_io_key, NULL) == 0);
 }
 
 void
 dmu_thread_context_process(void)
 {
 	dmu_cb_state_t *dcs = tsd_get(zfs_async_io_key);
-	dmu_buf_ctx_node_t *dbsn, *next;
+	dmu_buf_ctx_node_t *dbsn;
 	dmu_buf_ctx_cb_t cb;
 	dmu_buf_ctx_t *ctx;
 	int err;
@@ -530,22 +540,20 @@ dmu_thread_context_process(void)
 	 * async I/O's.  It is probably not a zio thread.  This is needed
 	 * because zio_execute() can be called from non-zio threads.
 	 */
-	if (dcs == NULL)
+	if (dcs == NULL || dcs->dcs_in_process)
 		return;
-retry:
-	for (dbsn = list_head(&dcs->dcs_io_list); dbsn != NULL; dbsn = next) {
+	dcs->dcs_in_process = B_TRUE;
+	while ((dbsn = list_remove_head(&dcs->dcs_io_list)) != NULL) {
 		ctx = dbsn->dbsn_ctx;
 		cb = dbsn->dbsn_cb;
 		err = dbsn->dbsn_err;
-		next = list_next(&dcs->dcs_io_list, dbsn);
-		dmu_buf_ctx_node_remove(&dcs->dcs_io_list, dbsn);
+		dmu_buf_ctx_node_remove(dbsn);
 		cb(ctx, err);
 	}
-	if (!list_is_empty(&dcs->dcs_io_list))
-		goto retry;
+	dcs->dcs_in_process = B_FALSE;
 }
 
-static void
+void
 dmu_thread_context_dispatch(dmu_buf_ctx_t *dbs_ctx, int err,
     dmu_buf_ctx_cb_t cb)
 {
@@ -714,16 +722,14 @@ dmu_ctx_setup_tx(dmu_ctx_t *dmu_ctx, dmu_tx_t **txp, dnode_t **dnp,
     uint64_t size)
 {
 	int err;
-	boolean_t sync;
 
 	/* Readers and writers with a context transaction do not apply. */
 	if ((dmu_ctx->dc_flags & DMU_CTX_FLAG_READ) || dmu_ctx->dc_tx != NULL)
 		return (0);
 
-	sync = !(dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC);
 	*txp = dmu_tx_create(dmu_ctx->dc_os);
-	dmu_tx_hold_write_impl(*txp, dmu_ctx->dc_object,
-	    dmu_ctx->dc_dn_offset, size, sync);
+	dmu_tx_hold_write(*txp, dmu_ctx->dc_object,
+	    dmu_ctx->dc_dn_offset, size);
 	err = dmu_tx_assign(*txp, TXG_WAIT);
 	if (err)
 		goto out;
@@ -1105,6 +1111,7 @@ dmu_ctx_init(dmu_ctx_t *dmu_ctx, struct dnode *dn, objset_t *os,
 	/* All set, actually initialize the context! */
 	bzero(dmu_ctx, sizeof (dmu_ctx_t));
 	mutex_init(&dmu_ctx->dc_mtx, "context lock", MUTEX_DEFAULT, NULL);
+	dmu_ctx->dc_buf_ctx.dbc_flags = (flags & DMU_CTX_FLAG_ASYNC);
 	dmu_ctx->dc_dn = dn;
 	dmu_ctx->dc_os = os;
 	dmu_ctx->dc_object = object;
