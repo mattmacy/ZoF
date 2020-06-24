@@ -315,8 +315,6 @@ typedef struct dbuf_hash_table {
 	kmutex_t hash_mutexes[DBUF_MUTEXES];
 } dbuf_hash_table_t;
 
-typedef void (*dmu_buf_ctx_cb_t)(struct dmu_buf_ctx *, int err);
-
 typedef struct dmu_buf_ctx_node {
 
 	/* The callback for this entry */
@@ -338,7 +336,7 @@ extern uint_t zfs_async_io_key;
 
 void dmu_buf_ctx_node_add(list_t *list, dmu_buf_ctx_t *buf_ctx,
     dmu_buf_ctx_cb_t cb);
-void dmu_buf_ctx_node_remove(list_t *list, dmu_buf_ctx_node_t *dbsn);
+void dmu_buf_ctx_node_remove(dmu_buf_ctx_node_t *dbsn);
 
 /*
  * Thread-specific DMU callback state for processing async I/O's.
@@ -347,6 +345,7 @@ typedef struct dmu_cb_state {
 
 	/* The list of IOs that are ready to be processed. */
 	list_t dcs_io_list;
+	boolean_t dcs_in_process;
 } dmu_cb_state_t;
 
 uint64_t dbuf_whichblock(const struct dnode *di, const int64_t level,
