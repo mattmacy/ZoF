@@ -425,14 +425,12 @@ zvol_strategy(void *arg)
 		zds = &zss->zds;
 	}
 
-	if (zvol_dmu_max_active(zv) && need_dispatch) {
-		if (mutex_tryenter(&zv->zv_state_lock)) {
-			if (zv->zv_active > 0) {
-				list_insert_tail(&zv->zv_deferred, zds);
-				error = EINPROGRESS;
-			}
-			mutex_exit(&zv->zv_state_lock);
+	if (zvol_dmu_max_active(zv) && mutex_tryenter(&zv->zv_state_lock)) {
+		if (zv->zv_active > 1) {
+			zvol_dmu_ctx_init_enqueue(zds);
+			error = EINPROGRESS;
 		}
+		mutex_exit(&zv->zv_state_lock);
 		if (error)
 			return;
 	}
@@ -443,15 +441,16 @@ zvol_strategy(void *arg)
 
 	error = zvol_dmu_ctx_init(zds);
 	if (error == EINPROGRESS)
-		return;
+		goto out;
 	if (error) {
 		zss->zds.zds_dc.dc_err = error;
 		zvol_strategy_dmu_done(&zss->zds.zds_dc);
-		return;
+		goto out;
 	}
-
 	/* Errors are reported via the callback. */
 	zvol_dmu_issue(&zss->zds);
+out:
+	dmu_thread_context_process();
 }
 
 static MAKE_REQUEST_FN_RET
