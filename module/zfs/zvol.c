@@ -1862,7 +1862,7 @@ zvol_dmu_ctx_init_write(zvol_dmu_state_t *zds, dmu_ctx_cb_t err_cb)
 boolean_t
 zvol_dmu_max_active(zvol_state_t *zv)
 {
-	return (zv->zv_active >= boot_ncpus + 1);
+	return (zv->zv_active > boot_ncpus);
 }
 
 int
