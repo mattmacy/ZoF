@@ -493,6 +493,8 @@ dmu_thread_context_create(void)
 	    offsetof(dmu_buf_ctx_node_t, dbsn_link));
 
 	ret = tsd_set(zfs_async_io_key, dcs);
+	VERIFY3B(ret, ==, 0);
+
 #ifdef ZFS_DEBUG
 	{
 		dmu_cb_state_t *check = tsd_get(zfs_async_io_key);
