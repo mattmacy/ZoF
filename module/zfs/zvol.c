@@ -1866,6 +1866,18 @@ zvol_dmu_max_active(zvol_state_t *zv)
 	return (zv->zv_active > boot_ncpus);
 }
 
+void
+zvol_dmu_ctx_init_enqueue(zvol_dmu_state_t *zds)
+{
+	zvol_state_t *zv = zds->zds_zv;
+
+	ASSERT(mutex_owned(&zv->zv_state_lock));
+	zds->zds_dc.dc_buf_ctx.dbc_flags |= DMU_CTX_FLAG_ASYNC;
+	atomic_inc(&zv->zv_suspend_ref);
+	list_insert_tail(&zv->zv_deferred, zds);
+	DEBUG_REFCOUNT_ADD(dmu_ctx_deferred);
+}
+
 int
 zvol_dmu_ctx_init(zvol_dmu_state_t *zds)
 {
@@ -1908,6 +1920,7 @@ zvol_dmu_ctx_init(zvol_dmu_state_t *zds)
 		DEBUG_REFCOUNT_ADD(dmu_ctx_in_init);
 		mutex_enter(&zv->zv_state_lock);
 		if (zvol_dmu_max_active(zv)) {
+			zds->zds_dc.dc_buf_ctx.dbc_flags |= DMU_CTX_FLAG_ASYNC;
 			list_insert_tail(&zv->zv_deferred, zds);
 			DEBUG_REFCOUNT_ADD(dmu_ctx_deferred);
 			err = EINPROGRESS;
