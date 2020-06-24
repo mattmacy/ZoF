@@ -484,6 +484,17 @@ zvol_geom_access(struct g_provider *pp, int acr, int acw, int ace)
 	return (error);
 }
 
+static boolean_t
+zvol_is_async(struct bio *bp)
+{
+	switch (bp->bio_cmd) {
+	case BIO_READ:
+	case BIO_WRITE:
+		return (B_TRUE);
+	}
+	return (B_FALSE);
+}
+
 static void
 zvol_process_bio(zvol_state_t *zv, struct bio *bp)
 {
@@ -509,6 +520,7 @@ zvol_geom_worker(void *arg)
 	sched_prio(curthread, PRIBIO);
 	thread_unlock(curthread);
 
+	VERIFY0(dmu_thread_context_create());
 	for (;;) {
 		mtx_lock(&zsg->zsg_queue_mtx);
 		bp = bioq_takefirst(&zsg->zsg_queue);
@@ -541,7 +553,7 @@ zvol_geom_bio_start(struct bio *bp)
 		return;
 	}
 
-	if (!THREAD_CAN_SLEEP()) {
+	if (!THREAD_CAN_SLEEP() || zvol_is_async(bp)) {
 		mtx_lock(&zsg->zsg_queue_mtx);
 		first = (bioq_first(&zsg->zsg_queue) == NULL);
 		bioq_insert_tail(&zsg->zsg_queue, bp);
@@ -717,6 +729,20 @@ zvol_strategy_epilogue(void *arg)
 }
 
 static void
+zvol_strategy_dmu_err(dmu_ctx_t *dc)
+{
+	zvol_strategy_state_t *zss = (zvol_strategy_state_t *)dc;
+	zvol_state_t *zv = zss->zss_zds.zds_zv;
+	struct bio *bp = zss->zss_bp;
+
+
+	kmem_free(zss, sizeof (zvol_strategy_state_t));
+	ASSERT(atomic_read(&zv->zv_suspend_ref) > 0);
+	atomic_dec(&zv->zv_suspend_ref);
+	zvol_done(bp, SET_ERROR(ENXIO));
+}
+
+static void
 zvol_strategy_dmu_done(dmu_ctx_t *dc)
 {
 	zvol_strategy_state_t *zss = (zvol_strategy_state_t *)dc;
@@ -756,6 +782,7 @@ static void
 zvol_geom_bio_async(zvol_state_t *zv, struct bio *bp)
 {
 	zvol_strategy_state_t *zss;
+	zvol_dmu_state_t *zds;
 	int error = 0;
 	uint32_t dmu_flags = DMU_CTX_FLAG_ASYNC;
 
@@ -766,24 +793,31 @@ zvol_geom_bio_async(zvol_state_t *zv, struct bio *bp)
 
 	zss = kmem_zalloc(sizeof (zvol_strategy_state_t), KM_SLEEP);
 	zss->zss_bp = bp;
-	zss->zss_zds.zds_zv = zv;
+	zds = &zss->zss_zds;
+	zds->zds_zv = zv;
+	zds->zds_off = bp->bio_offset;
+	zds->zds_io_size = bp->bio_length;
+	zds->zds_data = bp->bio_data;
+	zds->zds_dmu_flags = dmu_flags;
+	zds->zds_dmu_done = zvol_strategy_dmu_done;
+	zds->zds_dmu_err = zvol_strategy_dmu_err;
 
-	error = zvol_dmu_ctx_init(&zss->zss_zds, bp->bio_data, bp->bio_offset,
-	    bp->bio_length, dmu_flags, zvol_strategy_dmu_done);
-
+	error = zvol_dmu_ctx_init(zds);
 	if (error == EINPROGRESS)
-		return;
+		goto out;
 
 	if (error) {
 		kmem_free(zss, sizeof (zvol_strategy_state_t));
 		ASSERT(atomic_read(&zv->zv_suspend_ref) > 0);
 		atomic_dec(&zv->zv_suspend_ref);
 		zvol_done(bp, SET_ERROR(ENXIO));
-		return;
+		goto out;
 	}
 
 	/* Errors are reported via the callback. */
 	zvol_dmu_issue(&zss->zss_zds);
+out:
+	dmu_thread_context_process();
 }
 
 static void
@@ -1394,6 +1428,8 @@ zvol_create_minor_impl(const char *name)
 	 */
 	zv = kmem_zalloc(sizeof (*zv), KM_SLEEP);
 	zv->zv_hash = hash;
+	list_create(&zv->zv_deferred, sizeof (zvol_dmu_state_t),
+	    offsetof(zvol_dmu_state_t, zds_defer_node));
 	mutex_init(&zv->zv_state_lock, NULL, MUTEX_DEFAULT, NULL);
 	zv->zv_zso = kmem_zalloc(sizeof (struct zvol_state_os), KM_SLEEP);
 	zv->zv_zso->zso_volmode = volmode;
