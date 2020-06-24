@@ -372,14 +372,15 @@ static void
 zvol_strategy(void *arg)
 {
 	zv_request_t *zr = arg;
-	zvol_strategy_state_t *zss;
-	zvol_dmu_state_t *zds;
 	zvol_state_t *zv = zr->zv;
-	uio_t *uio;
 	uint32_t dmu_flags = DMU_CTX_FLAG_ASYNC | DMU_CTX_FLAG_UIO;
 	struct bio *bio = zr->bio;
 	boolean_t need_dispatch = B_FALSE;
-	int rw, error;
+	int error = 0;
+	zvol_strategy_state_t *zss;
+	zvol_dmu_state_t *zds;
+	uio_t *uio;
+	int rw;
 
 	if (bio_is_flush(bio) && !zr->flushed) {
 		zr->flushed = B_TRUE;
@@ -396,15 +397,15 @@ zvol_strategy(void *arg)
 		return;
 	}
 
-	rw = bio_data_dir(bio);
-	if (rw == READ)
-		dmu_flags |= DMU_CTX_FLAG_READ;
-
-	blk_generic_start_io_acct(zv->zv_zso->zvo_queue, rw,
-	    bio_sectors(bio), &zv->zv_zso->zvo_disk->part0);
-
 	if ((zss = zr->zss) == NULL) {
-		need_dispatch = !zr->flushed;
+		need_dispatch = (tsd_get(zfs_async_io_key) == NULL);
+		rw = bio_data_dir(bio);
+
+		if (rw == READ)
+			dmu_flags |= DMU_CTX_FLAG_READ;
+
+		blk_generic_start_io_acct(zv->zv_zso->zvo_queue, rw,
+		    bio_sectors(bio), &zv->zv_zso->zvo_disk->part0);
 		zss = kmem_zalloc(sizeof (zvol_strategy_state_t), KM_SLEEP);
 		zds = &zss->zds;
 		zss->zr = zr;
@@ -423,20 +424,23 @@ zvol_strategy(void *arg)
 	} else {
 		zds = &zss->zds;
 	}
-	if (zvol_dmu_max_active(zv)) {
-		mutex_enter(&zv->zv_state_lock);
-		if (zv->zv_active > 0) {
-			list_insert_tail(&zv->zv_deferred, zds);
-			error = EINPROGRESS;
+
+	if (zvol_dmu_max_active(zv) && need_dispatch) {
+		if (mutex_tryenter(&zv->zv_state_lock)) {
+			if (zv->zv_active > 0) {
+				list_insert_tail(&zv->zv_deferred, zds);
+				error = EINPROGRESS;
+			}
+			mutex_exit(&zv->zv_state_lock);
 		}
-		mutex_exit(&zv->zv_state_lock);
+		if (error)
+			return;
 	}
-	if (error)
-		return;
 	if (need_dispatch) {
 		taskq_dispatch_ent(zvol_taskq, zvol_strategy, zr, 0, &zr->ent);
 		return;
 	}
+
 	error = zvol_dmu_ctx_init(zds);
 	if (error == EINPROGRESS)
 		return;
@@ -501,11 +505,9 @@ zvol_request(struct request_queue *q, struct bio *bio)
 			rw_downgrade(&zv->zv_suspend_lock);
 		}
 
-		zvr = kmem_alloc(sizeof (zv_request_t), KM_SLEEP);
+		zvr = kmem_zalloc(sizeof (zv_request_t), KM_SLEEP);
 		zvr->zv = zv;
 		zvr->bio = bio;
-		zvr->flushed = B_FALSE;
-		zvr->zss = NULL;
 		taskq_init_ent(&zvr->ent);
 
 		/*
@@ -563,7 +565,7 @@ zvol_request(struct request_queue *q, struct bio *bio)
 			goto out;
 		}
 
-		zvr = kmem_alloc(sizeof (zv_request_t), KM_SLEEP);
+		zvr = kmem_zalloc(sizeof (zv_request_t), KM_SLEEP);
 		zvr->zv = zv;
 		zvr->bio = bio;
 		taskq_init_ent(&zvr->ent);
@@ -917,7 +919,8 @@ zvol_alloc(dev_t dev, const char *name)
 	zv = kmem_zalloc(sizeof (zvol_state_t), KM_SLEEP);
 	zso = kmem_zalloc(sizeof (struct zvol_state_os), KM_SLEEP);
 	zv->zv_zso = zso;
-
+	list_create(&zv->zv_deferred, sizeof (zvol_dmu_state_t),
+	    offsetof(zvol_dmu_state_t, zds_defer_node));
 	list_link_init(&zv->zv_next);
 	mutex_init(&zv->zv_state_lock, NULL, MUTEX_DEFAULT, NULL);
 
