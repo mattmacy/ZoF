@@ -1446,17 +1446,8 @@ dmu_tx_prefault_count(dnode_t *dn,  uint64_t off, uint64_t len)
 	} else {
 		/* first level-0 block */
 		uint64_t start = off >> dn->dn_datablkshift;
-		if (P2PHASE(off, dn->dn_datablksz) || len < dn->dn_datablksz) {
-			count++;
-		}
-
 		/* last level-0 block */
 		uint64_t end = (off + len - 1) >> dn->dn_datablkshift;
-		if (end != start && end <= dn->dn_maxblkid &&
-		    P2PHASE(off + len, dn->dn_datablksz)) {
-			count++;
-		}
-
 		/* level-1 blocks */
 		if (dn->dn_nlevels > 1 && end > start) {
 			int shft = dn->dn_indblkshift - SPA_BLKPTRSHIFT;
@@ -1490,21 +1481,8 @@ dmu_buf_id_init(dmu_buf_id_t *dbid,  dnode_t *dn,  uint64_t off, uint64_t len)
 	} else {
 		/* first level-0 block */
 		uint64_t start = off >> dn->dn_datablkshift;
-		if (P2PHASE(off, dn->dn_datablksz) || len < dn->dn_datablksz) {
-			dbid[count].dbi_blkid = start;
-			dbid[count].dbi_level = 0;
-			count++;
-		}
-
 		/* last level-0 block */
 		uint64_t end = (off + len - 1) >> dn->dn_datablkshift;
-		if (end != start && end <= dn->dn_maxblkid &&
-		    P2PHASE(off + len, dn->dn_datablksz)) {
-			dbid[count].dbi_blkid = end;
-			dbid[count].dbi_level = 0;
-			count++;
-		}
-
 		/* level-1 blocks */
 		if (dn->dn_nlevels > 1) {
 			int shft = dn->dn_indblkshift - SPA_BLKPTRSHIFT;
