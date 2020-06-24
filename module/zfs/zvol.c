@@ -1757,7 +1757,7 @@ zvol_dmu_ctx_init_deferred(zvol_state_t *zv)
 		DEBUG_REFCOUNT_DEC(dmu_ctx_active);
 		zv->zv_active--;
 	}
-	MPASS(zv->zv_active >= 0);
+	ASSERT(zv->zv_active >= 0);
 	mutex_exit(&zv->zv_state_lock);
 	if (zds == NULL)
 		return;
@@ -1773,7 +1773,6 @@ zvol_dmu_err(zvol_dmu_state_t *zds_, dmu_ctx_cb_t err_cb)
 	zvol_dmu_state_t *zds = zds_;
 	zvol_state_t *zv = zds->zds_zv;
 
-	kdb_backtrace();
 	err_cb(&zds->zds_dc);
 	zvol_dmu_ctx_init_deferred(zv);
 }

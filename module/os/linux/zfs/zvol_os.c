@@ -400,7 +400,7 @@ zvol_strategy(void *arg)
 	    bio_sectors(bio), &zv->zv_zso->zvo_disk->part0);
 
 	zss = kmem_zalloc(sizeof (zvol_strategy_state_t), KM_SLEEP);
-	zds = &zss->zss_zds;
+	zds = &zss->zds;
 	zss->zr = zr;
 	zss->start_jif = jiffies;
 	zss->zds.zds_zv = zr->zv;
