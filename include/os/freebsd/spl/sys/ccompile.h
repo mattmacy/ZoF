@@ -296,8 +296,10 @@ atomic_dec(atomic_t *v)
 #else
 typedef long loff_t;
 typedef long rlim64_t;
+#ifndef HAVE_RPC_TYPES
 typedef int bool_t;
 typedef int enum_t;
+#endif
 #ifndef __cplusplus
 #define	__init
 #endif
@@ -312,11 +314,14 @@ typedef int enum_t;
 #define	ENODATA EINVAL
 
 
-#define	__XSI_VISIBLE 1000
 #define	__BSD_VISIBLE 1
+#ifndef	IN_BASE
 #define	__POSIX_VISIBLE 201808
+#define	__XSI_VISIBLE 1000
+#endif
 #define	ARRAY_SIZE(a) (sizeof (a) / sizeof (a[0]))
 #define	open64 open
+#define	mmap64 mmap
 #define	pwrite64 pwrite
 #define	ftruncate64 ftruncate
 #define	lseek64 lseek

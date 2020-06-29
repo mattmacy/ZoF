@@ -153,15 +153,6 @@ extern "C" {
 
 #elif !defined(ntohl) /* little-endian */
 
-#ifndef	_IN_PORT_T
-#define	_IN_PORT_T
-typedef uint16_t in_port_t;
-#endif
-
-#ifndef	_IN_ADDR_T
-#define	_IN_ADDR_T
-typedef uint32_t in_addr_t;
-#endif
 
 #if !defined(_XPG4_2) || defined(__EXTENSIONS__) || defined(_XPG5)
 extern	uint32_t htonl(uint32_t);
