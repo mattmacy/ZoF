@@ -294,11 +294,13 @@ atomic_dec(atomic_t *v)
 }
 #endif
 #else
+#ifndef LOCORE
 typedef long loff_t;
 typedef long rlim64_t;
 #ifndef HAVE_RPC_TYPES
 typedef int bool_t;
 typedef int enum_t;
+#endif
 #endif
 #ifndef __cplusplus
 #define	__init
