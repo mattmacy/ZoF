@@ -46,7 +46,7 @@ struct xdr_bytesrec {
 	size_t xc_num_avail;
 };
 #endif
-typedef xdr_bytesrec  xdr_bytesrec_t;
+typedef struct xdr_bytesrec  xdr_bytesrec_t;
 
 /*
  * This functionality is not required and is disabled in user space.
