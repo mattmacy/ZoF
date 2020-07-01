@@ -8537,6 +8537,7 @@ main(int argc, char **argv)
 }
 
 #ifdef __FreeBSD__
+#include <libzfs_os.h>
 #include <sys/jail.h>
 #include <jail.h>
 /*

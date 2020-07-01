@@ -17,6 +17,7 @@ endif
 
 if BUILD_FREEBSD
 DEFAULT_INCLUDES += \
+	-I$(top_srcdir)/include/os/freebsd \
 	-I$(top_srcdir)/lib/libspl/include/os/freebsd
 endif
 
