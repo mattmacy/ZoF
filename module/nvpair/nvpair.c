@@ -41,6 +41,9 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stddef.h>
+#ifdef IN_BASE
+int aok;
+#endif
 #endif
 
 #define	skip_whitespace(p)	while ((*(p) == ' ') || (*(p) == '\t')) p++

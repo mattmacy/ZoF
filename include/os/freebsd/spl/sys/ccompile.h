@@ -296,7 +296,6 @@ atomic_dec(atomic_t *v)
 #else
 #ifndef LOCORE
 typedef long loff_t;
-typedef long rlim64_t;
 #ifndef HAVE_RPC_TYPES
 typedef int bool_t;
 typedef int enum_t;
@@ -374,7 +373,9 @@ typedef int enum_t;
 
 #define	DIV_ROUND_UP(n, d)	(((n) + (d) - 1) / (d))
 #define	RLIM64_INFINITY RLIM_INFINITY
+#ifndef HAVE_ERESTART
 #define	ERESTART EAGAIN
+#endif
 #define	ABS(a)	((a) < 0 ? -(a) : (a))
 
 #endif
