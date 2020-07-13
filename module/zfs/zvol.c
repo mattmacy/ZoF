@@ -82,6 +82,7 @@
 #include <sys/zio.h>
 #include <sys/zfs_rlock.h>
 #include <sys/spa_impl.h>
+#include <sys/taskq.h>
 #include <sys/zvol.h>
 
 #include <sys/zvol_impl.h>
@@ -112,6 +113,8 @@ ZFS_MODULE_PARAM(zfs_zvol, , dmu_ctx_in_prefault, UINT, ZMOD_RD,
 
 unsigned int zvol_inhibit_dev = 0;
 unsigned int zvol_volmode = ZFS_VOLMODE_GEOM;
+static unsigned int zvol_threads = 32;
+taskq_t *zvol_taskq;
 
 struct hlist_head *zvol_htable;
 list_t zvol_state_list;
@@ -1990,11 +1993,40 @@ zvol_dmu_done(dmu_ctx_t *dc, callback_fn cb, void *arg)
 	return (rc);
 }
 
+static void
+zvol_thread_init(void *context __maybe_unused)
+{
+
+	VERIFY0(dmu_thread_context_create());
+}
+
+static void
+zvol_thread_destroy(void *context __maybe_unused)
+{
+
+	dmu_thread_context_destroy(NULL);
+}
+
+static int
+zvol_taskq_init(void)
+{
+	int threads = MIN(MAX(zvol_threads, 1), 1024);
+
+	zvol_taskq = taskq_create_with_callbacks(ZVOL_DRIVER, threads,
+	    maxclsyspri, threads * 2, INT_MAX, TASKQ_PREPOPULATE |
+	    TASKQ_DYNAMIC, zvol_thread_init, zvol_thread_destroy);
+
+	return (zvol_taskq == NULL ? ENOMEM : 0);
+}
+
 int
 zvol_init_impl(void)
 {
-	int i;
+	int i, error;
 
+	error = zvol_taskq_init();
+	if (error)
+		return (error);
 	list_create(&zvol_state_list, sizeof (zvol_state_t),
 	    offsetof(zvol_state_t, zv_next));
 	rw_init(&zvol_state_lock, NULL, RW_DEFAULT, NULL);
@@ -2023,4 +2055,12 @@ zvol_fini_impl(void)
 	kmem_free(zvol_htable, ZVOL_HT_SIZE * sizeof (struct hlist_head));
 	list_destroy(&zvol_state_list);
 	rw_destroy(&zvol_state_lock);
+	taskq_destroy(zvol_taskq);
 }
+
+
+
+/* BEGIN CSTYLED */
+ZFS_MODULE_PARAM(zfs_zvol, zvol_, threads, UINT, ZMOD_RW,
+    "Max number of threads to handle I/O requests");
+/* END CSTYLED */

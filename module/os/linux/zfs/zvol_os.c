@@ -45,7 +45,6 @@ unsigned int zvol_major = ZVOL_MAJOR;
 unsigned int zvol_request_sync = 0;
 unsigned int zvol_prefetch_bytes = (128 * 1024);
 unsigned long zvol_max_discard_blocks = 16384;
-unsigned int zvol_threads = 32;
 
 struct zvol_state_os {
 	struct gendisk		*zvo_disk;	/* generic disk */
@@ -53,7 +52,6 @@ struct zvol_state_os {
 	dev_t			zvo_dev;	/* device id */
 };
 
-taskq_t *zvol_taskq;
 static struct ida zvol_ida;
 
 
@@ -1205,39 +1203,22 @@ const static zvol_platform_ops_t zvol_linux_ops = {
 	.zv_set_disk_ro = zvol_set_disk_ro_impl,
 	.zv_set_capacity = zvol_set_capacity_impl,
 };
-static void
-zvol_thread_init(void *context __maybe_unused)
-{
-
-	VERIFY0(dmu_thread_context_create());
-}
-
-static void
-zvol_thread_destroy(void *context __maybe_unused)
-{
-
-	dmu_thread_context_destroy(NULL);
-}
 
 int
 zvol_init(void)
 {
 	int error;
-	int threads = MIN(MAX(zvol_threads, 1), 1024);
 
 	error = register_blkdev(zvol_major, ZVOL_DRIVER);
 	if (error) {
 		printk(KERN_INFO "ZFS: register_blkdev() failed %d\n", error);
 		return (error);
 	}
-	zvol_taskq = taskq_create_with_callbacks(ZVOL_DRIVER, threads,
-	    maxclsyspri, threads * 2, INT_MAX, TASKQ_PREPOPULATE |
-	    TASKQ_DYNAMIC, zvol_thread_init, zvol_thread_destroy);
-	if (zvol_taskq == NULL) {
+	error = zvol_init_impl();
+	if (error) {
 		unregister_blkdev(zvol_major, ZVOL_DRIVER);
-		return (-ENOMEM);
+		return (-error);
 	}
-	zvol_init_impl();
 	blk_register_region(MKDEV(zvol_major, 0), 1UL << MINORBITS,
 	    THIS_MODULE, zvol_probe, NULL, NULL);
 
@@ -1252,7 +1233,6 @@ zvol_fini(void)
 	zvol_fini_impl();
 	blk_unregister_region(MKDEV(zvol_major, 0), 1UL << MINORBITS);
 	unregister_blkdev(zvol_major, ZVOL_DRIVER);
-	taskq_destroy(zvol_taskq);
 	ida_destroy(&zvol_ida);
 }
 
@@ -1262,9 +1242,6 @@ MODULE_PARM_DESC(zvol_inhibit_dev, "Do not create zvol device nodes");
 
 module_param(zvol_major, uint, 0444);
 MODULE_PARM_DESC(zvol_major, "Major number for zvol device");
-
-module_param(zvol_threads, uint, 0444);
-MODULE_PARM_DESC(zvol_threads, "Max number of threads to handle I/O requests");
 
 module_param(zvol_request_sync, uint, 0644);
 MODULE_PARM_DESC(zvol_request_sync, "Synchronously handle bio requests");

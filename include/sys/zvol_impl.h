@@ -90,6 +90,7 @@ extern zil_replay_func_t *zvol_replay_vector[TX_MAX_TYPE];
 
 extern unsigned int zvol_volmode;
 extern unsigned int zvol_inhibit_dev;
+extern taskq_t *zvol_taskq;
 
 /*
  * platform independent functions exported to platform code
