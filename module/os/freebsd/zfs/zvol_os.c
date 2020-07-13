@@ -1613,7 +1613,11 @@ zvol_busy(void)
 int
 zvol_init(void)
 {
-	zvol_init_impl();
+	int error;
+
+	error = zvol_init_impl();
+	if (error)
+		return (error);
 	zvol_register_ops(&zvol_freebsd_ops);
 	return (0);
 }

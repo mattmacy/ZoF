@@ -176,8 +176,8 @@ taskq_dtor(void *context)
 		tq->tq_dtor(tq);
 }
 
-static taskq_t *
-taskq_create_with_init(const char *name, int nthreads, pri_t pri,
+taskq_t *
+taskq_create_with_callbacks(const char *name, int nthreads, pri_t pri,
     int minalloc __unused, int maxalloc __unused, uint_t flags,
     taskq_callback_fn ctor, taskq_callback_fn dtor)
 {
@@ -206,8 +206,8 @@ taskq_create(const char *name, int nthreads, pri_t pri, int minalloc __unused,
     int maxalloc __unused, uint_t flags)
 {
 
-	return (taskq_create_with_init(name, nthreads, pri, minalloc, maxalloc,
-	    flags, NULL, NULL));
+	return (taskq_create_with_callbacks(name, nthreads, pri,
+	    minalloc, maxalloc, flags, NULL, NULL));
 }
 
 taskq_t *
@@ -216,8 +216,8 @@ taskq_create_proc(const char *name, int nthreads, pri_t pri, int minalloc,
     taskq_callback_fn ctor, taskq_callback_fn dtor)
 {
 
-	return (taskq_create_with_init(name, nthreads, pri, minalloc, maxalloc,
-	    flags, ctor, dtor));
+	return (taskq_create_with_callbacks(name, nthreads, pri,
+	    minalloc, maxalloc, flags, ctor, dtor));
 }
 
 void
