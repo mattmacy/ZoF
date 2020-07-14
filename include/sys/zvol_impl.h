@@ -115,6 +115,7 @@ void zvol_dmu_ctx_init_enqueue(zvol_dmu_state_t *zds);
 int zvol_dmu_done(dmu_ctx_t *dmu_ctx, callback_fn cb, void *arg);
 int zvol_init_impl(void);
 void zvol_fini_impl(void);
+void zvol_os_thread_init(void);
 
 /*
  * platform dependent functions exported to platform independent code

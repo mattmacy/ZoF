@@ -429,8 +429,11 @@ zvol_strategy(void *arg)
 			error = EINPROGRESS;
 		}
 		mutex_exit(&zv->zv_state_lock);
-		if (error)
+		if (error) {
+			if (!need_dispatch)
+				goto out;
 			return;
+		}
 	}
 	if (need_dispatch) {
 		taskq_dispatch_ent(zvol_taskq, zvol_strategy, zr, 0, &zr->ent);
@@ -1191,6 +1194,11 @@ zvol_set_capacity_impl(zvol_state_t *zv, uint64_t capacity)
 {
 
 	set_capacity(zv->zv_zso->zvo_disk, capacity);
+}
+
+void
+zvol_os_thread_init(void)
+{
 }
 
 const static zvol_platform_ops_t zvol_linux_ops = {
