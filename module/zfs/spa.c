@@ -970,7 +970,8 @@ static void
 spa_zio_thread_destroy(void *context)
 {
 
-	dmu_thread_context_destroy(context);
+	VERIFY(dmu_thread_context_process() == B_TRUE);
+	dmu_thread_context_destroy(NULL);
 }
 
 static void
