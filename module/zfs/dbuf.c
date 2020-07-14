@@ -817,14 +817,12 @@ dbuf_process_buf_ctxs(list_t *list, int err)
 	dmu_buf_ctx_node_t *dbsn;
 	dmu_buf_ctx_cb_t cb;
 	dmu_buf_ctx_t *ctx;
-	int count = 0;
 
 	while ((dbsn = list_remove_head(list)) != NULL) {
 		ctx = dbsn->dbsn_ctx;
 		cb = dbsn->dbsn_cb;
 		dmu_buf_ctx_node_remove(dbsn);
 		cb(ctx, err);
-		count++;
 	}
 }
 
@@ -3938,9 +3936,10 @@ dbuf_override_impl(dmu_buf_impl_t *db, const blkptr_t *bp, dmu_tx_t *tx)
 }
 
 /* ARGSUSED */
-static void
-dbuf_fill_done(dmu_buf_impl_t *db, dmu_tx_t *tx)
+void
+dmu_buf_fill_done(dmu_buf_t *dbuf, dmu_tx_t *tx)
 {
+	dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbuf;
 	dbuf_dirty_record_t *dr;
 	boolean_t process;
 	list_t ctx_list;
@@ -3991,10 +3990,6 @@ dbuf_fill_done(dmu_buf_impl_t *db, dmu_tx_t *tx)
 	if (process)
 		dbuf_process_buf_ctxs(&ctx_list, /* err */ 0);
 }
-#pragma weak dmu_buf_fill_done = dbuf_fill_done
-
-
-#pragma weak dmu_buf_fill_done = dbuf_fill_done
 
 void
 dmu_buf_write_embedded(dmu_buf_t *dbuf, void *data,
@@ -4078,7 +4073,7 @@ dbuf_assign_arcbuf(dmu_buf_impl_t *db, arc_buf_t *buf, dmu_tx_t *tx)
 	arc_return_buf(buf, db);
 	ASSERT(arc_released(buf));
 	(void) dbuf_dirty_with_arcbuf(db, tx, buf);
-	dbuf_fill_done(db, tx);
+	dmu_buf_fill_done(&db->db, tx);
 }
 
 void
