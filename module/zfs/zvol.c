@@ -2004,6 +2004,7 @@ static void
 zvol_thread_destroy(void *context __maybe_unused)
 {
 
+	VERIFY(dmu_thread_context_process() == B_TRUE);
 	dmu_thread_context_destroy(NULL);
 }
 

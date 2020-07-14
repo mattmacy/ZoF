@@ -527,7 +527,7 @@ dmu_thread_context_destroy(void *context)
 		VERIFY(tsd_set(zfs_async_io_key, NULL) == 0);
 }
 
-void
+boolean_t
 dmu_thread_context_process(void)
 {
 	dmu_cb_state_t *dcs = tsd_get(zfs_async_io_key);
@@ -542,7 +542,7 @@ dmu_thread_context_process(void)
 	 * because zio_execute() can be called from non-zio threads.
 	 */
 	if (dcs == NULL || dcs->dcs_in_process)
-		return;
+		return (B_FALSE);
 	dcs->dcs_in_process = B_TRUE;
 	while ((dbsn = list_remove_head(&dcs->dcs_io_list)) != NULL) {
 		ctx = dbsn->dbsn_ctx;
@@ -552,6 +552,8 @@ dmu_thread_context_process(void)
 		cb(ctx, err);
 	}
 	dcs->dcs_in_process = B_FALSE;
+	ASSERT(list_is_empty(&dcs->dcs_io_list));
+	return (B_TRUE);
 }
 
 void
