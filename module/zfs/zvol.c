@@ -1996,7 +1996,7 @@ zvol_dmu_done(dmu_ctx_t *dc, callback_fn cb, void *arg)
 static void
 zvol_thread_init(void *context __maybe_unused)
 {
-
+	zvol_os_thread_init();
 	VERIFY0(dmu_thread_context_create());
 }
 
