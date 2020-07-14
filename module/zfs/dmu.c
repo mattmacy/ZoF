@@ -348,8 +348,7 @@ dmu_buf_transfer_write(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off,
 	if (sz == db->db_size)
 		dmu_buf_will_fill(db, tx);
 	else
-		dmu_buf_will_dirty(db, tx);
-	// dmu_buf_will_dirty_range(db, tx, off, sz);
+		dmu_buf_will_dirty_range(db, tx, off, sz);
 	adv = dbs->dbs_dc->dc_data_transfer_cb(dbs, db, off, sz);
 	/* XXX -- need to handle error condition */
 	dmu_buf_fill_done(db, tx);
@@ -669,7 +668,6 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 		int err = dbuf_hold_level_async(dn, /* level */ 0, blkid + i,
 		    dc->dc_tag, &db, &dbs->dbs_ctx,
 		    async_zio, dmu_issue_restart_cb, done_cb);
-
 		if (err == EINPROGRESS) {
 			ASSERT(dc->dc_flags & DMU_CTX_FLAG_ASYNC);
 			return (err);
