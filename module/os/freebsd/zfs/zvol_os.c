@@ -521,6 +521,7 @@ zvol_strategy_task(void *arg)
 	zv_request_t *zvr = arg;
 	struct bio *bp = zvr->bio;
 
+	printf("%s bp=%p\n", __func__, bp);
 	zvol_strategy_impl(bp, B_TRUE);
 	kmem_free(zvr, sizeof (*zvr));
 }
@@ -528,21 +529,22 @@ zvol_strategy_task(void *arg)
 static void
 zvol_strategy(struct bio *bp)
 {
-
+	printf("%s(bp=%p, bp->bio_parent=%p)\n", __func__, bp, bp->bio_parent);
 	zvol_strategy_impl(bp, B_FALSE);
 }
 
 static void
 zvol_geom_worker(void *arg)
 {
-	struct bio *bp;
-	zv_request_t *zvr;
-
 	thread_lock(curthread);
 	sched_prio(curthread, PSWP);
 	thread_unlock(curthread);
+	geom_queue_state = ZVOL_GEOM_RUNNING;
 
 	for (;;) {
+		struct bio *bp;
+		zv_request_t *zvr;
+
 		mtx_lock(&geom_queue_mtx);
 		bp = bioq_takefirst(&geom_queue);
 		if (bp == NULL) {
@@ -582,6 +584,7 @@ zvol_geom_bio_start(struct bio *bp)
 		first = (bioq_first(&geom_queue) == NULL);
 		bioq_insert_tail(&geom_queue, bp);
 		mtx_unlock(&geom_queue_mtx);
+		ASSERT(geom_queue_state == ZVOL_GEOM_RUNNING);
 		if (first)
 			wakeup_one(&geom_queue);
 		return;
@@ -804,18 +807,19 @@ zvol_geom_bio_dmu_ctx_init(void *arg)
 	error = zvol_dmu_ctx_init(zds);
 
 	if (error == EINPROGRESS)
-		return;
-
+		goto done;
 	if (error) {
 		zvol_done(zss->zss_bp, SET_ERROR(ENXIO));
 		kmem_free(zss, sizeof (zvol_strategy_state_t));
 		ASSERT(atomic_read(&zv->zv_suspend_ref) > 0);
 		atomic_dec(&zv->zv_suspend_ref);
-		return;
+		goto done;
 	}
 
 	/* Errors are reported via the callback. */
 	zvol_dmu_issue(&zss->zss_zds);
+done:
+	dmu_thread_context_process();
 }
 
 static void
@@ -845,13 +849,14 @@ zvol_geom_bio_async(zvol_state_t *zv, struct bio *bp, boolean_t intq)
 
 	if (zvol_dmu_max_active(zv) && mutex_tryenter(&zv->zv_state_lock)) {
 		if (zv->zv_active > 1) {
+			printf("enqueued zds for bp=%p\n", bp);
 			zvol_dmu_ctx_init_enqueue(zds);
 			error = EINPROGRESS;
 		}
 		mutex_exit(&zv->zv_state_lock);
 		if (error) {
 			if (intq)
-				goto out;
+				dmu_thread_context_process();
 			return;
 		}
 	}
@@ -862,8 +867,6 @@ zvol_geom_bio_async(zvol_state_t *zv, struct bio *bp, boolean_t intq)
 		return;
 	}
 	zvol_geom_bio_dmu_ctx_init(zss);
-out:
-	dmu_thread_context_process();
 }
 
 /*
@@ -1250,6 +1253,7 @@ zvol_cdev_ioctl(struct cdev *dev, ulong_t cmd, caddr_t data,
 static void
 zvol_done(struct bio *bp, int err)
 {
+	printf("%s(bp=%p, bp->bio_parent=%p, err=%d\n", __func__, bp, bp->bio_parent, err);
 	if (bp->bio_to)
 		g_io_deliver(bp, err);
 	else
@@ -1549,9 +1553,7 @@ zvol_clear_private(zvol_state_t *zv)
 
 		if (pp == NULL) /* XXX when? */
 			return;
-		mutex_enter(&zv->zv_state_lock);
 		pp->private = NULL;
-		mutex_exit(&zv->zv_state_lock);
 
 		taskq_wait(zvol_taskq);
 		ASSERT(!RW_LOCK_HELD(&zv->zv_suspend_lock));
