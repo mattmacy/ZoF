@@ -615,7 +615,7 @@ extern dmu_tx_t *dmu_buf_set_tx(dmu_buf_set_t *dbs);
 
 /* DMU thread context handlers. */
 int dmu_thread_context_create(void);
-int dmu_thread_context_process(void);
+boolean_t dmu_thread_context_process(void);
 void dmu_thread_context_destroy(void *);
 
 /*

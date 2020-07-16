@@ -149,7 +149,8 @@ extern int taskq_empty_ent(taskq_ent_t *);
 extern void taskq_init_ent(taskq_ent_t *);
 extern taskq_t *taskq_create(const char *, int, pri_t, int, int, uint_t);
 extern taskq_t *taskq_create_with_callbacks(const char *, int, pri_t, int,
-    int, uint_t, taskq_callback_fn, taskq_callback_fn);
+    int, uint_t, taskq_callback_fn, taskq_callback_fn,
+    taskq_callback_fn, taskq_callback_fn);
 extern void taskq_destroy(taskq_t *);
 extern void taskq_wait_id(taskq_t *, taskqid_t);
 extern void taskq_wait_outstanding(taskq_t *, taskqid_t);
