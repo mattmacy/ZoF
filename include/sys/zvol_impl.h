@@ -79,6 +79,7 @@ typedef struct zvol_dmu_state {
 	uint32_t zds_dmu_flags;
 	boolean_t zds_sync;
 	boolean_t zds_retry;
+	void *zds_private;
 } zvol_dmu_state_t;
 
 extern list_t zvol_state_list;
@@ -111,7 +112,7 @@ int zvol_get_data(void *arg, lr_write_t *lr, char *buf, struct lwb *lwb,
 int zvol_dmu_ctx_init(zvol_dmu_state_t *zds);
 void zvol_dmu_issue(zvol_dmu_state_t *zds);
 boolean_t zvol_dmu_max_active(zvol_state_t *zv);
-void zvol_dmu_ctx_init_enqueue(zvol_dmu_state_t *zds);
+int zvol_dmu_ctx_init_enqueue(zvol_dmu_state_t *zds);
 int zvol_dmu_done(dmu_ctx_t *dmu_ctx, callback_fn cb, void *arg);
 int zvol_init_impl(void);
 void zvol_fini_impl(void);

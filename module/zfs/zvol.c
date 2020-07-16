@@ -92,6 +92,11 @@
 #define	DEBUG_REFCOUNT_DEC(b) atomic_dec_32(&(b))
 
 /* BEGIN CSTYLED */
+
+#define DEBUG_REFCOUNT(a)						\
+	static uint32_t a;							\
+	ZFS_MODULE_PARAM(zfs_zvol, , a, UINT, ZMOD_RD, #a)
+
 static uint32_t dmu_ctx_deferred;
 ZFS_MODULE_PARAM(zfs_zvol, , dmu_ctx_deferred, UINT, ZMOD_RD,
     "DMU contexts deferred in zvol_dmu_ctx_init");
@@ -104,12 +109,16 @@ ZFS_MODULE_PARAM(zfs_zvol, , dmu_ctx_in_init, UINT, ZMOD_RD,
 static uint32_t dmu_ctx_in_prefault;
 ZFS_MODULE_PARAM(zfs_zvol, , dmu_ctx_in_prefault, UINT, ZMOD_RD,
     "DMU contexts active in prefault");
+
+DEBUG_REFCOUNT(dmu_ctx_waiting_on_rangelock);
+DEBUG_REFCOUNT(dmu_ctx_holding_rangelock);
 /* END CSTYLED */
 #else
 #define	DEBUG_REFCOUNT_ADD(b)
 #define	DEBUG_REFCOUNT_DEC(b)
 #endif
 
+static void zvol_dmu_err(zvol_dmu_state_t *zds);
 
 unsigned int zvol_inhibit_dev = 0;
 unsigned int zvol_volmode = ZFS_VOLMODE_GEOM;
@@ -1741,8 +1750,13 @@ static void
 zvol_dmu_ctx_init_wrapper(dmu_buf_ctx_t *ctx, int err)
 {
 	zvol_dmu_state_t *zds = (zvol_dmu_state_t *)ctx;
+	int error;
 
-	zvol_dmu_ctx_init(zds);
+	error = zvol_dmu_ctx_init(zds);
+	if (error && error != EINPROGRESS) {
+		zds->zds_dc.dc_err = err;
+		zvol_dmu_err(zds);
+	}
 }
 
 static void
@@ -1770,12 +1784,11 @@ zvol_dmu_ctx_init_deferred(zvol_state_t *zv)
 }
 
 static void
-zvol_dmu_err(zvol_dmu_state_t *zds_, dmu_ctx_cb_t err_cb)
+zvol_dmu_err(zvol_dmu_state_t *zds)
 {
-	zvol_dmu_state_t *zds = zds_;
 	zvol_state_t *zv = zds->zds_zv;
 
-	err_cb(&zds->zds_dc);
+	zds->zds_dmu_err(&zds->zds_dc);
 	zvol_dmu_ctx_init_deferred(zv);
 }
 
@@ -1823,7 +1836,7 @@ done:
 	kmem_free(zdps, sizeof (*zdps));
 	if (err) {
 		zds->zds_dc.dc_err = err;
-		zvol_dmu_err(zds, err_cb);
+		zvol_dmu_err(zds);
 		return;
 	}
 	tx = dmu_tx_create(zv->zv_objset);
@@ -1833,13 +1846,13 @@ done:
 	if (err) {
 		dmu_tx_abort(tx);
 		zds->zds_dc.dc_err = err;
-		zvol_dmu_err(zds, err_cb);
+		zvol_dmu_err(zds);
 		return;
 	}
 	dmu_ctx_set_dmu_tx(&zds->zds_dc, tx);
 	dmu_ctx_set_buf_set_transfer_cb(&zds->zds_dc,
 	    zvol_dmu_buf_set_transfer_write);
-
+	DEBUG_REFCOUNT_ADD(dmu_ctx_waiting_on_rangelock);
 	err = zfs_rangelock_tryenter_async(&zv->zv_rangelock, off, io_size,
 	    RL_WRITER, &zds->zds_lr, (callback_fn)zvol_dmu_issue, zds);
 
@@ -1867,7 +1880,7 @@ zvol_dmu_max_active(zvol_state_t *zv)
 	return (zv->zv_active > boot_ncpus);
 }
 
-void
+int
 zvol_dmu_ctx_init_enqueue(zvol_dmu_state_t *zds)
 {
 	zvol_state_t *zv = zds->zds_zv;
@@ -1877,6 +1890,7 @@ zvol_dmu_ctx_init_enqueue(zvol_dmu_state_t *zds)
 	atomic_inc(&zv->zv_suspend_ref);
 	list_insert_tail(&zv->zv_deferred, zds);
 	DEBUG_REFCOUNT_ADD(dmu_ctx_deferred);
+	return (EINPROGRESS);
 }
 
 int
@@ -1909,22 +1923,14 @@ zvol_dmu_ctx_init(zvol_dmu_state_t *zds)
 	if (io_size > 0 && off >= zv->zv_volsize)
 		err = SET_ERROR(EIO);
 
-	if (err) {
-		if (zds->zds_retry) {
-			zds->zds_dc.dc_err = err;
-			zvol_dmu_err(zds, err_cb);
-		}
+	if (err)
 		return (err);
-	}
 
 	if (!zds->zds_retry) {
 		DEBUG_REFCOUNT_ADD(dmu_ctx_in_init);
 		mutex_enter(&zv->zv_state_lock);
 		if (zvol_dmu_max_active(zv)) {
-			zds->zds_dc.dc_buf_ctx.dbc_flags |= DMU_CTX_FLAG_ASYNC;
-			list_insert_tail(&zv->zv_deferred, zds);
-			DEBUG_REFCOUNT_ADD(dmu_ctx_deferred);
-			err = EINPROGRESS;
+			err = zvol_dmu_ctx_init_enqueue(zds);
 		} else {
 			zv->zv_active++;
 			DEBUG_REFCOUNT_ADD(dmu_ctx_active);
@@ -1938,14 +1944,12 @@ zvol_dmu_ctx_init(zvol_dmu_state_t *zds)
 	zds->zds_io_size = io_size = MIN(io_size, zv->zv_volsize - off);
 	err = dmu_ctx_init(&zds->zds_dc, zv->zv_dn, zv->zv_objset,
 	    ZVOL_OBJ, off, io_size, data, FTAG, dmu_flags);
-	if (err) {
-		zds->zds_dc.dc_err = err;
-		zvol_dmu_err(zds, err_cb);
+	if (err)
 		return (err);
-	}
 	dmu_ctx_set_complete_cb(&zds->zds_dc, done_cb);
 
 	if (reader) {
+		DEBUG_REFCOUNT_ADD(dmu_ctx_waiting_on_rangelock);
 		err = zfs_rangelock_tryenter_async(&zv->zv_rangelock,
 		    off, io_size, RL_READER, &zds->zds_lr,
 		    (callback_fn)zvol_dmu_issue, zds);
@@ -1961,6 +1965,9 @@ zvol_dmu_issue(zvol_dmu_state_t *zds_)
 	zvol_state_t *zv = zds->zds_zv;
 
 	DEBUG_REFCOUNT_DEC(dmu_ctx_in_init);
+	DEBUG_REFCOUNT_DEC(dmu_ctx_waiting_on_rangelock);
+	DEBUG_REFCOUNT_ADD(dmu_ctx_holding_rangelock);
+
 	ASSERT(zds->zds_lr->lr_owner == curthread);
 	zds->zds_dc.dc_lr = zds->zds_lr;
 	zds->zds_dc.dc_lr->lr_context = &zds->zds_dc;
@@ -1980,8 +1987,11 @@ zvol_dmu_done(dmu_ctx_t *dc, callback_fn cb, void *arg)
 	/*
 	 * Initialization failed
 	 */
-	if (zds->zds_lr != NULL)
+	if (zds->zds_lr != NULL) {
+		DEBUG_REFCOUNT_DEC(dmu_ctx_holding_rangelock);
 		zfs_rangelock_exit(zds->zds_lr);
+	} else
+		printf("calling %s with NULL lock\n", __func__);
 
 	if (dc->dc_completed_size < dc->dc_size &&
 	    dc->dc_dn_offset > zv->zv_volsize)
@@ -2008,6 +2018,13 @@ zvol_thread_destroy(void *context __maybe_unused)
 	dmu_thread_context_destroy(NULL);
 }
 
+static void
+zvol_thread_post(void *context __maybe_unused)
+{
+
+	VERIFY(dmu_thread_context_process() == B_TRUE);
+}
+
 static int
 zvol_taskq_init(void)
 {
@@ -2015,8 +2032,8 @@ zvol_taskq_init(void)
 
 	zvol_taskq = taskq_create_with_callbacks(ZVOL_DRIVER, threads,
 	    maxclsyspri, threads * 2, INT_MAX, TASKQ_PREPOPULATE |
-	    TASKQ_DYNAMIC, zvol_thread_init, zvol_thread_destroy);
-
+	    TASKQ_DYNAMIC, zvol_thread_init, zvol_thread_destroy, NULL,
+	    zvol_thread_post);
 	return (zvol_taskq == NULL ? ENOMEM : 0);
 }
 

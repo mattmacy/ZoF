@@ -521,7 +521,6 @@ zvol_strategy_task(void *arg)
 	zv_request_t *zvr = arg;
 	struct bio *bp = zvr->bio;
 
-	printf("%s bp=%p\n", __func__, bp);
 	zvol_strategy_impl(bp, B_TRUE);
 	kmem_free(zvr, sizeof (*zvr));
 }
@@ -529,7 +528,6 @@ zvol_strategy_task(void *arg)
 static void
 zvol_strategy(struct bio *bp)
 {
-	printf("%s(bp=%p, bp->bio_parent=%p)\n", __func__, bp, bp->bio_parent);
 	zvol_strategy_impl(bp, B_FALSE);
 }
 
@@ -807,19 +805,17 @@ zvol_geom_bio_dmu_ctx_init(void *arg)
 	error = zvol_dmu_ctx_init(zds);
 
 	if (error == EINPROGRESS)
-		goto done;
+		return;
 	if (error) {
 		zvol_done(zss->zss_bp, SET_ERROR(ENXIO));
 		kmem_free(zss, sizeof (zvol_strategy_state_t));
 		ASSERT(atomic_read(&zv->zv_suspend_ref) > 0);
 		atomic_dec(&zv->zv_suspend_ref);
-		goto done;
+		return;
 	}
 
 	/* Errors are reported via the callback. */
 	zvol_dmu_issue(&zss->zss_zds);
-done:
-	dmu_thread_context_process();
 }
 
 static void
@@ -834,12 +830,13 @@ zvol_geom_bio_async(zvol_state_t *zv, struct bio *bp, boolean_t intq)
 		dmu_flags |= DMU_CTX_FLAG_READ;
 	else
 		zvol_ensure_zilog_async(zv);
-
 	zss = kmem_zalloc(sizeof (zvol_strategy_state_t), KM_SLEEP);
 	zss->zss_bp = bp;
 
 	zds = &zss->zss_zds;
 	zds->zds_zv = zv;
+	zds->zds_private = bp;
+	bp->bio_spare2 = zds;
 	zds->zds_off = bp->bio_offset;
 	zds->zds_io_size = bp->bio_length;
 	zds->zds_data = bp->bio_data;
@@ -849,16 +846,11 @@ zvol_geom_bio_async(zvol_state_t *zv, struct bio *bp, boolean_t intq)
 
 	if (zvol_dmu_max_active(zv) && mutex_tryenter(&zv->zv_state_lock)) {
 		if (zv->zv_active > 1) {
-			printf("enqueued zds for bp=%p\n", bp);
-			zvol_dmu_ctx_init_enqueue(zds);
-			error = EINPROGRESS;
+			error = zvol_dmu_ctx_init_enqueue(zds);
 		}
 		mutex_exit(&zv->zv_state_lock);
-		if (error) {
-			if (intq)
-				dmu_thread_context_process();
+		if (error)
 			return;
-		}
 	}
 	if (!intq) {
 		taskq_init_ent(&zss->zss_ent);
@@ -1253,7 +1245,6 @@ zvol_cdev_ioctl(struct cdev *dev, ulong_t cmd, caddr_t data,
 static void
 zvol_done(struct bio *bp, int err)
 {
-	printf("%s(bp=%p, bp->bio_parent=%p, err=%d\n", __func__, bp, bp->bio_parent, err);
 	if (bp->bio_to)
 		g_io_deliver(bp, err);
 	else

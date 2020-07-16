@@ -442,16 +442,14 @@ zvol_strategy(void *arg)
 
 	error = zvol_dmu_ctx_init(zds);
 	if (error == EINPROGRESS)
-		goto out;
+		return;
 	if (error) {
 		zss->zds.zds_dc.dc_err = error;
 		zvol_strategy_dmu_done(&zss->zds.zds_dc);
-		goto out;
+		return;
 	}
 	/* Errors are reported via the callback. */
 	zvol_dmu_issue(&zss->zds);
-out:
-	dmu_thread_context_process();
 }
 
 static MAKE_REQUEST_FN_RET
