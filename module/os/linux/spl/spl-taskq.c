@@ -942,8 +942,14 @@ taskq_thread(void *args)
 
 			DTRACE_PROBE1(taskq_ent__start, taskq_ent_t *, t);
 
+			if (tq->tq_pre != NULL)
+				tq->tq_pre(tq);
+
 			/* Perform the requested task */
 			t->tqent_func(t->tqent_arg);
+
+			if (tq->tq_post != NULL)
+				tq->tq_post(tq);
 
 			DTRACE_PROBE1(taskq_ent__finish, taskq_ent_t *, t);
 
@@ -1031,7 +1037,7 @@ taskq_thread_create(taskq_t *tq)
 taskq_t *
 taskq_create_with_callbacks(const char *name, int nthreads, pri_t pri,
     int minalloc, int maxalloc, uint_t flags, taskq_callback_fn ctor,
-    taskq_callback_fn dtor)
+    taskq_callback_fn dtor, taskq_callback_fn pre, taskq_callback_fn post)
 {
 	taskq_t *tq;
 	taskq_thread_t *tqt;
@@ -1131,7 +1137,7 @@ taskq_create(const char *name, int nthreads, pri_t pri,
     int minalloc, int maxalloc, uint_t flags)
 {
 	return (taskq_create_with_callbacks(name, nthreads, pri, minalloc,
-	    maxalloc, flags, NULL, NULL));
+	    maxalloc, flags, NULL, NULL, NULL, NULL));
 }
 
 EXPORT_SYMBOL(taskq_create);

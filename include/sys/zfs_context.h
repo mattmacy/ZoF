@@ -464,6 +464,8 @@ typedef struct taskq {
 	taskq_ent_t	tq_task;
 	taskq_callback_fn	tq_ctor;
 	taskq_callback_fn	tq_dtor;
+	taskq_callback_fn	tq_pre;
+	taskq_callback_fn	tq_post;
 } taskq_t;
 
 #define	TQENT_FLAG_PREALLOC	0x1	/* taskq_dispatch_ent used */
@@ -484,10 +486,11 @@ typedef struct taskq {
 extern taskq_t *system_taskq;
 extern taskq_t *system_delay_taskq;
 extern taskq_t *taskq_create_with_callbacks(const char *, int, pri_t, int,
-    int, uint_t, taskq_callback_fn, taskq_callback_fn);
+    int, uint_t, taskq_callback_fn, taskq_callback_fn,
+    taskq_callback_fn, taskq_callback_fn);
 extern taskq_t	*taskq_create(const char *, int, pri_t, int, int, uint_t);
-#define	taskq_create_proc(a, b, c, d, e, p, f, ct, dt) \
-	(taskq_create_with_callbacks(a, b, c, d, e, f, ct, dt))
+#define	taskq_create_proc(a, b, c, d, e, p, f, ct, dt, pr, po)	\
+	(taskq_create_with_callbacks(a, b, c, d, e, f, ct, dt, pr, po))
 #define	taskq_create_sysdc(a, b, d, e, p, dc, f) \
 	    (taskq_create(a, b, maxclsyspri, d, e, f))
 extern taskqid_t taskq_dispatch(taskq_t *, task_func_t, void *, uint_t);

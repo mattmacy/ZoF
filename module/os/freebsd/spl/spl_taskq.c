@@ -179,7 +179,8 @@ taskq_dtor(void *context)
 taskq_t *
 taskq_create_with_callbacks(const char *name, int nthreads, pri_t pri,
     int minalloc __unused, int maxalloc __unused, uint_t flags,
-    taskq_callback_fn ctor, taskq_callback_fn dtor)
+    taskq_callback_fn ctor, taskq_callback_fn dtor,
+    taskq_callback_fn pre, taskq_callback_fn post)
 {
 	taskq_t *tq;
 
@@ -191,6 +192,8 @@ taskq_create_with_callbacks(const char *name, int nthreads, pri_t pri,
 	    taskqueue_thread_enqueue, &tq->tq_queue);
 	tq->tq_ctor = ctor;
 	tq->tq_dtor = dtor;
+	tq->tq_pre = pre;
+	tq->tq_post = post;
 	taskqueue_set_callback(tq->tq_queue, TASKQUEUE_CALLBACK_TYPE_INIT,
 	    taskq_ctor, tq);
 	taskqueue_set_callback(tq->tq_queue, TASKQUEUE_CALLBACK_TYPE_SHUTDOWN,
@@ -207,17 +210,18 @@ taskq_create(const char *name, int nthreads, pri_t pri, int minalloc __unused,
 {
 
 	return (taskq_create_with_callbacks(name, nthreads, pri,
-	    minalloc, maxalloc, flags, NULL, NULL));
+	    minalloc, maxalloc, flags, NULL, NULL, NULL, NULL));
 }
 
 taskq_t *
 taskq_create_proc(const char *name, int nthreads, pri_t pri, int minalloc,
     int maxalloc, proc_t *proc __unused, uint_t flags,
-    taskq_callback_fn ctor, taskq_callback_fn dtor)
+    taskq_callback_fn ctor, taskq_callback_fn dtor,
+    taskq_callback_fn pre, taskq_callback_fn post)
 {
 
 	return (taskq_create_with_callbacks(name, nthreads, pri,
-	    minalloc, maxalloc, flags, ctor, dtor));
+	    minalloc, maxalloc, flags, ctor, dtor, pre, post));
 }
 
 void
@@ -286,9 +290,16 @@ static void
 taskq_run(void *arg, int pending __unused)
 {
 	taskq_ent_t *task = arg;
+	taskq_t *tq = task->tqent_tq;
 
-	if (!task->tqent_cancelled)
+	if (!task->tqent_cancelled) {
+		if (tq->tq_pre)
+			tq->tq_pre(tq);
 		task->tqent_func(task->tqent_arg);
+		if (tq->tq_post)
+			tq->tq_post(tq);
+
+	}
 	taskq_free(task);
 }
 
@@ -313,6 +324,7 @@ taskq_dispatch_delay(taskq_t *tq, task_func_t func, void *arg,
 	task = uma_zalloc(taskq_zone, mflag);
 	if (task == NULL)
 		return (0);
+	task->tqent_tq = tq;
 	task->tqent_func = func;
 	task->tqent_arg = arg;
 	task->tqent_type = TIMEOUT_TASK;
@@ -348,6 +360,7 @@ taskq_dispatch(taskq_t *tq, task_func_t func, void *arg, uint_t flags)
 	if (task == NULL)
 		return (0);
 	refcount_init(&task->tqent_rc, 1);
+	task->tqent_tq = tq;
 	task->tqent_func = func;
 	task->tqent_arg = arg;
 	task->tqent_cancelled = B_FALSE;

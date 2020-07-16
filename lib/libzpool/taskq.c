@@ -264,7 +264,7 @@ taskq_thread(void *arg)
 taskq_t *
 taskq_create_with_callbacks(const char *name, int nthreads, pri_t pri,
     int minalloc, int maxalloc, uint_t flags, taskq_callback_fn ctor,
-    taskq_callback_fn dtor)
+    taskq_callback_fn dtor, taskq_callback_fn pre, taskq_callback_fn post)
 {
 	taskq_t *tq = kmem_zalloc(sizeof (taskq_t), KM_SLEEP);
 	int t;
@@ -299,6 +299,8 @@ taskq_create_with_callbacks(const char *name, int nthreads, pri_t pri,
 	    KM_SLEEP);
 	tq->tq_ctor = ctor;
 	tq->tq_dtor = dtor;
+	tq->tq_pre = pre;
+	tq->tq_post = post;
 
 	if (flags & TASKQ_PREPOPULATE) {
 		mutex_enter(&tq->tq_lock);
@@ -320,7 +322,7 @@ taskq_create(const char *name, int nthreads, pri_t pri,
 {
 
 	return (taskq_create_with_callbacks(name, nthreads, pri, minalloc,
-	    maxalloc, flags, NULL, NULL));
+	    maxalloc, flags, NULL, NULL, NULL, NULL));
 }
 
 void

@@ -975,6 +975,13 @@ spa_zio_thread_destroy(void *context)
 }
 
 static void
+spa_zio_thread_post(void *context __maybe_unused)
+{
+
+	VERIFY(dmu_thread_context_process() == B_TRUE);
+}
+
+static void
 spa_taskqs_init(spa_t *spa, zio_type_t t, zio_taskq_type_t q)
 {
 	const zio_taskq_info_t *ztip = &zio_taskqs[t][q];
@@ -1043,7 +1050,8 @@ spa_taskqs_init(spa_t *spa, zio_type_t t, zio_taskq_type_t q)
 
 			tq = taskq_create_proc(name, value, pri, 50,
 			    INT_MAX, spa->spa_proc, flags,
-			    spa_zio_thread_init, spa_zio_thread_destroy);
+			    spa_zio_thread_init, spa_zio_thread_destroy, NULL,
+			    spa_zio_thread_post);
 		}
 
 		tqs->stqs_taskq[i] = tq;
