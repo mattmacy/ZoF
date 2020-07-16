@@ -245,6 +245,18 @@ zfs_rangelock_alloc(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
 }
 
 /*
+ * Safely free the zfs_locked_range_t.
+ */
+static void
+zfs_rangelock_free(zfs_locked_range_t *lr)
+{
+
+	ASSERT(list_is_empty(&lr->lr_cb));
+	list_destroy(&lr->lr_cb);
+	kmem_free(lr, sizeof (zfs_locked_range_t));
+}
+
+/*
  * If this is an original (non-proxy) lock then replace it by
  * a proxy and return the proxy.
  */
@@ -507,9 +519,9 @@ zfs_rangelock_enqueue_waiter(zfs_locked_range_t *old, zfs_locked_range_t *new)
 }
 
 static int
-zfs_rangelock_tryiter(zfs_rangelock_t *rl, zfs_locked_range_t *new,
+zfs_rangelock_tryiter_impl(zfs_rangelock_t *rl, zfs_locked_range_t *new,
     callback_fn cb, void *arg, zfs_locked_range_t **lrp,
-    zfs_rangelock_cb_entry_t *oldentry, boolean_t tryonly)
+    zfs_rangelock_cb_entry_t *oldentry, boolean_t do_enqueue)
 {
 	zfs_locked_range_t *old;
 	int rc = 0;
@@ -528,7 +540,7 @@ zfs_rangelock_tryiter(zfs_rangelock_t *rl, zfs_locked_range_t *new,
 		/* RL_WRITER or RL_APPEND */
 		rc = zfs_rangelock_enter_writer(rl, new, &old);
 	}
-	if (tryonly)
+	if (!do_enqueue)
 		return (rc);
 	if (unlikely(rc != 0)) {
 		if (sync) {
@@ -540,6 +552,23 @@ zfs_rangelock_tryiter(zfs_rangelock_t *rl, zfs_locked_range_t *new,
 		}
 	}
 	return (rc);
+}
+
+static int
+zfs_rangelock_tryiter(zfs_rangelock_t *rl, zfs_locked_range_t *new,
+    callback_fn cb, void *arg, zfs_locked_range_t **lrp,
+    zfs_rangelock_cb_entry_t *oldentry)
+{
+
+	return (zfs_rangelock_tryiter_impl(rl, new, cb, arg, lrp, oldentry,
+	    B_TRUE));
+}
+
+static int
+zfs_rangelock_tryiter_noretry(zfs_rangelock_t *rl, zfs_locked_range_t *new)
+{
+	return (zfs_rangelock_tryiter_impl(rl, new, NULL, NULL, NULL, NULL,
+	    B_FALSE));
 }
 
 static void
@@ -578,8 +607,7 @@ zfs_rangelock_process_queued(zfs_rangelock_t *rl, list_t *cb_list)
 			lr->lr_offset = lr->lr_orig_offset;
 			lr->lr_length = lr->lr_orig_length;
 		}
-		rc = zfs_rangelock_tryiter(rl, lr, NULL, NULL, NULL, entry,
-		    B_FALSE);
+		rc = zfs_rangelock_tryiter(rl, lr, NULL, NULL, NULL, entry);
 		if (rc == 0) {
 			list_insert_tail(cb_list, entry);
 		}
@@ -604,7 +632,7 @@ zfs_rangelock_process_queued_reduce(zfs_rangelock_t *rl, list_t *cb_list)
 	list_move_tail(&tmp, cb_list);
 	while ((entry = list_remove_head(&tmp)) != NULL) {
 		rc = zfs_rangelock_tryiter(rl, entry->zrce_lr, NULL, NULL, NULL,
-		    entry, B_FALSE);
+		    entry);
 		if (rc == 0) {
 			list_insert_tail(&work, entry);
 			entry->zrce_lr->lr_owner = curthread;
@@ -631,7 +659,7 @@ zfs_rangelock_enter(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
 
 	new = zfs_rangelock_alloc(rl, off, len, type);
 	mutex_enter(&rl->rl_lock);
-	zfs_rangelock_tryiter(rl, new, NULL, NULL, NULL, NULL, B_FALSE);
+	zfs_rangelock_tryiter(rl, new, NULL, NULL, NULL, NULL);
 	new->lr_owner = curthread;
 	mutex_exit(&rl->rl_lock);
 	return (new);
@@ -645,10 +673,9 @@ zfs_rangelock_tryenter_async(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
 	zfs_locked_range_t *new;
 	int rc = 0;
 
-	*lrp = NULL;
 	new = zfs_rangelock_alloc(rl, off, len, type);
 	mutex_enter(&rl->rl_lock);
-	rc = zfs_rangelock_tryiter(rl, new, cb, arg, lrp, NULL, cb != NULL);
+	rc = zfs_rangelock_tryiter(rl, new, cb, arg, lrp, NULL);
 	mutex_exit(&rl->rl_lock);
 	if (rc == 0) {
 		new->lr_owner = curthread;
@@ -661,25 +688,20 @@ zfs_locked_range_t *
 zfs_rangelock_tryenter(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
     zfs_rangelock_type_t type)
 {
-	zfs_locked_range_t *lr;
+	zfs_locked_range_t *new;
+	int rc = 0;
 
-	(void) zfs_rangelock_tryenter_async(rl, off, len, type, &lr,
-	    NULL, NULL);
-
-	return (lr);
-}
-
-
-/*
- * Safely free the zfs_locked_range_t.
- */
-static void
-zfs_rangelock_free(zfs_locked_range_t *lr)
-{
-
-	ASSERT(list_is_empty(&lr->lr_cb));
-	list_destroy(&lr->lr_cb);
-	kmem_free(lr, sizeof (zfs_locked_range_t));
+	new = zfs_rangelock_alloc(rl, off, len, type);
+	mutex_enter(&rl->rl_lock);
+	rc = zfs_rangelock_tryiter_noretry(rl, new);
+	mutex_exit(&rl->rl_lock);
+	if (rc) {
+		zfs_rangelock_free(new);
+		new = NULL;
+	} else {
+		new->lr_owner = curthread;
+	}
+	return (new);
 }
 
 /*
