@@ -287,9 +287,8 @@ taskq_cancel_id(taskq_t *tq, taskqid_t tid)
 }
 
 static void
-taskq_run(void *arg, int pending __unused)
+taskq_run_impl(taskq_ent_t *task)
 {
-	taskq_ent_t *task = arg;
 	taskq_t *tq = task->tqent_tq;
 
 	if (!task->tqent_cancelled) {
@@ -300,6 +299,14 @@ taskq_run(void *arg, int pending __unused)
 			tq->tq_post(tq);
 
 	}
+}
+
+static void
+taskq_run(void *arg, int pending __unused)
+{
+	taskq_ent_t *task = arg;
+
+	taskq_run_impl(task);
 	taskq_free(task);
 }
 
@@ -377,7 +384,7 @@ taskq_run_ent(void *arg, int pending __unused)
 {
 	taskq_ent_t *task = arg;
 
-	task->tqent_func(task->tqent_arg);
+	taskq_run_impl(task);
 }
 
 void
@@ -391,6 +398,7 @@ taskq_dispatch_ent(taskq_t *tq, task_func_t func, void *arg, uint32_t flags,
 	 * can go at the front of the queue.
 	 */
 	prio = !!(flags & TQ_FRONT);
+	task->tqent_tq = tq;
 	task->tqent_cancelled = B_FALSE;
 	task->tqent_registered = B_FALSE;
 	task->tqent_id = 0;
