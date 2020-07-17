@@ -507,6 +507,8 @@ typedef struct dmu_buf_ctx_node {
 
 	/* error  received in processing */
 	int dbsn_err;
+
+	int dbsn_type;
 } dmu_buf_ctx_node_t;
 
 
@@ -527,6 +529,12 @@ typedef struct dmu_cb_state {
 	list_t dcs_io_list;
 
 	boolean_t dcs_in_process;
+
+	list_node_t dcs_node;
+
+	taskq_t *dcs_tq;
+
+	kthread_t *dcs_thread;
 } dmu_cb_state_t;
 
 uint64_t dbuf_whichblock(const struct dnode *di, const int64_t level,

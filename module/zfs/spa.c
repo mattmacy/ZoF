@@ -960,10 +960,10 @@ spa_get_errlists(spa_t *spa, avl_tree_t *last, avl_tree_t *scrub)
 }
 
 static void
-spa_zio_thread_init(void *context __maybe_unused)
+spa_zio_thread_init(void *context)
 {
 
-	VERIFY0(dmu_thread_context_create());
+	VERIFY0(dmu_thread_context_create(context));
 }
 
 static void

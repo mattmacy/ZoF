@@ -256,7 +256,7 @@ sysctl_vfs_zfs_arc_no_grow_shift(SYSCTL_HANDLER_ARGS)
 	if (err != 0 || req->newptr == NULL)
 		return (err);
 
-        if (val >= arc_shrink_shift)
+	if (val >= arc_shrink_shift)
 		return (EINVAL);
 
 	arc_no_grow_shift = val;
@@ -418,9 +418,9 @@ sysctl_vfs_zfs_debug_flags(SYSCTL_HANDLER_ARGS)
 
 	val = zfs_flags;
 	err = sysctl_handle_int(oidp, &val, 0, req);
-	if (err != 0 || req->newptr == NULL)
+	if (err != 0 || req->newptr == NULL) {
 		return (err);
-
+	}
 	/*
 	 * ZFS_DEBUG_MODIFY must be enabled prior to boot so all
 	 * arc buffers in the system have the necessary additional

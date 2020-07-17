@@ -7581,8 +7581,10 @@ zfs_kmod_init(void)
 	tsd_create(&zfs_async_io_key, dmu_thread_context_destroy);
 	ASSERT(zfs_async_io_key != 0);
 
+	dmu_contexts_init();
 	if ((error = zvol_init()) != 0) {
 		tsd_destroy(&zfs_async_io_key);
+		dmu_contexts_deinit();
 		return (error);
 	}
 	spa_init(SPA_MODE_READ | SPA_MODE_WRITE);
@@ -7632,6 +7634,7 @@ zfs_kmod_fini(void)
 	zfs_fini();
 	spa_fini();
 	zvol_fini();
+	dmu_contexts_deinit();
 
 	tsd_destroy(&zfs_fsyncer_key);
 	tsd_destroy(&rrw_tsd_key);

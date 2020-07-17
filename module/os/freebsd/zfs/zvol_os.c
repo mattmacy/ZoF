@@ -156,6 +156,7 @@ boolean_t zvol_unmap_enabled = B_TRUE;
 SYSCTL_INT(_vfs_zfs_vol, OID_AUTO, unmap_enabled, CTLFLAG_RWTUN,
 	&zvol_unmap_enabled, 0, "Enable UNMAP functionality");
 
+
 /*
  * zvol maximum transfer in one DMU tx.
  */
@@ -224,6 +225,14 @@ typedef struct zv_request {
 } zv_request_t;
 
 
+static void
+dmu_context_check(void)
+{
+	dmu_cb_state_t *dcs;	
+
+	dcs = tsd_get(zfs_async_io_key);
+	ASSERT(list_is_empty(&dcs->dcs_io_list));
+}
 
 /*
  * GEOM mode implementation
@@ -521,6 +530,7 @@ zvol_strategy_task(void *arg)
 	zv_request_t *zvr = arg;
 	struct bio *bp = zvr->bio;
 
+	dmu_context_check();
 	zvol_strategy_impl(bp, B_TRUE);
 	kmem_free(zvr, sizeof (*zvr));
 }
@@ -640,9 +650,9 @@ zvol_commit_done(void *arg)
 	zvol_commit_state_t *zcs = arg;
 	zvol_state_t *zv = zcs->zcs_zv;
 
-	ASSERT(atomic_read(&zv->zv_suspend_ref) > 0);
-	atomic_dec(&zv->zv_suspend_ref);
+	zvol_rele(zv, zcs);
 	zvol_done(zcs->zcs_bp, zcs->zcs_error);
+	kmem_free(zcs, sizeof (*zcs));
 }
 
 static int
@@ -657,12 +667,11 @@ zvol_commit_async(zvol_state_t *zv, struct bio *bp,
 	zcs->zcs_bp = bp;
 	zcs->zcs_error = error;
 
-	ASSERT(atomic_read(&zv->zv_suspend_ref) >= 0);
-	atomic_inc(&zv->zv_suspend_ref);
+	zvol_hold(zv, zcs);
 	rc = zil_commit_async(zv->zv_zilog, ZVOL_OBJ, zvol_commit_done, zcs);
 	if (rc == 0) {
-		ASSERT(atomic_read(&zv->zv_suspend_ref) > 0);
-		atomic_dec(&zv->zv_suspend_ref);
+		/* done will be called by caller */
+		zvol_rele(zv, zcs);
 		kmem_free(zcs, sizeof (*zcs));
 	}
 	return (rc);
@@ -730,30 +739,30 @@ resume:
 }
 
 static void
+zvol_strategy_done(zvol_strategy_state_t *zss, int err)
+{
+	zvol_state_t *zv = zss->zss_zds.zds_zv;
+
+	zvol_rele(zv, zss);
+	zvol_done(zss->zss_bp, err);
+	kmem_free(zss, sizeof (zvol_strategy_state_t));
+}
+
+static void
 zvol_strategy_epilogue(void *arg)
 {
 	dmu_ctx_t *dc = arg;
 	zvol_strategy_state_t *zss = arg;
-	zvol_state_t *zv = zss->zss_zds.zds_zv;
-	struct bio *bp = zss->zss_bp;
 
-	ASSERT(atomic_read(&zv->zv_suspend_ref) > 0);
-	atomic_dec(&zv->zv_suspend_ref);
-	zvol_done(bp, dc->dc_err);
-	kmem_free(zss, sizeof (zvol_strategy_state_t));
+	zvol_strategy_done(zss, dc->dc_err);
 }
 
 static void
 zvol_strategy_dmu_err(dmu_ctx_t *dc)
 {
 	zvol_strategy_state_t *zss = (zvol_strategy_state_t *)dc;
-	zvol_state_t *zv = zss->zss_zds.zds_zv;
-	struct bio *bp = zss->zss_bp;
 
-	kmem_free(zss, sizeof (zvol_strategy_state_t));
-	ASSERT(atomic_read(&zv->zv_suspend_ref) > 0);
-	atomic_dec(&zv->zv_suspend_ref);
-	zvol_done(bp, SET_ERROR(ENXIO));
+	zvol_strategy_done(zss, SET_ERROR(ENXIO));
 }
 
 static void
@@ -800,6 +809,7 @@ zvol_geom_bio_dmu_ctx_init(void *arg)
 	zvol_state_t *zv;
 	int error;
 
+	dmu_context_check();
 	zds = &zss->zss_zds;
 	zv = zds->zds_zv;
 	error = zvol_dmu_ctx_init(zds);
@@ -807,10 +817,7 @@ zvol_geom_bio_dmu_ctx_init(void *arg)
 	if (error == EINPROGRESS)
 		return;
 	if (error) {
-		zvol_done(zss->zss_bp, SET_ERROR(ENXIO));
-		kmem_free(zss, sizeof (zvol_strategy_state_t));
-		ASSERT(atomic_read(&zv->zv_suspend_ref) > 0);
-		atomic_dec(&zv->zv_suspend_ref);
+		zvol_strategy_done(zss, SET_ERROR(ENXIO));
 		return;
 	}
 
@@ -831,6 +838,8 @@ zvol_geom_bio_async(zvol_state_t *zv, struct bio *bp, boolean_t intq)
 	else
 		zvol_ensure_zilog_async(zv);
 	zss = kmem_zalloc(sizeof (zvol_strategy_state_t), KM_SLEEP);
+
+	zvol_hold(zv, zss);
 	zss->zss_bp = bp;
 
 	zds = &zss->zss_zds;
@@ -1618,6 +1627,10 @@ const static zvol_platform_ops_t zvol_freebsd_ops = {
 int
 zvol_busy(void)
 {
+#ifdef ZFS_DEBUG
+	if (zvol_minors)
+		printf("zvol_minors != 0!\n");
+#endif
 	return (zvol_minors != 0);
 }
 

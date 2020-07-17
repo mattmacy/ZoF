@@ -543,6 +543,9 @@ typedef struct dmu_tx_buf_set {
 	dmu_buf_id_t *dtbs_dbid;
 } dmu_tx_buf_set_t;
 
+void dmu_contexts_init(void);
+void dmu_contexts_deinit(void);
+
 int dmu_ctx_init(dmu_ctx_t *dc, struct dnode *dn, objset_t *os,
     uint64_t object, uint64_t offset, uint64_t size, void *data_buf, void *tag,
     dmu_ctx_flag_t flags);
@@ -614,7 +617,7 @@ extern dmu_tx_t *dmu_buf_set_tx(dmu_buf_set_t *dbs);
 #endif
 
 /* DMU thread context handlers. */
-int dmu_thread_context_create(void);
+int dmu_thread_context_create(void *);
 boolean_t dmu_thread_context_process(void);
 void dmu_thread_context_destroy(void *);
 

@@ -35,6 +35,8 @@
 
 #define	ZVOL_EXCL	0x8
 
+struct zvol_holder;
+
 /*
  * The in-core state of each volume.
  */
@@ -59,6 +61,9 @@ typedef struct zvol_state {
 	krwlock_t		zv_suspend_lock;	/* suspend lock */
 	list_t			zv_deferred;	/* deferred requests */
 	struct zvol_state_os	*zv_zso;	/* private platform state */
+#ifdef ZFS_DEBUG
+	struct zvol_holder	*zv_refs;
+#endif
 } zvol_state_t;
 
 typedef struct zvol_dmu_state {
@@ -117,6 +122,11 @@ int zvol_dmu_done(dmu_ctx_t *dmu_ctx, callback_fn cb, void *arg);
 int zvol_init_impl(void);
 void zvol_fini_impl(void);
 void zvol_os_thread_init(void);
+void zvol_hold_impl(zvol_state_t *zv, void *tag, char *file, int line);
+void zvol_rele(zvol_state_t *zv, void *tag);
+
+#define	zvol_hold(zv, tag) zvol_hold_impl(zv, tag, __FILE__, __LINE__)
+
 
 /*
  * platform dependent functions exported to platform independent code

@@ -56,6 +56,81 @@ __FBSDID("$FreeBSD$");
 #include <sys/zfs_vnops.h>
 
 
+
+#ifdef ZFS_DEBUG
+#undef AT_UID
+#undef AT_GID
+#include <sys/linker.h>
+#include <sys/sbuf.h>
+
+static int context_dump_enable;
+
+static int
+sysctl_vfs_zfs_dump_dmu_thread_contexts(SYSCTL_HANDLER_ARGS)
+{
+	int val, err, count;
+	dmu_cb_state_t *dcs;
+	dmu_buf_ctx_node_t *dbsn;
+	struct sbuf *sb;
+	taskq_t *tqlast;
+	char namebuf[64];
+	long offset;
+
+
+	if (context_dump_enable == 0)
+		return (0);
+	val = 0;
+	err = sysctl_wire_old_buffer(req, 0);
+	if (err != 0)
+		return (err);
+	sb = sbuf_new_for_sysctl(NULL, NULL, 80, req);
+	if (sb == NULL)
+		return (ENOMEM);
+
+	tqlast = NULL;
+	count = 0;
+	mutex_enter(&dmu_contexts_lock);
+	for (dcs = list_head(dmu_contexts_list); dcs != NULL;
+		 dcs = list_next(dmu_contexts_list, dcs)) {
+		/*
+		 * Ensure that none of the threads are running
+		 */
+		if (dcs->dcs_tq != tqlast) {
+			taskqueue_block(dcs->dcs_tq->tq_queue);
+			if (tqlast != NULL)
+				taskqueue_unblock(tqlast->tq_queue);
+			tqlast = dcs->dcs_tq;
+		}
+		count++;
+		for (dbsn = list_head(&dcs->dcs_io_list); dbsn != NULL;
+		 dbsn = list_next(&dcs->dcs_io_list, dbsn)) {
+			if (linker_ddb_search_symbol_name(
+			(caddr_t)dbsn->dbsn_cb, namebuf, sizeof(namebuf),
+		    &offset) == 0)
+				sbuf_printf(sb, "\nfunc: %s type: %d", namebuf, dbsn->dbsn_type);
+			else
+				sbuf_printf(sb, "\nfunc: %p type: %d", dbsn->dbsn_cb, dbsn->dbsn_type);
+		}
+	}
+	mutex_exit(&dmu_contexts_lock);
+	if (tqlast != NULL)
+		taskqueue_unblock(tqlast->tq_queue);
+
+	sbuf_printf(sb, "\n\tTotal contexts: %d", count);
+	err = sbuf_finish(sb);
+	sbuf_delete(sb);
+	return (err);
+}
+SYSCTL_DECL(_vfs_zfs_dmu);
+SYSCTL_INT(_vfs_zfs_dmu, OID_AUTO, context_dump_enable, CTLFLAG_RD, &context_dump_enable,
+    0, "enable context dump");
+SYSCTL_PROC(_vfs_zfs_dmu, OID_AUTO, dump_dmu_thread_contexts,
+    CTLTYPE_STRING | CTLFLAG_MPSAFE | CTLFLAG_RD, 0, 0,
+    sysctl_vfs_zfs_dump_dmu_thread_contexts, "A",
+    "Dump dmu thread contexts");
+
+#endif
+
 #ifndef IDX_TO_OFF
 #define	IDX_TO_OFF(idx) (((vm_ooffset_t)(idx)) << PAGE_SHIFT)
 #endif

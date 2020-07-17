@@ -2229,6 +2229,10 @@ zfs_fini(void)
 int
 zfs_busy(void)
 {
+#ifdef ZFS_DEBUG
+	if (zfs_active_fs_count)
+		printf("zfs_active_fs_count != 0!\n");
+#endif
 	return (zfs_active_fs_count != 0);
 }
 
