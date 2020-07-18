@@ -1937,6 +1937,8 @@ done:
 	tx = dmu_tx_create(zv->zv_objset);
 	dmu_tx_hold_write_by_dnode_impl(tx, zv->zv_dn, off,
 	    io_size, B_FALSE);
+	/* ensure all callbocks are cleared before blocking on assign */
+	dmu_thread_context_process();
 	err = dmu_tx_assign(tx, TXG_WAIT);
 	if (err) {
 		dmu_tx_abort(tx);
