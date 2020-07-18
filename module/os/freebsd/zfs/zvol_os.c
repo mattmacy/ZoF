@@ -225,15 +225,6 @@ typedef struct zv_request {
 } zv_request_t;
 
 
-static void
-dmu_context_check(void)
-{
-	dmu_cb_state_t *dcs;	
-
-	dcs = tsd_get(zfs_async_io_key);
-	ASSERT(list_is_empty(&dcs->dcs_io_list));
-}
-
 /*
  * GEOM mode implementation
  */
@@ -530,7 +521,6 @@ zvol_strategy_task(void *arg)
 	zv_request_t *zvr = arg;
 	struct bio *bp = zvr->bio;
 
-	dmu_context_check();
 	zvol_strategy_impl(bp, B_TRUE);
 	kmem_free(zvr, sizeof (*zvr));
 }
@@ -809,7 +799,6 @@ zvol_geom_bio_dmu_ctx_init(void *arg)
 	zvol_state_t *zv;
 	int error;
 
-	dmu_context_check();
 	zds = &zss->zss_zds;
 	zv = zds->zds_zv;
 	error = zvol_dmu_ctx_init(zds);
