@@ -168,11 +168,11 @@ list_t *dmu_contexts_list;
 #define	DEBUG_REFCOUNT_ADD(b) atomic_inc_32(&(b))
 #define	DEBUG_REFCOUNT_DEC(b) atomic_dec_32(&(b))
 
-#define DEBUG_REFCOUNT(a)						\
-	static uint32_t a;							\
+/* BEGIN CSTYLED */
+#define	DEBUG_REFCOUNT(a)				\
+	static uint32_t a;				    \
 	ZFS_MODULE_PARAM(zfs_dmu, , a, UINT, ZMOD_RD, #a)
 
-/* BEGIN CSTYLED */
 static uint32_t dbsn_in_flight;
 ZFS_MODULE_PARAM(zfs_dmu,  , dbsn_in_flight, UINT, ZMOD_RD,
     "DMU buf set nodes in flight");
@@ -552,14 +552,9 @@ dmu_thread_context_destroy(void *context)
 		return;
 
 	tsd_set(zfs_async_io_key, NULL);
-#ifdef ZFS_DEBUG	
+#ifdef ZFS_DEBUG
 	mutex_enter(&dmu_contexts_lock);
-	if (!list_is_empty(dmu_contexts_list)) {
-		printf("remove %p\n", dcs);
-		list_remove(dmu_contexts_list, dcs);
-	} else {
-		printf("dcs=%p but contexts list is NULL\n", dcs);
-	}
+	list_remove(dmu_contexts_list, dcs);
 	mutex_exit(&dmu_contexts_lock);
 #endif
 	/*
@@ -570,6 +565,7 @@ dmu_thread_context_destroy(void *context)
 
 	kmem_free(dcs, sizeof (dmu_cb_state_t));
 	VERIFY(tsd_set(zfs_async_io_key, NULL) == 0);
+	DEBUG_REFCOUNT_DEC(dmu_thread_contexts);
 }
 
 boolean_t
@@ -610,7 +606,8 @@ dmu_thread_context_dispatch(dmu_buf_ctx_t *dbs_ctx, int err,
 	dcs = tsd_get(zfs_async_io_key);
 	if (dcs != NULL && (dbs_ctx->dbc_flags & DMU_CTX_FLAG_ASYNC)) {
 		dbs_ctx->dbc_owner = curthread;
-		dmu_buf_ctx_node_add_err(&dcs->dcs_io_list, dbs_ctx, cb, err, DMU_CONTEXT_DISPATCH);
+		dmu_buf_ctx_node_add_err(&dcs->dcs_io_list, dbs_ctx, cb,
+		    err, DMU_CONTEXT_DISPATCH);
 	} else {
 		/*
 		 * The current thread doesn't have anything
@@ -3220,7 +3217,6 @@ dmu_contexts_init(void)
 	dmu_contexts_list = kmem_alloc(sizeof (list_t), KM_SLEEP);
 	list_create(dmu_contexts_list, sizeof (dmu_cb_state_t),
 	    offsetof(dmu_cb_state_t, dcs_node));
-	printf("dmu_contexts_listp = %p\n", dmu_contexts_list);
 	mutex_init(&dmu_contexts_lock, "ctx list lock", MUTEX_DEFAULT, NULL);
 }
 
@@ -3235,6 +3231,7 @@ dmu_contexts_deinit(void)
 void
 dmu_init(void)
 {
+	zfs_rangelock_debug_init();
 	abd_init();
 	zfs_dbgmsg_init();
 	sa_cache_init();
@@ -3251,6 +3248,7 @@ dmu_init(void)
 void
 dmu_fini(void)
 {
+	zfs_rangelock_debug_fini();
 	arc_fini(); /* arc depends on l2arc, so arc must go first */
 	l2arc_fini();
 	dmu_tx_fini();
