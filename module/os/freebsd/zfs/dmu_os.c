@@ -91,7 +91,7 @@ sysctl_vfs_zfs_dump_dmu_thread_contexts(SYSCTL_HANDLER_ARGS)
 	count = 0;
 	mutex_enter(&dmu_contexts_lock);
 	for (dcs = list_head(dmu_contexts_list); dcs != NULL;
-		 dcs = list_next(dmu_contexts_list, dcs)) {
+	    dcs = list_next(dmu_contexts_list, dcs)) {
 		/*
 		 * Ensure that none of the threads are running
 		 */
@@ -103,13 +103,18 @@ sysctl_vfs_zfs_dump_dmu_thread_contexts(SYSCTL_HANDLER_ARGS)
 		}
 		count++;
 		for (dbsn = list_head(&dcs->dcs_io_list); dbsn != NULL;
-		 dbsn = list_next(&dcs->dcs_io_list, dbsn)) {
+		    dbsn = list_next(&dcs->dcs_io_list, dbsn)) {
 			if (linker_ddb_search_symbol_name(
-			(caddr_t)dbsn->dbsn_cb, namebuf, sizeof(namebuf),
-		    &offset) == 0)
-				sbuf_printf(sb, "\nfunc: %s type: %d", namebuf, dbsn->dbsn_type);
-			else
-				sbuf_printf(sb, "\nfunc: %p type: %d", dbsn->dbsn_cb, dbsn->dbsn_type);
+			    (caddr_t)dbsn->dbsn_cb, namebuf, sizeof (namebuf),
+			    &offset) == 0) {
+				sbuf_printf(sb, "\ntid: %d func: %s type: %d",
+				    dcs->dcs_thread->td_tid, namebuf,
+				    dbsn->dbsn_type);
+			} else {
+				sbuf_printf(sb, "\ntid: %d func: %p type: %d",
+				    dcs->dcs_thread->td_tid, dbsn->dbsn_cb,
+				    dbsn->dbsn_type);
+			}
 		}
 	}
 	mutex_exit(&dmu_contexts_lock);
@@ -121,14 +126,15 @@ sysctl_vfs_zfs_dump_dmu_thread_contexts(SYSCTL_HANDLER_ARGS)
 	sbuf_delete(sb);
 	return (err);
 }
+/* BEGIN CSTYLED */
 SYSCTL_DECL(_vfs_zfs_dmu);
-SYSCTL_INT(_vfs_zfs_dmu, OID_AUTO, context_dump_enable, CTLFLAG_RD, &context_dump_enable,
-    0, "enable context dump");
+SYSCTL_INT(_vfs_zfs_dmu, OID_AUTO, context_dump_enable, CTLFLAG_RW,
+    &context_dump_enable, 0, "enable context dump");
 SYSCTL_PROC(_vfs_zfs_dmu, OID_AUTO, dump_dmu_thread_contexts,
     CTLTYPE_STRING | CTLFLAG_MPSAFE | CTLFLAG_RD, 0, 0,
     sysctl_vfs_zfs_dump_dmu_thread_contexts, "A",
     "Dump dmu thread contexts");
-
+/* END CSTYLED */
 #endif
 
 #ifndef IDX_TO_OFF
