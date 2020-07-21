@@ -1,4 +1,5 @@
 AC_DEFUN([ZFS_AC_CONFIG_USER_PAM], [
+	AC_REQUIRE([AC_LIB_PREPARE_PREFIX])
 	AC_ARG_ENABLE([pam],
 		AS_HELP_STRING([--enable-pam],
 		[install pam_zfs_key module [[default: check]]]),
@@ -12,8 +13,9 @@ AC_DEFUN([ZFS_AC_CONFIG_USER_PAM], [
 
 	AC_ARG_WITH(pamconfigsdir,
 		AS_HELP_STRING([--with-pamconfigsdir=DIR],
-		[install pam-config files in dir [[/usr/share/pamconfigs]]]),
-		[pamconfigsdir="$withval"],[pamconfigsdir=/usr/share/pam-configs])
+		[install pam-config files in dir [[$acl_final_prefix/share/pam-configs]]]),
+		[pamconfigsdir="$withval"],
+		[pamconfigsdir=$acl_final_prefix/share/pam-configs])
 
 	AS_IF([test "x$enable_pam" != "xno"], [
 		AC_CHECK_HEADERS([security/pam_modules.h], [
