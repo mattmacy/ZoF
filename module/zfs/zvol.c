@@ -1813,7 +1813,7 @@ zvol_dmu_ctx_init_write_impl(dmu_tx_buf_set_t *dtbs)
 			goto done;
 		dmu_tx_prefault(dtbs);
 		dmu_tx_buf_set_rele(dtbs);
-		return;
+		goto out;
 	}
 done:
 	DEBUG_REFCOUNT_DEC(dmu_ctx_in_prefault);
@@ -1821,29 +1821,34 @@ done:
 	if (err) {
 		zds->zds_dc.dc_err = err;
 		zvol_dmu_err(zds, err_cb);
-		return;
+		goto out;
 	}
 	tx = dmu_tx_create(zv->zv_objset);
 	dmu_tx_hold_write_by_dnode_impl(tx, zv->zv_dn, off,
 	    io_size, B_FALSE);
+	/* ensure all callbocks are cleared before blocking on assign */
+	dmu_thread_context_process();
 	err = dmu_tx_assign(tx, TXG_WAIT);
 	if (err) {
 		dmu_tx_abort(tx);
 		zds->zds_dc.dc_err = err;
 		zvol_dmu_err(zds, err_cb);
-		return;
+		goto out;
 	}
 	dmu_ctx_set_dmu_tx(&zds->zds_dc, tx);
 	dmu_ctx_set_buf_set_transfer_cb(&zds->zds_dc,
 	    zvol_dmu_buf_set_transfer_write);
-
+	/* ensure all callbocks are cleared before blocking on the rangelock */
+	dmu_thread_context_process();
 	err = zfs_rangelock_tryenter_async(&zv->zv_rangelock, off, io_size,
 	    RL_WRITER, &zds->zds_lr, (callback_fn)zvol_dmu_issue, zds);
 
 	if (err == EINPROGRESS)
-		return;
+		goto out;
 
 	zvol_dmu_issue(zds);
+out:
+	dmu_thread_context_process();
 }
 
 static int
