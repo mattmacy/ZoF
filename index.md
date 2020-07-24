@@ -48,6 +48,7 @@ The following dependencies are required to build OpenZFS on FreeBSD:
     fio
     hs-ShellCheck
     ksh93
+    pamtester
     py36-flake8 # or your preferred Python version
     sudo
     ```
