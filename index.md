@@ -41,9 +41,10 @@ The following dependencies are required to build OpenZFS on FreeBSD:
     ```
     python3 # or your preferred Python version
     ```
-  * Optional packages for test:
+  * Optional packages for checks and tests:
     ```
     base64
+    checkbashisms
     fio
     hs-ShellCheck
     ksh93
