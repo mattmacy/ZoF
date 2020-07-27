@@ -5,4 +5,4 @@ endif
 if BUILD_FREEBSD
 SUBDIRS += rc.d
 endif
-DIST_SUBDIRS = default init.d zfs systemd modules-load.d sudoers.d
+DIST_SUBDIRS = default init.d zfs systemd modules-load.d rc.d sudoers.d
