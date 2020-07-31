@@ -30,28 +30,32 @@ The following dependencies are required to build OpenZFS on FreeBSD:
   * FreeBSD sources in /usr/src or elsewhere specified by SYSDIR in env
   * Packages for build:
     ```
-    autoconf
-    automake
-    autotools
-    bash
-    git
-    gmake
+    pkg install \
+        autoconf \
+        automake \
+        autotools \
+        bash \
+        git \
+        gmake \
     ```
   * Optional packages for build:
     ```
-    python3 # or your preferred Python version
+    pkg install python37 # or your preferred Python version
     ```
-  * Optional packages for checks and tests:
+  * Packages for checks and tests:
     ```
-    base64
-    checkbashisms
-    fio
-    hs-ShellCheck
-    ksh93
-    pamtester
-    py37-flake8 # or your preferred Python version
-    sudo
+    pkg install \
+        base64 \
+        checkbashisms \
+        fio \
+        hs-ShellCheck \
+        ksh93 \
+        pamtester \
+        py37-flake8 \
+	python37 \
+        sudo
     ```
+    Your preferred python version may be substituted.
     The user for running tests must have NOPASSWD sudo permission.
 
 To build and install:
