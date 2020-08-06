@@ -157,7 +157,6 @@ dmu_read_pages_buf_set_transfer(dmu_buf_set_t *dbs)
 	dbp = dbs->dbs_dbp;
 
 #ifdef ZFS_DEBUG
-	IMPLY(last_size < PAGE_SIZE, *rahead == 0);
 	if (dbp[0]->db_offset != 0 || numbufs > 1) {
 		for (i = 0; i < numbufs; i++) {
 			ASSERT(ISP2(dbp[i]->db_size));
@@ -334,7 +333,7 @@ dmu_read_pages(objset_t *os, uint64_t object, vm_page_t *ma, int count,
 
 	ASSERT3U(ma[0]->pindex + count - 1, ==, ma[count - 1]->pindex);
 	ASSERT(last_size <= PAGE_SIZE);
-#ifdef DEBUG
+#ifdef ZFS_DEBUG
 	IMPLY(last_size < PAGE_SIZE, *rahead == 0);
 #endif
 	drpc.rbehind = rbehind;
