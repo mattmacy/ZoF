@@ -177,6 +177,11 @@ DEBUG_COUNTER_U(_vfs_zfs_dmu, buf_set_total, "Total buffer sets");
 DEBUG_REFCOUNT(_vfs_zfs_dmu, dmu_ctx_in_flight, "DMU contexts in flight");
 DEBUG_REFCOUNT(_vfs_zfs_dmu, buf_set_in_flight, "Buffer sets in flight");
 
+
+static uint32_t zfs_dmu_io_errors;
+ZFS_MODULE_PARAM(zfs_dmu, zfs_dmu_, io_errors, UINT, ZMOD_RD,
+	"dmu i/o errors");
+
 #if defined(_KERNEL) && defined(__FreeBSD__)
 #define	dmu_uiomove(data, sz, dir, uio)			\
 	vn_io_fault_uiomove((data), (sz), (uio))
@@ -657,8 +662,8 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 			ASSERT(dc->dc_flags & DMU_CTX_FLAG_ASYNC);
 			return (err);
 		}
-		VERIFY(err == 0);
 		if (db == NULL) {
+			atomic_inc_32(&zfs_dmu_io_errors);
 			VERIFY(err);
 			/* Only include counts for the processed buffers. */
 			dbs->dbs_count = i;
@@ -859,6 +864,7 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 		rw_exit(&dn->dn_struct_rwlock);
 		return (err);
 	} else {
+		atomic_inc_32(&zfs_dmu_io_errors);
 		/* XXX this whole error path needs revisiting */
 		nblks = dbs->dbs_count;
 		set_size = sizeof (dmu_buf_set_t) +
