@@ -2242,7 +2242,6 @@ done:
 	 * We will finish up this free operation in the syncing phase.
 	 */
 	mutex_enter(&dn->dn_mtx);
-	{
 	int txgoff = tx->tx_txg & TXG_MASK;
 	if (dn->dn_free_ranges[txgoff] == NULL) {
 		dn->dn_free_ranges[txgoff] = range_tree_create(NULL,
@@ -2250,7 +2249,6 @@ done:
 	}
 	range_tree_clear(dn->dn_free_ranges[txgoff], blkid, nblks);
 	range_tree_add(dn->dn_free_ranges[txgoff], blkid, nblks);
-	}
 	dprintf_dnode(dn, "blkid=%llu nblks=%llu txg=%llu\n",
 	    blkid, nblks, tx->tx_txg);
 	mutex_exit(&dn->dn_mtx);
