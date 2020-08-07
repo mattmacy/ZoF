@@ -53,6 +53,11 @@
 
 verify_runnable "global"
 
+function log_block_count
+{
+	zdb -l $1 | awk '/log_blk_count/ { print $2 }'
+}
+
 log_assert "Off/onlining an L2ARC device restores all written blocks , vdev present."
 
 function cleanup
@@ -74,70 +79,47 @@ typeset cache_sz=$(( 3 * $fill_mb ))
 export FILE_SIZE=$(( floor($fill_mb / $NUMJOBS) ))M
 
 log_must truncate -s ${cache_sz}M $VDEV_CACHE
-
 log_must zpool create -f $TESTPOOL $VDEV cache $VDEV_CACHE
 
 log_must fio $FIO_SCRIPTS/mkfiles.fio
 log_must fio $FIO_SCRIPTS/random_reads.fio
 
 log_must zpool offline $TESTPOOL $VDEV_CACHE
-
 sleep 2
-
-typeset l2_dh_log_blk1=$(zdb -l $VDEV_CACHE | grep log_blk_count | \
-	awk '{print $2}')
+typeset l2_dh_log_blk1=$(log_block_count $VDEV_CACHE)
+log_must test $l2_dh_log_blk1 -gt 0
 
 typeset l2_rebuild_log_blk_start=$(get_arcstat l2_rebuild_log_blks)
-
 log_must zpool online $TESTPOOL $VDEV_CACHE
-
 sleep 5
-
 typeset l2_rebuild_log_blk_end=$(get_arcstat l2_rebuild_log_blks)
-
-log_must test $l2_dh_log_blk1 -eq $(( $l2_rebuild_log_blk_end - $l2_rebuild_log_blk_start ))
-log_must test $l2_dh_log_blk1 -gt 0
+log_must test $l2_dh_log_blk1 -eq $(( l2_rebuild_log_blk_end - l2_rebuild_log_blk_start ))
 
 log_must fio $FIO_SCRIPTS/mkfiles.fio
 log_must fio $FIO_SCRIPTS/random_reads.fio
 
 log_must zpool offline $TESTPOOL $VDEV_CACHE
-
 sleep 2
-
-typeset l2_dh_log_blk2=$(zdb -l $VDEV_CACHE | grep log_blk_count | \
-	awk '{print $2}')
-
-typeset l2_rebuild_log_blk_start=$(get_arcstat l2_rebuild_log_blks)
-
-log_must zpool online $TESTPOOL $VDEV_CACHE
-
-sleep 5
-
-typeset l2_rebuild_log_blk_end=$(get_arcstat l2_rebuild_log_blks)
-
-log_must test $l2_dh_log_blk2 -eq $(( $l2_rebuild_log_blk_end - $l2_rebuild_log_blk_start ))
-
+typeset l2_dh_log_blk2=$(log_block_count $VDEV_CACHE)
 log_must test $l2_dh_log_blk2 -gt $l2_dh_log_blk1
 
-log_must zpool export $TESTPOOL
-
-typeset l2_dh_log_blk3=$(zdb -l $VDEV_CACHE | grep log_blk_count | \
-	awk '{print $2}')
-
 typeset l2_rebuild_log_blk_start=$(get_arcstat l2_rebuild_log_blks)
-
-log_must zpool import -d $VDIR $TESTPOOL
-
+log_must zpool online $TESTPOOL $VDEV_CACHE
 sleep 5
-
 typeset l2_rebuild_log_blk_end=$(get_arcstat l2_rebuild_log_blks)
+log_must test $l2_dh_log_blk2 -eq $(( l2_rebuild_log_blk_end - l2_rebuild_log_blk_start ))
 
-log_must test $l2_dh_log_blk3 -eq $(( $l2_rebuild_log_blk_end - $l2_rebuild_log_blk_start ))
+log_must zpool export $TESTPOOL
+typeset l2_dh_log_blk3=$(log_block_count $VDEV_CACHE)
 log_must test $l2_dh_log_blk3 -gt 0
 
-log_must zdb -lq $VDEV_CACHE
+typeset l2_rebuild_log_blk_start=$(get_arcstat l2_rebuild_log_blks)
+log_must zpool import -d $VDIR $TESTPOOL
+sleep 5
+typeset l2_rebuild_log_blk_end=$(get_arcstat l2_rebuild_log_blks)
+log_must test $l2_dh_log_blk3 -eq $(( l2_rebuild_log_blk_end - l2_rebuild_log_blk_start ))
 
+log_must zdb -lq $VDEV_CACHE
 log_must zpool destroy -f $TESTPOOL
 
 log_pass "Off/onlining an L2ARC device restores all written blocks, vdev present."
