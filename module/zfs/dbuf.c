@@ -3192,7 +3192,7 @@ dbuf_dirty_leaf_with_existing_frontend(dbuf_dirty_state_t *dds)
 			 * scheduled its write with its buffer, we must
 			 * disassociate by replacing the frontend.
 			 */
-			ASSERT(db->db_state & (DB_READ|DB_PARTIAL));
+			ASSERT3U(db->db_state, &, (DB_READ|DB_PARTIAL));
 			ASSERT3U(db->db_dirtycnt, ==, 1);
 			dbuf_dirty_set_data(dds);
 		} else {
@@ -3239,17 +3239,23 @@ dbuf_dirty_record_create_leaf(dbuf_dirty_state_t *dds)
 	dr = dbuf_dirty_record_create(dds);
 
 	/*
+	 * XXX - convert to ASSERT after dn_free_ranges fix
+	 */
+	VERIFY(db->db_level == 0);
+	VERIFY(db->db_blkid != DMU_BONUS_BLKID);
+
+	/*
 	 * If this block was marked to be freed in this txg, revert that
 	 * change.  Note that db_freed_in_flight may have already been
 	 * processed, so it can't be checked here.
 	 */
 	if (db->db_blkid != DMU_SPILL_BLKID) {
-		mutex_enter(&dds->dds_dn->dn_mtx);
+		mutex_enter(&dn->dn_mtx);
 		if (dn->dn_free_ranges[txgoff] != NULL) {
 			range_tree_clear(dn->dn_free_ranges[txgoff],
 			    db->db_blkid, 1);
 		}
-		mutex_exit(&dds->dds_dn->dn_mtx);
+		mutex_exit(&dn->dn_mtx);
 		db->db_freed_in_flight = FALSE;
 	}
 	dbuf_dirty_record_register_as_leaf(dds);
