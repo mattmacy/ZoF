@@ -765,9 +765,9 @@ extern int uiomove(void *, size_t, enum uio_rw, uio_t *);
 
 #endif /* _KERNEL */
 
+typedef void (*callback_fn)(void *);
 #ifdef __cplusplus
 };
 #endif
-typedef void (*callback_fn)(void *);
 
 #endif	/* _SYS_ZFS_CONTEXT_H */
