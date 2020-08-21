@@ -259,7 +259,7 @@ struct vdev {
 	vdev_alloc_bias_t vdev_alloc_bias; /* metaslab allocation bias	*/
 	uint64_t	vdev_ndata;	/* # dRAID data devices		*/
 	uint64_t	vdev_nspares;	/* # dRAID distributed spares	*/
-	uint64_t	vdev_ngroups;	/* # dRAID groups		*/
+	uint64_t	vdev_ngroups;	/* # dRAID groups per slice	*/
 
 	/* pool checkpoint related */
 	space_map_t	*vdev_checkpoint_sm;	/* contains reserved blocks */
@@ -426,8 +426,6 @@ struct vdev {
 	zfs_ratelimit_t vdev_delay_rl;
 	zfs_ratelimit_t vdev_checksum_rl;
 };
-
-#define	VDEV_RAIDZ_MAXPARITY	3
 
 #define	VDEV_PAD_SIZE		(8 << 10)
 /* 2 padding areas (vl_pad1 and vl_be) to skip */

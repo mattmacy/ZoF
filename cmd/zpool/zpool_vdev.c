@@ -462,18 +462,19 @@ is_raidz_mirror(replication_level_t *a, replication_level_t *b,
 }
 
 /*
- * Comparison for determining dRAID and raidz ordering.
+ * Comparison for determining if dRAID and raidz where passed in either order.
  */
 static boolean_t
-is_raidz_draid(replication_level_t *a, replication_level_t *b,
-    replication_level_t **raidz, replication_level_t **draid)
+is_raidz_draid(replication_level_t *a, replication_level_t *b)
 {
 	if (strcmp(a->zprl_type, "raidz") == 0 &&
-	    strcmp(b->zprl_type, "draid") == 0) {
-		*raidz = a;
-		*draid = b;
+	    strcmp(b->zprl_type, "draid") == 0)
 		return (B_TRUE);
-	}
+
+	if (strcmp(a->zprl_type, "draid") == 0 &&
+	    strcmp(b->zprl_type, "raidz") == 0)
+		return (B_TRUE);
+
 	return (B_FALSE);
 }
 
@@ -494,7 +495,7 @@ get_replication(nvlist_t *nvroot, boolean_t fatal)
 	replication_level_t lastrep = {0};
 	replication_level_t rep;
 	replication_level_t *ret;
-	replication_level_t *raidz, *draid, *mirror;
+	replication_level_t *raidz, *mirror;
 	boolean_t dontreport;
 
 	ret = safe_malloc(sizeof (replication_level_t));
@@ -710,14 +711,12 @@ get_replication(nvlist_t *nvroot, boolean_t fatal)
 					else
 						return (NULL);
 				}
-			} else if (
-			    is_raidz_draid(&lastrep, &rep, &raidz, &draid) ||
-			    is_raidz_draid(&rep, &lastrep, &raidz, &draid)) {
+			} else if (is_raidz_draid(&lastrep, &rep)) {
 				/*
 				 * Accepted raidz and draid when they can
 				 * handle the same number of disk failures.
 				 */
-				if (raidz->zprl_parity != draid->zprl_parity) {
+				if (lastrep.zprl_parity != rep.zprl_parity) {
 					if (ret != NULL)
 						free(ret);
 					ret = NULL;
@@ -728,10 +727,10 @@ get_replication(nvlist_t *nvroot, boolean_t fatal)
 						    "with different "
 						    "redundancy, %llu vs. "
 						    "%llu are present\n"),
-						    raidz->zprl_type,
-						    draid->zprl_type,
-						    raidz->zprl_parity,
-						    draid->zprl_parity);
+						    lastrep.zprl_type,
+						    rep.zprl_type,
+						    lastrep.zprl_parity,
+						    rep.zprl_parity);
 					else
 						return (NULL);
 				}
@@ -1171,8 +1170,8 @@ get_parity(const char *type)
 	long parity = 0;
 	const char *p;
 
-	if (strncmp(type, VDEV_TYPE_RAIDZ, 5) == 0) {
-		p = type + 5;
+	if (strncmp(type, VDEV_TYPE_RAIDZ, strlen(VDEV_TYPE_RAIDZ)) == 0) {
+		p = type + strlen(VDEV_TYPE_RAIDZ);
 
 		if (*p == '\0') {
 			/* when unspecified default to single parity */
@@ -1181,17 +1180,18 @@ get_parity(const char *type)
 			/* no zero prefixes allowed */
 			return (0);
 		} else {
-			/* 0-255, no suffixes allowed */
+			/* 0-3, no suffixes allowed */
 			char *end;
 			errno = 0;
 			parity = strtol(p, &end, 10);
 			if (errno != 0 || *end != '\0' ||
-			    parity < 1 || parity >= 255) {
+			    parity < 1 || parity > VDEV_RAIDZ_MAXPARITY) {
 				return (0);
 			}
 		}
-	} else if (strncmp(type, VDEV_TYPE_DRAID, 5) == 0) {
-		p = type + 5;
+	} else if (strncmp(type, VDEV_TYPE_DRAID,
+	    strlen(VDEV_TYPE_DRAID)) == 0) {
+		p = type + strlen(VDEV_TYPE_DRAID);
 
 		if (*p == '\0' || *p == ':') {
 			/* when unspecified default to single parity */
@@ -1200,11 +1200,12 @@ get_parity(const char *type)
 			/* no zero prefixes allowed */
 			return (0);
 		} else {
-			/* 0-255, allowed suffixes: '\0' or ':' */
+			/* 0-3, allowed suffixes: '\0' or ':' */
 			char *end;
 			errno = 0;
 			parity = strtol(p, &end, 10);
-			if (errno != 0 || parity < 1 || parity >= 255 ||
+			if (errno != 0 ||
+			    parity < 1 || parity > VDEV_DRAID_MAXPARITY ||
 			    (*end != '\0' && *end != ':')) {
 				return (0);
 			}
@@ -1224,8 +1225,8 @@ is_grouping(const char *type, int *mindev, int *maxdev)
 {
 	int nparity;
 
-	if (strncmp(type, VDEV_TYPE_RAIDZ, 5) == 0 ||
-	    strncmp(type, VDEV_TYPE_DRAID, 5) == 0) {
+	if (strncmp(type, VDEV_TYPE_RAIDZ, strlen(VDEV_TYPE_RAIDZ)) == 0 ||
+	    strncmp(type, VDEV_TYPE_DRAID, strlen(VDEV_TYPE_DRAID)) == 0) {
 		nparity = get_parity(type);
 		if (nparity == 0)
 			return (NULL);
@@ -1234,10 +1235,12 @@ is_grouping(const char *type, int *mindev, int *maxdev)
 		if (maxdev != NULL)
 			*maxdev = 255;
 
-		if (strncmp(type, VDEV_TYPE_RAIDZ, 5) == 0)
+		if (strncmp(type, VDEV_TYPE_RAIDZ,
+		    strlen(VDEV_TYPE_RAIDZ)) == 0) {
 			return (VDEV_TYPE_RAIDZ);
-		else
+		} else {
 			return (VDEV_TYPE_DRAID);
+		}
 	}
 
 	if (maxdev != NULL)
@@ -1308,7 +1311,7 @@ draid_config_by_type(nvlist_t *nv, const char *type, uint64_t children)
 	uint64_t ngroups = 1;
 	long value;
 
-	if (strncmp(type, VDEV_TYPE_DRAID, 5) != 0)
+	if (strncmp(type, VDEV_TYPE_DRAID, strlen(VDEV_TYPE_DRAID)) != 0)
 		return (EINVAL);
 
 	nparity = (uint64_t)get_parity(type);
@@ -1329,19 +1332,18 @@ draid_config_by_type(nvlist_t *nv, const char *type, uint64_t children)
 			return (EINVAL);
 		}
 
-		/* Expected non-zero value with cDdDsS suffix */
+		/* Expected non-zero value with c/d/s suffix */
 		value = strtol(p, &end, 10);
+		char suffix = tolower(*end);
 		if (errno != 0 ||
-		    (*end != 'c' && *end != 'C' &&
-		    *end != 'd' && *end != 'D' &&
-		    *end != 's' && *end != 'S')) {
+		    (suffix != 'c' && suffix != 'd' && suffix != 's')) {
 			(void) fprintf(stderr, gettext("invalid dRAID "
 			    "syntax; expected [:<number><c|d|s>] not '%s'\n"),
 			    type);
 			return (EINVAL);
 		}
 
-		if (*end == 'c' || *end == 'C') {
+		if (suffix == 'c') {
 			if ((uint64_t)value != children) {
 				fprintf(stderr,
 				    gettext("invalid number of dRAID children; "
@@ -1350,9 +1352,9 @@ draid_config_by_type(nvlist_t *nv, const char *type, uint64_t children)
 				    (u_longlong_t)children);
 				return (EINVAL);
 			}
-		} else if (*end == 'd' || *end == 'D') {
+		} else if (suffix == 'd') {
 			ndata = (uint64_t)value;
-		} else if (*end == 's' || *end == 'S') {
+		} else if (suffix == 's') {
 			nspares = (uint64_t)value;
 		} else {
 			verify(0); /* Unreachable */
@@ -1364,22 +1366,32 @@ draid_config_by_type(nvlist_t *nv, const char *type, uint64_t children)
 	 * redundancy group to 8 data disks.  This value was selected to
 	 * provide a reasonable tradeoff between capacity and performance.
 	 */
-	if (ndata == UINT64_MAX)
-		ndata = MIN(children - nspares - nparity, 8);
+	if (ndata == UINT64_MAX) {
+		if (children > nspares + nparity) {
+			ndata = MIN(children - nspares - nparity, 8);
+		} else {
+			fprintf(stderr, gettext("request number of "
+			    "distributed spares %llu and parity level %llu\n"
+			    "leaves no disks available for data\n"),
+			    (u_longlong_t)nspares, (u_longlong_t)nparity);
+			return (EINVAL);
+		}
+	}
 
 	/* Verify the maximum allow group size is never exceeded. */
 	if (ndata == 0 || (ndata + nparity > children - nspares)) {
-		fprintf(stderr,
-		    gettext("invalid dRAID stripe size %llu; %llu devices "
-		    "allowed\n"), (u_longlong_t)(ndata + nparity),
-		    (u_longlong_t)(children - nspares));
+		fprintf(stderr, gettext("requested number of dRAID data "
+		    "disks per group %llu is too high,\nat most %llu disks "
+		    "are available for data\n"), (u_longlong_t)ndata,
+		    (u_longlong_t)(children - nspares - nparity));
 		return (EINVAL);
 	}
 
-	if (nparity == 0 || nparity > 3) {
+	if (nparity == 0 || nparity > VDEV_DRAID_MAXPARITY) {
 		fprintf(stderr,
 		    gettext("invalid dRAID parity level %llu; must be "
-		    "between 1 and %d\n"), (u_longlong_t)nparity, 3);
+		    "between 1 and %d\n"), (u_longlong_t)nparity,
+		    VDEV_DRAID_MAXPARITY);
 		return (EINVAL);
 	}
 
@@ -1390,17 +1402,22 @@ draid_config_by_type(nvlist_t *nv, const char *type, uint64_t children)
 	if (nspares > 100 || nspares > (children - (ndata + nparity))) {
 		fprintf(stderr,
 		    gettext("invalid number of dRAID spares %llu; additional "
-		    "child vdevs would be required\n"), (u_longlong_t)nspares);
+		    "disks would be required\n"), (u_longlong_t)nspares);
 		return (EINVAL);
 	}
 
 	/* Verify the requested number children is sufficient. */
-	if (children == 0 || children > UINT8_MAX ||
-	    children < (ndata + nparity + nspares)) {
-		fprintf(stderr,
-		    gettext("invalid number of dRAID children %llu; must be "
-		    "between 3 and %d\n"), (u_longlong_t)children, UINT8_MAX);
-		return (EINVAL);
+	if (children < (ndata + nparity + nspares)) {
+		fprintf(stderr, gettext("%llu disks were provided, but at "
+		    "least %llu disks are required for this config\n"),
+		    (u_longlong_t)children,
+		    (u_longlong_t)(ndata + nparity + nspares));
+	}
+
+	if (children > VDEV_DRAID_MAX_CHILDREN) {
+		fprintf(stderr, gettext("%llu disks were provided, but "
+		    "dRAID only supports up to %u disks"),
+		    (u_longlong_t)children, VDEV_DRAID_MAX_CHILDREN);
 	}
 
 	/*

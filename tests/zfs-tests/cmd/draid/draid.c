@@ -1173,7 +1173,7 @@ draid_table(int argc, char *argv[])
 		nperms = fnvlist_lookup_uint64(cfg, MAP_NPERMS);
 		avg_ratio = fnvlist_lookup_uint64(cfg, MAP_AVG_RATIO);
 
-		printf("\t{ %3llu, %3llu, 0x%016llx, 0x%016llx, NULL }, "
+		printf("\t{ %3llu, %3llu, 0x%016llx, 0x%016llx },\t"
 		    "/* %2.03f */\n", (u_longlong_t)children,
 		    (u_longlong_t)nperms, (u_longlong_t)seed,
 		    (u_longlong_t)checksum, (double)avg_ratio / 1000.0);

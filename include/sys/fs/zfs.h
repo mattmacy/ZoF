@@ -777,6 +777,12 @@ typedef struct zpool_load_policy {
 #define	VDEV_TYPE_L2CACHE		"l2cache"
 #define	VDEV_TYPE_INDIRECT		"indirect"
 
+#define	VDEV_RAIDZ_MAXPARITY		3
+
+#define	VDEV_DRAID_MAXPARITY		3
+#define	VDEV_DRAID_MIN_CHILDREN		2
+#define	VDEV_DRAID_MAX_CHILDREN		UINT8_MAX
+
 /* VDEV_TOP_ZAP_* are used in top-level vdev ZAP objects. */
 #define	VDEV_TOP_ZAP_INDIRECT_OBSOLETE_SM \
 	"com.delphix:indirect_obsolete_sm"

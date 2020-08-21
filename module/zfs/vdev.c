@@ -633,7 +633,7 @@ vdev_draid_config_check(nvlist_t *nv, uint64_t *ndatap,
 
 	/*
 	 * Validate the minimum number of children exist per group for the
-	 * specified parity level (draid1 >= 3, draid2 >= 4, draid3 >= 5).
+	 * specified parity level (draid1 >= 2, draid2 >= 3, draid3 >= 4).
 	 */
 	if (children < (ndata + nparity + nspares))
 		return (B_FALSE);

@@ -118,6 +118,7 @@ KERNEL_C = \
 	vdev.c \
 	vdev_cache.c \
 	vdev_draid.c \
+	vdev_draid_rand.c \
 	vdev_file.c \
 	vdev_indirect_births.c \
 	vdev_indirect.c \

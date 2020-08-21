@@ -1188,15 +1188,12 @@ zpool_has_special_vdev(nvlist_t *nvroot)
 }
 
 /*
- * Output a dRAID top-level vdev name in to the provided buffer.  The
- * children argument is optional, if provided it will always be appended
- * to the end of the string.
+ * Output a dRAID top-level vdev name in to the provided buffer.
  */
 static char *
 zpool_draid_name(char *name, int len, uint64_t data, uint64_t parity,
     uint64_t spares, uint64_t children)
 {
-	bzero(name, len);
 	snprintf(name, len - 1, "%s%llu:%llud:%lluc:%llus",
 	    VDEV_TYPE_DRAID, (u_longlong_t)parity, (u_longlong_t)data,
 	    (u_longlong_t)children, (u_longlong_t)spares);
@@ -1227,12 +1224,12 @@ zpool_has_draid_vdev(nvlist_t *nvroot)
 }
 
 /*
- * Return B_TRUE is the provided name is a dRAID spare name.
+ * Return B_TRUE if the provided name is a dRAID spare name.
  */
 boolean_t
 zpool_is_draid_spare(const char *name)
 {
-	uint64_t spare_id = 0, parity = 0, vdev_id = 0;
+	uint64_t spare_id, parity, vdev_id;
 
 	if (sscanf(name, VDEV_TYPE_DRAID "%llu-%llu-%llu",
 	    (u_longlong_t *)&parity, (u_longlong_t *)&vdev_id,

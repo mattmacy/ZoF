@@ -39,12 +39,6 @@ extern "C" {
 #endif
 
 /*
- * Minimum and maximum number of children in a dRAID vdev.
- */
-#define	VDEV_DRAID_MIN_CHILDREN		2
-#define	VDEV_DRAID_MAX_CHILDREN		UINT8_MAX
-
-/*
  * Constants required to generate and use dRAID permutations.
  */
 #define	VDEV_DRAID_SEED			0xd7a1d5eed
@@ -75,11 +69,11 @@ typedef struct vdev_draid_config {
 	uint64_t vdc_nspares;		/* # of distributed spares */
 	uint64_t vdc_children;		/* # of children */
 	uint64_t vdc_ngroups;		/* # groups per slice */
-	draid_map_t *vdc_map;		/* permutation map */
 
 	/*
 	 * Immutable derived constants.
 	 */
+	draid_map_t *vdc_map;		/* permutation map */
 	uint64_t vdc_groupwidth;	/* = data + parity */
 	uint64_t vdc_ndisks;		/* = children - spares */
 	uint64_t vdc_groupsz;		/* = groupwidth * DRAID_ROWSIZE */
