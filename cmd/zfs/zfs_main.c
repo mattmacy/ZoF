@@ -1132,8 +1132,9 @@ zfs_do_create(int argc, char **argv)
 
 		if (volblocksize != ZVOL_DEFAULT_BLOCKSIZE &&
 		    nvlist_lookup_string(props, prop, &strval) != 0) {
-			(void) asprintf(&strval, "%llu",
-			    (u_longlong_t)volblocksize);
+			if (asprintf(&strval, "%llu",
+			    (u_longlong_t)volblocksize) == -1)
+				nomem();
 			nvlist_add_string(props, prop, strval);
 			free(strval);
 		}
