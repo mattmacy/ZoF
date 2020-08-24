@@ -75,7 +75,8 @@ typedef uint64_t vdev_asize_func_t(vdev_t *vd, uint64_t psize);
 typedef void	vdev_io_start_func_t(zio_t *zio);
 typedef void	vdev_io_done_func_t(zio_t *zio);
 typedef void	vdev_state_change_func_t(vdev_t *vd, int, int);
-typedef boolean_t vdev_need_resilver_func_t(vdev_t *vd, uint64_t, size_t);
+typedef boolean_t vdev_need_resilver_func_t(vdev_t *vd, const dva_t *dva,
+    size_t psize, uint64_t phys_birth);
 typedef void	vdev_hold_func_t(vdev_t *vd);
 typedef void	vdev_rele_func_t(vdev_t *vd);
 
@@ -275,6 +276,9 @@ struct vdev {
 	boolean_t	vdev_ishole;	/* is a hole in the namespace	*/
 	uint64_t	vdev_top_zap;
 	vdev_alloc_bias_t vdev_alloc_bias; /* metaslab allocation bias	*/
+	uint64_t	vdev_ndata;	/* # dRAID data devices		*/
+	uint64_t	vdev_nspares;	/* # dRAID distributed spares	*/
+	uint64_t	vdev_ngroups;	/* # dRAID groups per slice	*/
 
 	/* pool checkpoint related */
 	space_map_t	*vdev_checkpoint_sm;	/* contains reserved blocks */
@@ -325,16 +329,13 @@ struct vdev {
 	kthread_t	*vdev_rebuild_thread;
 	vdev_rebuild_t	vdev_rebuild_config;
 
-	/* For limiting outstanding I/Os (initialize, TRIM, rebuild) */
+	/* For limiting outstanding I/Os (initialize, TRIM) */
 	kmutex_t	vdev_initialize_io_lock;
 	kcondvar_t	vdev_initialize_io_cv;
 	uint64_t	vdev_initialize_inflight;
 	kmutex_t	vdev_trim_io_lock;
 	kcondvar_t	vdev_trim_io_cv;
 	uint64_t	vdev_trim_inflight[3];
-	kmutex_t	vdev_rebuild_io_lock;
-	kcondvar_t	vdev_rebuild_io_cv;
-	uint64_t	vdev_rebuild_inflight;
 
 	/*
 	 * Values stored in the config for an indirect or removing vdev.
@@ -445,8 +446,6 @@ struct vdev {
 	zfs_ratelimit_t vdev_checksum_rl;
 };
 
-#define	VDEV_RAIDZ_MAXPARITY	3
-
 #define	VDEV_PAD_SIZE		(8 << 10)
 /* 2 padding areas (vl_pad1 and vl_be) to skip */
 #define	VDEV_SKIP_SIZE		VDEV_PAD_SIZE * 2
@@ -523,6 +522,9 @@ typedef struct vdev_label {
 #define	VDEV_LABEL_END_SIZE	(2 * sizeof (vdev_label_t))
 #define	VDEV_LABELS		4
 #define	VDEV_BEST_LABEL		VDEV_LABELS
+#define	VDEV_OFFSET_IS_LABEL(vd, off)                           \
+	(((off) < VDEV_LABEL_START_SIZE) ||                     \
+	((off) >= ((vd)->vdev_psize - VDEV_LABEL_END_SIZE)))
 
 #define	VDEV_ALLOC_LOAD		0
 #define	VDEV_ALLOC_ADD		1
@@ -568,6 +570,8 @@ extern vdev_ops_t vdev_root_ops;
 extern vdev_ops_t vdev_mirror_ops;
 extern vdev_ops_t vdev_replacing_ops;
 extern vdev_ops_t vdev_raidz_ops;
+extern vdev_ops_t vdev_draid_ops;
+extern vdev_ops_t vdev_draid_spare_ops;
 extern vdev_ops_t vdev_disk_ops;
 extern vdev_ops_t vdev_file_ops;
 extern vdev_ops_t vdev_missing_ops;

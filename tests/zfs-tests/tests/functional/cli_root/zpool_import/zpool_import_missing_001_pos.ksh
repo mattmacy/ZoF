@@ -57,8 +57,8 @@
 #	   Using the various combinations.
 #		- Regular import
 #		- Alternate Root Specified
-#	   It should be succeed with single d/m device upon 'raidz' & 'mirror',
-#	   but failed against 'regular' or more d/m devices.
+#	   It should be succeed with single d/m device upon 'raidz', 'mirror',
+#	   'draid' but failed against 'regular' or more d/m devices.
 #	6. If import succeed, verify following is true:
 #		- The pool shows up under 'zpool list'.
 #		- The pool's health should be DEGRADED.
@@ -67,7 +67,7 @@
 
 verify_runnable "global"
 
-set -A vdevs "" "mirror" "raidz"
+set -A vdevs "" "mirror" "raidz" "draid"
 set -A options "" "-R $ALTER_ROOT"
 
 function cleanup
@@ -155,6 +155,9 @@ while (( i < ${#vdevs[*]} )); do
 						action=log_mustnot
 					;;
 				'raidz')  (( count > 1 )) && \
+						action=log_mustnot
+					;;
+				'draid')  (( count > 1 )) && \
 						action=log_mustnot
 					;;
 				'')  action=log_mustnot

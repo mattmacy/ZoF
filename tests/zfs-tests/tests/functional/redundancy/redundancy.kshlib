@@ -119,7 +119,7 @@ function setup_test_env
 		destroy_pool $pool
 	fi
 
-	log_must mkfile $MINVDEVSIZE $vdevs
+	log_must truncate -s $MINVDEVSIZE $vdevs
 
 	log_must zpool create -m $TESTDIR $pool $keyword $vdevs
 

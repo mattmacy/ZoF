@@ -33,6 +33,7 @@
 #include <sys/dsl_pool.h>
 #include <sys/dsl_scan.h>
 #include <sys/vdev_impl.h>
+#include <sys/vdev_draid.h>
 #include <sys/zio.h>
 #include <sys/abd.h>
 #include <sys/fs/zfs.h>
@@ -99,7 +100,6 @@ vdev_mirror_stat_fini(void)
 /*
  * Virtual device vector for mirroring.
  */
-
 typedef struct mirror_child {
 	vdev_t		*mc_vd;
 	uint64_t	mc_offset;
@@ -493,6 +493,28 @@ vdev_mirror_preferred_child_randomize(zio_t *zio)
 	return (mm->mm_preferred[p]);
 }
 
+static boolean_t
+vdev_mirror_child_readable(mirror_child_t *mc)
+{
+	vdev_t *vd = mc->mc_vd;
+
+	if (vd->vdev_top != NULL && vd->vdev_top->vdev_ops == &vdev_draid_ops)
+		return (vdev_draid_readable(vd, mc->mc_offset));
+	else
+		return (vdev_readable(vd));
+}
+
+static boolean_t
+vdev_mirror_child_missing(mirror_child_t *mc, uint64_t txg, uint64_t size)
+{
+	vdev_t *vd = mc->mc_vd;
+
+	if (vd->vdev_top != NULL && vd->vdev_top->vdev_ops == &vdev_draid_ops)
+		return (vdev_draid_missing(vd, mc->mc_offset, txg, size));
+	else
+		return (vdev_dtl_contains(vd, DTL_MISSING, txg, size));
+}
+
 /*
  * Try to find a vdev whose DTL doesn't contain the block we want to read
  * preferring vdevs based on determined load.
@@ -518,14 +540,15 @@ vdev_mirror_child_select(zio_t *zio)
 		if (mc->mc_tried || mc->mc_skipped)
 			continue;
 
-		if (mc->mc_vd == NULL || !vdev_readable(mc->mc_vd)) {
+		if (mc->mc_vd == NULL ||
+		    !vdev_mirror_child_readable(mc)) {
 			mc->mc_error = SET_ERROR(ENXIO);
 			mc->mc_tried = 1;	/* don't even try */
 			mc->mc_skipped = 1;
 			continue;
 		}
 
-		if (vdev_dtl_contains(mc->mc_vd, DTL_MISSING, txg, 1)) {
+		if (vdev_mirror_child_missing(mc, txg, 1)) {
 			mc->mc_error = SET_ERROR(ESTALE);
 			mc->mc_skipped = 1;
 			mc->mc_speculative = 1;
@@ -803,7 +826,7 @@ vdev_ops_t vdev_mirror_ops = {
 	.vdev_op_io_start = vdev_mirror_io_start,
 	.vdev_op_io_done = vdev_mirror_io_done,
 	.vdev_op_state_change = vdev_mirror_state_change,
-	.vdev_op_need_resilver = NULL,
+	.vdev_op_need_resilver = vdev_default_need_resilver,
 	.vdev_op_hold = NULL,
 	.vdev_op_rele = NULL,
 	.vdev_op_remap = NULL,
@@ -819,7 +842,7 @@ vdev_ops_t vdev_replacing_ops = {
 	.vdev_op_io_start = vdev_mirror_io_start,
 	.vdev_op_io_done = vdev_mirror_io_done,
 	.vdev_op_state_change = vdev_mirror_state_change,
-	.vdev_op_need_resilver = NULL,
+	.vdev_op_need_resilver = vdev_default_need_resilver,
 	.vdev_op_hold = NULL,
 	.vdev_op_rele = NULL,
 	.vdev_op_remap = NULL,
@@ -835,7 +858,7 @@ vdev_ops_t vdev_spare_ops = {
 	.vdev_op_io_start = vdev_mirror_io_start,
 	.vdev_op_io_done = vdev_mirror_io_done,
 	.vdev_op_state_change = vdev_mirror_state_change,
-	.vdev_op_need_resilver = NULL,
+	.vdev_op_need_resilver = vdev_default_need_resilver,
 	.vdev_op_hold = NULL,
 	.vdev_op_rele = NULL,
 	.vdev_op_remap = NULL,

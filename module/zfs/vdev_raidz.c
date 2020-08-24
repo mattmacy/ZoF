@@ -35,6 +35,7 @@
 #include <sys/fm/fs/zfs.h>
 #include <sys/vdev_raidz.h>
 #include <sys/vdev_raidz_impl.h>
+#include <sys/vdev_draid.h>
 
 #ifdef ZFS_DEBUG
 #include <sys/vdev.h>	/* For vdev_xlate() in vdev_raidz_io_verify() */
@@ -146,11 +147,22 @@ vdev_raidz_map_free(raidz_map_t *rm)
 			abd_free(rm->rm_col[c].rc_gdata);
 	}
 
-	for (c = rm->rm_firstdatacol; c < rm->rm_cols; c++)
-		abd_put(rm->rm_col[c].rc_abd);
+	for (c = rm->rm_firstdatacol; c < rm->rm_scols; c++) {
+		abd_t *abd = rm->rm_col[c].rc_abd;
+
+		if (abd != NULL) {
+			if (abd_is_gang(abd))
+				abd_free(abd);
+			else
+				abd_put(abd);
+		}
+	}
 
 	if (rm->rm_abd_copy != NULL)
 		abd_free(rm->rm_abd_copy);
+
+	if (rm->rm_abd_skip != NULL)
+		abd_free(rm->rm_abd_skip);
 
 	kmem_free(rm, offsetof(raidz_map_t, rm_col[rm->rm_scols]));
 }
@@ -184,6 +196,8 @@ vdev_raidz_cksum_finish(zio_cksum_report_t *zcr, const abd_t *good_data)
 {
 	raidz_map_t *rm = zcr->zcr_cbdata;
 	const size_t c = zcr->zcr_cbinfo;
+	uint64_t secsz = zcr->zcr_sector;
+	uint64_t bigsz;
 	size_t x, offset;
 
 	const abd_t *good = NULL;
@@ -218,12 +232,28 @@ vdev_raidz_cksum_finish(zio_cksum_report_t *zcr, const abd_t *good_data)
 
 			/* fill in the data columns from good_data */
 			offset = 0;
+			bigsz = rm->rm_col[0].rc_size;
 			for (; x < rm->rm_cols; x++) {
 				abd_put(rm->rm_col[x].rc_abd);
 
-				rm->rm_col[x].rc_abd =
-				    abd_get_offset_size((abd_t *)good_data,
-				    offset, rm->rm_col[x].rc_size);
+				/* short columns are padded with empty sector */
+				if (rm->rm_bigcols && x >= rm->rm_bigcols &&
+				    rm->rm_col[x].rc_size == bigsz) {
+					rm->rm_col[x].rc_abd =
+					    abd_alloc(rm->rm_col[x].rc_size,
+					    B_TRUE);
+					abd_copy(rm->rm_col[x].rc_abd,
+					    (abd_t *)good_data,
+					    rm->rm_col[x].rc_size - secsz);
+					abd_zero_off(rm->rm_col[x].rc_abd,
+					    rm->rm_col[x].rc_size - secsz,
+					    secsz);
+				} else {
+					rm->rm_col[x].rc_abd =
+					    abd_get_offset_size(
+					    (abd_t *)good_data, offset,
+					    rm->rm_col[x].rc_size);
+				}
 				offset += rm->rm_col[x].rc_size;
 			}
 
@@ -238,7 +268,10 @@ vdev_raidz_cksum_finish(zio_cksum_report_t *zcr, const abd_t *good_data)
 
 			offset = 0;
 			for (x = rm->rm_firstdatacol; x < rm->rm_cols; x++) {
-				abd_put(rm->rm_col[x].rc_abd);
+				if (rm->rm_bigcols && x >= rm->rm_bigcols)
+					abd_free(rm->rm_col[x].rc_abd);
+				else
+					abd_put(rm->rm_col[x].rc_abd);
 				rm->rm_col[x].rc_abd = abd_get_offset_size(
 				    rm->rm_abd_copy, offset,
 				    rm->rm_col[x].rc_size);
@@ -313,15 +346,18 @@ vdev_raidz_cksum_report(zio_t *zio, zio_cksum_report_t *zcr, void *arg)
 
 		abd_copy(tmp, col->rc_abd, col->rc_size);
 
-		abd_put(col->rc_abd);
-		col->rc_abd = tmp;
+		if (abd_is_gang(col->rc_abd))
+			abd_free(col->rc_abd);
+		else
+			abd_put(col->rc_abd);
 
+		col->rc_abd = tmp;
 		offset += col->rc_size;
 	}
 	ASSERT3U(offset, ==, size);
 }
 
-static const zio_vsd_ops_t vdev_raidz_vsd_ops = {
+const zio_vsd_ops_t vdev_raidz_vsd_ops = {
 	.vsd_free = vdev_raidz_map_free_vsd,
 	.vsd_cksum_report = vdev_raidz_cksum_report
 };
@@ -393,9 +429,11 @@ vdev_raidz_map_alloc(zio_t *zio, uint64_t ashift, uint64_t dcols,
 	rm->rm_missingparity = 0;
 	rm->rm_firstdatacol = nparity;
 	rm->rm_abd_copy = NULL;
+	rm->rm_abd_skip = NULL;
 	rm->rm_reports = 0;
 	rm->rm_freed = 0;
 	rm->rm_ecksuminjected = 0;
+	rm->rm_include_skip = 0;
 
 	asize = 0;
 
@@ -413,6 +451,7 @@ vdev_raidz_map_alloc(zio_t *zio, uint64_t ashift, uint64_t dcols,
 		rm->rm_col[c].rc_error = 0;
 		rm->rm_col[c].rc_tried = 0;
 		rm->rm_col[c].rc_skipped = 0;
+		rm->rm_col[c].rc_repair = 0;
 
 		if (c >= acols)
 			rm->rm_col[c].rc_size = 0;
@@ -1354,17 +1393,23 @@ vdev_raidz_reconstruct_general(raidz_map_t *rm, int *tgts, int ntgts)
 
 	/*
 	 * Matrix reconstruction can't use scatter ABDs yet, so we allocate
-	 * temporary linear ABDs.
+	 * temporary linear ABDs if any non-linear ABDs are found.
 	 */
-	if (!abd_is_linear(rm->rm_col[rm->rm_firstdatacol].rc_abd)) {
-		bufs = kmem_alloc(rm->rm_cols * sizeof (abd_t *), KM_PUSHPAGE);
+	for (i = rm->rm_firstdatacol; i < rm->rm_cols; i++) {
+		if (!abd_is_linear(rm->rm_col[i].rc_abd)) {
+			bufs = kmem_alloc(rm->rm_cols * sizeof (abd_t *),
+			    KM_PUSHPAGE);
 
-		for (c = rm->rm_firstdatacol; c < rm->rm_cols; c++) {
-			raidz_col_t *col = &rm->rm_col[c];
+			for (c = rm->rm_firstdatacol; c < rm->rm_cols; c++) {
+				raidz_col_t *col = &rm->rm_col[c];
 
-			bufs[c] = col->rc_abd;
-			col->rc_abd = abd_alloc_linear(col->rc_size, B_TRUE);
-			abd_copy(col->rc_abd, bufs[c], col->rc_size);
+				bufs[c] = col->rc_abd;
+				col->rc_abd = abd_alloc_linear(col->rc_size,
+				    B_TRUE);
+				abd_copy(col->rc_abd, bufs[c], col->rc_size);
+			}
+
+			break;
 		}
 	}
 
@@ -1623,7 +1668,7 @@ vdev_raidz_asize(vdev_t *vd, uint64_t psize)
 	return (asize);
 }
 
-static void
+void
 vdev_raidz_child_done(zio_t *zio)
 {
 	raidz_col_t *rc = zio->io_private;
@@ -1640,7 +1685,7 @@ vdev_raidz_io_verify(zio_t *zio, raidz_map_t *rm, int col)
 	vdev_t *vd = zio->io_vd;
 	vdev_t *tvd = vd->vdev_top;
 
-	range_seg64_t logical_rs, physical_rs;
+	range_seg64_t logical_rs, physical_rs, remain_rs;
 	logical_rs.rs_start = zio->io_offset;
 	logical_rs.rs_end = logical_rs.rs_start +
 	    vdev_raidz_asize(zio->io_vd, zio->io_size);
@@ -1648,9 +1693,10 @@ vdev_raidz_io_verify(zio_t *zio, raidz_map_t *rm, int col)
 	raidz_col_t *rc = &rm->rm_col[col];
 	vdev_t *cvd = vd->vdev_child[rc->rc_devidx];
 
-	vdev_xlate(cvd, &logical_rs, &physical_rs);
+	vdev_xlate(cvd, &logical_rs, &physical_rs, &remain_rs);
 	ASSERT3U(rc->rc_offset, ==, physical_rs.rs_start);
 	ASSERT3U(rc->rc_offset, <, physical_rs.rs_end);
+	ASSERT(vdev_xlate_is_empty(&remain_rs));
 	/*
 	 * It would be nice to assert that rs_end is equal
 	 * to rc_offset + rc_size but there might be an
@@ -1865,6 +1911,7 @@ raidz_parity_verify(zio_t *zio, raidz_map_t *rm)
 		abd_free(orig[c]);
 	}
 
+
 	return (ret);
 }
 
@@ -2055,7 +2102,7 @@ done:
  *   3. If there were unexpected errors or this is a resilver operation,
  *      rewrite the vdevs that had errors.
  */
-static void
+void
 vdev_raidz_io_done(zio_t *zio)
 {
 	vdev_t *vd = zio->io_vd;
@@ -2218,6 +2265,14 @@ vdev_raidz_io_done(zio_t *zio)
 	rm->rm_missingdata = 0;
 	rm->rm_missingparity = 0;
 
+	/*
+	 * If skip sectors are expected to be zero filled and this was a
+	 * normal read, then expand the raidz_map_t to include the skip
+	 * sectors so they may be read, verified, and repaired.
+	 */
+	if (rm->rm_include_skip && rm->rm_nskip > 0 && rm->rm_abd_skip == NULL)
+		vdev_draid_map_include_skip_sectors(zio);
+
 	for (c = 0; c < rm->rm_cols; c++) {
 		if (rm->rm_col[c].rc_tried)
 			continue;
@@ -2311,19 +2366,21 @@ done:
 			rc = &rm->rm_col[c];
 			cvd = vd->vdev_child[rc->rc_devidx];
 
-			if (rc->rc_error == 0)
+			if (rc->rc_error == 0 && rc->rc_repair == 0)
 				continue;
 
 			zio_nowait(zio_vdev_child_io(zio, NULL, cvd,
 			    rc->rc_offset, rc->rc_abd, rc->rc_size,
-			    ZIO_TYPE_WRITE, ZIO_PRIORITY_ASYNC_WRITE,
+			    ZIO_TYPE_WRITE,
+			    zio->io_priority == ZIO_PRIORITY_REBUILD ?
+			    ZIO_PRIORITY_REBUILD : ZIO_PRIORITY_ASYNC_WRITE,
 			    ZIO_FLAG_IO_REPAIR | (unexpected_errors ?
 			    ZIO_FLAG_SELF_HEAL : 0), NULL, NULL));
 		}
 	}
 }
 
-static void
+void
 vdev_raidz_state_change(vdev_t *vd, int faulted, int degraded)
 {
 	if (faulted > vd->vdev_nparity)
@@ -2342,17 +2399,24 @@ vdev_raidz_state_change(vdev_t *vd, int faulted, int degraded)
  * width blocks must be resilvered.
  */
 static boolean_t
-vdev_raidz_need_resilver(vdev_t *vd, uint64_t offset, size_t psize)
+vdev_raidz_need_resilver(vdev_t *vd, const dva_t *dva, size_t psize,
+    uint64_t phys_birth)
 {
 	uint64_t dcols = vd->vdev_children;
 	uint64_t nparity = vd->vdev_nparity;
 	uint64_t ashift = vd->vdev_top->vdev_ashift;
 	/* The starting RAIDZ (parent) vdev sector of the block. */
-	uint64_t b = offset >> ashift;
+	uint64_t b = DVA_GET_OFFSET(dva) >> ashift;
 	/* The zio's size in units of the vdev's minimum sector size. */
 	uint64_t s = ((psize - 1) >> ashift) + 1;
 	/* The first column for this stripe. */
 	uint64_t f = b % dcols;
+
+	/* Unreachable by sequential resilver. */
+	ASSERT3U(phys_birth, !=, TXG_UNKNOWN);
+
+	if (!vdev_dtl_contains(vd, DTL_PARTIAL, phys_birth, 1))
+		return (B_FALSE);
 
 	if (s + nparity >= dcols)
 		return (B_TRUE);

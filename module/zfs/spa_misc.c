@@ -741,6 +741,7 @@ spa_add(const char *name, nvlist_t *config, const char *altroot)
 
 	spa->spa_min_ashift = INT_MAX;
 	spa->spa_max_ashift = 0;
+	spa->spa_min_alloc = INT_MAX;
 
 	/* Reset cached value */
 	spa->spa_dedup_dspace = ~0ULL;
@@ -1853,7 +1854,7 @@ spa_version(spa_t *spa)
 boolean_t
 spa_deflate(spa_t *spa)
 {
-	return (spa->spa_deflate);
+	return (spa->spa_deflate > 0);
 }
 
 metaslab_class_t *
@@ -2059,7 +2060,7 @@ dva_get_dsize_sync(spa_t *spa, const dva_t *dva)
 
 	ASSERT(spa_config_held(spa, SCL_ALL, RW_READER) != 0);
 
-	if (asize != 0 && spa->spa_deflate) {
+	if (asize != 0 && spa->spa_deflate > 0) {
 		vdev_t *vd = vdev_lookup_top(spa, DVA_GET_VDEV(dva));
 		if (vd != NULL)
 			dsize = (asize >> SPA_MINBLOCKSHIFT) *

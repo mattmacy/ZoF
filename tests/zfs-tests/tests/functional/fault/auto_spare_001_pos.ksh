@@ -55,10 +55,19 @@ zed_events_drain
 
 TESTFILE="/$TESTPOOL/$TESTFS/testfile"
 
-for type in "mirror" "raidz" "raidz2"; do
-	# 1. Create a pool with hot spares
-	truncate -s $SPA_MINDEVSIZE $VDEV_FILES $SPARE_FILE
-	log_must zpool create -f $TESTPOOL $type $VDEV_FILES spare $SPARE_FILE
+for type in "mirror" "raidz" "raidz2" "draid:1s"; do
+	if [ "$type" = "draid:1s" ]; then
+		# 1. Create a dRAID pool with a distributed hot spare
+		truncate -s $SPA_MINDEVSIZE $VDEV_FILES
+		log_must zpool create -f $TESTPOOL $type $VDEV_FILES
+		SPARE="draid1-0-0"
+	else
+		# 1. Create a pool with hot spares
+		truncate -s $SPA_MINDEVSIZE $VDEV_FILES $SPARE_FILE
+		log_must zpool create -f $TESTPOOL $type $VDEV_FILES \
+		    spare $SPARE_FILE
+		SPARE=$SPARE_FILE
+	fi
 
 	# 2. Create a filesystem with the primary cache disable to force reads
 	log_must zfs create -o primarycache=none $TESTPOOL/$TESTFS
@@ -74,8 +83,8 @@ for type in "mirror" "raidz" "raidz2"; do
 	# 5. Verify the ZED kicks in a hot spare and expected pool/device status
 	log_note "Wait for ZED to auto-spare"
 	log_must wait_vdev_state $TESTPOOL $FAULT_FILE "FAULTED" 60
-	log_must wait_vdev_state $TESTPOOL $SPARE_FILE "ONLINE" 60
-	log_must wait_hotspare_state $TESTPOOL $SPARE_FILE "INUSE"
+	log_must wait_vdev_state $TESTPOOL $SPARE "ONLINE" 60
+	log_must wait_hotspare_state $TESTPOOL $SPARE "INUSE"
 	log_must check_state $TESTPOOL "" "DEGRADED"
 
 	# 6. Clear the fault
@@ -84,7 +93,7 @@ for type in "mirror" "raidz" "raidz2"; do
 
 	# 7. Verify the hot spare is available and expected pool/device status
 	log_must wait_vdev_state $TESTPOOL $FAULT_FILE "ONLINE" 60
-	log_must wait_hotspare_state $TESTPOOL $SPARE_FILE "AVAIL"
+	log_must wait_hotspare_state $TESTPOOL $SPARE "AVAIL"
 	log_must is_pool_resilvered $TESTPOOL
 	log_must check_state $TESTPOOL "" "ONLINE"
 

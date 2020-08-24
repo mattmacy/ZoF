@@ -50,6 +50,7 @@
 #		- Regular pool
 #		- Mirror
 #		- Raidz
+#		- dRAID
 #	2. Create necessary filesystem and test files.
 #	3. Export the test pool.
 #	4. Move one or more device files to other directory
@@ -62,7 +63,7 @@
 
 verify_runnable "global"
 
-set -A vdevs "" "mirror" "raidz"
+set -A vdevs "" "mirror" "raidz" "draid"
 set -A options "" "-R $ALTER_ROOT"
 
 function cleanup
@@ -172,6 +173,9 @@ while (( i < ${#vdevs[*]} )); do
 					action=log_must
 					;;
 				'raidz')  (( count == 1 )) && \
+					action=log_must
+					;;
+				'draid')  (( count == 1 )) && \
 					action=log_must
 					;;
 			esac
