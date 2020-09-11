@@ -49,7 +49,7 @@ __FBSDID("$FreeBSD$");
     taskqueue_start_threads(tqp, count, pri, name, __VA_ARGS__)
 #endif
 
-static uint_t taskq_tsd;
+uint_t taskq_tsd;
 static uma_zone_t taskq_zone;
 
 taskq_t *system_taskq = NULL;

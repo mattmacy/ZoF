@@ -43,9 +43,12 @@
 #define	kfpu_allowed()		1
 #define	kfpu_initialize(tsk)	do {} while (0)
 
+extern uint_t taskq_tsd;
 #define	kfpu_begin() {					\
-	if (__predict_false(!is_fpu_kern_thread(0)))		\
-		fpu_kern_enter(curthread, NULL, FPU_KERN_NOCTX);\
+	if (__predict_false(!is_fpu_kern_thread(0))) {			\
+		ASSERT(osd_thread_get(curthread, taskq_tsd) == NULL);					\
+		fpu_kern_enter(curthread, NULL, FPU_KERN_NOCTX);	\
+	}														\
 }
 
 #define	kfpu_end()	{			\
