@@ -355,6 +355,8 @@ typedef struct dmu_buf {
  * These structures are for DMU consumers that want async callbacks.
  */
 struct dmu_ctx;
+struct dmu_tx_buf_set;
+struct dmu_buf_ctx;
 struct dmu_buf_set;
 struct zio;
 struct zfs_locked_range;
@@ -362,6 +364,9 @@ typedef void (*dmu_ctx_cb_t)(struct dmu_ctx *);
 typedef void (*dmu_buf_set_cb_t)(struct dmu_buf_set *);
 typedef uint64_t (*dmu_buf_transfer_cb_t)(struct dmu_buf_set *, dmu_buf_t *,
     uint64_t, uint64_t);
+typedef void (*dmu_tx_buf_set_cb_t)(struct dmu_tx_buf_set *);
+
+typedef void (*dmu_buf_ctx_cb_t)(struct dmu_buf_ctx *, int err);
 
 typedef enum {
 	DMU_CTX_FLAG_READ	= 1 << 1,
@@ -377,7 +382,20 @@ typedef enum {
 	DMU_CTX_READER_FLAGS	= DMU_CTX_FLAG_PREFETCH
 } dmu_ctx_flag_t;
 
+
+enum dmu_buf_ctx_type {
+	DBC_DMU_ISSUE = 1,
+	DBC_DBUF_HOLD = 2,
+};
+
+typedef struct dmu_buf_ctx {
+	kthread_t *dbc_owner; /* thread context */
+	uint32_t dbc_flags;
+	uint8_t dbc_type;
+} dmu_buf_ctx_t;
+
 typedef struct dmu_ctx {
+	dmu_buf_ctx_t dc_buf_ctx;
 	/*
 	 * Lock protecting parts of the DMU context where necessary;
 	 * currently only used for err.
@@ -446,20 +464,9 @@ typedef struct dmu_ctx {
 	int dc_err;
 } dmu_ctx_t;
 
-enum dmu_buf_ctx_type {
-	DBC_DMU_ISSUE,
-	DBC_DBUF_HOLD
-};
-
 enum dmu_buf_ctx_flags {
 	DBC_ENQUEUED = 1 << 2,
 };
-
-typedef struct dmu_buf_ctx {
-	kthread_t *dbc_owner; /* thread context */
-	uint32_t dbc_flags;
-	uint8_t dbc_type;
-} dmu_buf_ctx_t;
 
 typedef struct dmu_buf_set {
 	/* generic callback context */
@@ -500,6 +507,49 @@ typedef struct dmu_buf_set {
 	struct dmu_buf *dbs_dbp[];
 } dmu_buf_set_t;
 
+typedef struct dmu_buf_id {
+	int dbi_level;
+	uint64_t dbi_blkid;
+	struct dmu_buf *dbi_buf;
+} dmu_buf_id_t;
+
+typedef struct dmu_tx_buf_set {
+	/* generic callback context */
+	dmu_buf_ctx_t	dtbs_ctx;
+
+	kmutex_t dtbs_mtx;
+
+	kcondvar_t dtbs_cv_done;
+
+	/* Number of dmu_bufs associated with this context. */
+	int dtbs_count;
+
+	/* Number of dmu_bufs left to complete. */
+	zfs_refcount_t dtbs_holds;
+
+	dnode_t *dtbs_dn;
+
+	void *dtbs_tag;
+
+	/* The worst error that occurred. */
+	int dtbs_err;
+
+	/* number of buffers held so far */
+	int dtbs_async_holds;
+
+	boolean_t dtbs_done;
+	/* The ZIO associated with this context. */
+	struct zio *dtbs_zio;
+
+	dmu_tx_buf_set_cb_t dtbs_completed_cb;
+
+	/* The set of buffers themselves. */
+	dmu_buf_id_t *dtbs_dbid;
+} dmu_tx_buf_set_t;
+
+void dmu_contexts_init(void);
+void dmu_contexts_deinit(void);
+
 int dmu_ctx_init(dmu_ctx_t *dc, struct dnode *dn, objset_t *os,
     uint64_t object, uint64_t offset, uint64_t size, void *data_buf, void *tag,
     dmu_ctx_flag_t flags);
@@ -509,6 +559,13 @@ void dmu_ctx_rele(dmu_ctx_t *dc);
 void dmu_buf_set_rele(dmu_buf_ctx_t *ctx, int err);
 void dmu_buf_set_transfer(dmu_buf_set_t *dbs);
 void dmu_buf_set_transfer_write(dmu_buf_set_t *dbs);
+void dmu_thread_context_dispatch(dmu_buf_ctx_t *dbs_ctx, int err,
+    dmu_buf_ctx_cb_t cb);
+
+int dmu_tx_prefault_setup(dmu_tx_buf_set_t *dtbs, dnode_t *dn, uint64_t off,
+    uint64_t len, void *tag, boolean_t sync, dmu_tx_buf_set_cb_t cb);
+void dmu_tx_prefault(dmu_tx_buf_set_t *dtbs);
+void dmu_tx_buf_set_rele(dmu_tx_buf_set_t *dtbs);
 
 #ifndef __lint
 static inline boolean_t
@@ -564,8 +621,8 @@ extern dmu_tx_t *dmu_buf_set_tx(dmu_buf_set_t *dbs);
 #endif
 
 /* DMU thread context handlers. */
-int dmu_thread_context_create(void);
-void dmu_thread_context_process(void);
+int dmu_thread_context_create(void *);
+boolean_t dmu_thread_context_process(void);
 void dmu_thread_context_destroy(void *);
 
 /*

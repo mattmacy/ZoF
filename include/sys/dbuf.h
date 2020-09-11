@@ -494,8 +494,6 @@ typedef struct dbuf_hash_table {
 	kmutex_t hash_mutexes[DBUF_MUTEXES];
 } dbuf_hash_table_t;
 
-typedef void (*dmu_buf_ctx_cb_t)(struct dmu_buf_ctx *, int err);
-
 typedef struct dmu_buf_ctx_node {
 
 	/* The callback for this entry */
@@ -509,6 +507,8 @@ typedef struct dmu_buf_ctx_node {
 
 	/* error  received in processing */
 	int dbsn_err;
+
+	int dbsn_type;
 } dmu_buf_ctx_node_t;
 
 
@@ -517,7 +517,7 @@ extern uint_t zfs_async_io_key;
 
 void dmu_buf_ctx_node_add(list_t *list, dmu_buf_ctx_t *buf_ctx,
     dmu_buf_ctx_cb_t cb);
-void dmu_buf_ctx_node_remove(list_t *list, dmu_buf_ctx_node_t *dbsn);
+void dmu_buf_ctx_node_remove(dmu_buf_ctx_node_t *dbsn);
 
 
 /*
@@ -528,6 +528,13 @@ typedef struct dmu_cb_state {
 	/* The list of IOs that are ready to be processed. */
 	list_t dcs_io_list;
 
+	boolean_t dcs_in_process;
+
+	list_node_t dcs_node;
+
+	taskq_t *dcs_tq;
+
+	kthread_t *dcs_thread;
 } dmu_cb_state_t;
 
 uint64_t dbuf_whichblock(const struct dnode *di, const int64_t level,
@@ -544,7 +551,7 @@ dmu_buf_impl_t *dbuf_hold_level(struct dnode *dn, int level, uint64_t blkid,
     void *tag);
 int dbuf_hold_level_async(struct dnode *dn, int level, uint64_t blkid,
     void *tag, dmu_buf_impl_t **dbp, dmu_buf_ctx_t *ctx,
-    zio_t *zio, dmu_buf_ctx_cb_t buf_cb);
+    zio_t *zio, dmu_buf_ctx_cb_t cb_restart, dmu_buf_ctx_cb_t cb_done);
 int dbuf_hold_impl(struct dnode *dn, uint8_t level, uint64_t blkid,
     boolean_t fail_sparse, boolean_t fail_uncached,
     void *tag, dmu_buf_impl_t **dbp);
@@ -565,6 +572,8 @@ void dbuf_rele_and_unlock(dmu_buf_impl_t *db, void *tag, boolean_t evicting);
 dmu_buf_impl_t *dbuf_find(struct objset *os, uint64_t object, uint8_t level,
     uint64_t blkid);
 
+int dbuf_read_async(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags,
+    dmu_buf_ctx_t *buf_ctx, dmu_buf_ctx_cb_t buf_cb);
 int dbuf_read(dmu_buf_impl_t *db, zio_t *zio, uint32_t flags);
 void dbuf_transition_to_read(dmu_buf_impl_t *db);
 void dbuf_will_dirty_range(dmu_buf_impl_t *db, dmu_tx_t *tx, int offset,

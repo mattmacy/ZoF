@@ -155,6 +155,9 @@ const dmu_object_byteswap_info_t dmu_ot_byteswap[DMU_BSWAP_NUMFUNCS] = {
 	{	zfs_acl_byteswap,	"acl"		}
 };
 
+kmutex_t dmu_contexts_lock;
+list_t *dmu_contexts_list;
+
 #ifdef _KERNEL
 #define	DPRINTF(...)
 #else
@@ -162,22 +165,42 @@ const dmu_object_byteswap_info_t dmu_ot_byteswap[DMU_BSWAP_NUMFUNCS] = {
 #endif
 
 #ifdef ZFS_DEBUG
-#define	DEBUG_REFCOUNT(a, b, c) uint32_t b
 #define	DEBUG_COUNTER_U(a, b, c) uint64_t b
 #define	DEBUG_REFCOUNT_ADD(b) atomic_inc_32(&(b))
 #define	DEBUG_REFCOUNT_DEC(b) atomic_dec_32(&(b))
+
+/* BEGIN CSTYLED */
+#define	DEBUG_REFCOUNT(a)				\
+	static uint32_t a;				    \
+	ZFS_MODULE_PARAM(zfs_dmu, , a, UINT, ZMOD_RD, #a)
+
+static uint32_t dbsn_in_flight;
+ZFS_MODULE_PARAM(zfs_dmu,  , dbsn_in_flight, UINT, ZMOD_RD,
+    "DMU buf set nodes in flight");
+static uint32_t dmu_ctx_in_flight;
+ZFS_MODULE_PARAM(zfs_dmu, , dmu_ctx_in_flight, UINT, ZMOD_RD,
+    "DMU contexts in flight");
+static uint32_t buf_set_in_flight;
+ZFS_MODULE_PARAM(zfs_dmu, , buf_set_in_flight, UINT, ZMOD_RD,
+    "Buffer sets in flight");
+
+DEBUG_REFCOUNT(dbsn_in_dispatch);
+DEBUG_REFCOUNT(dbsn_in_node_add);
+DEBUG_REFCOUNT(dmu_thread_contexts);
+/* END CSTYLED */
 #else
-#define	DEBUG_REFCOUNT(a, b, c)
+#define	DEBUG_REFCOUNT(a)
 #define	DEBUG_COUNTER_U(a, b, c)
 #define	DEBUG_REFCOUNT_ADD(b)
 #define	DEBUG_REFCOUNT_DEC(b)
 #endif
 
-DEBUG_REFCOUNT(_vfs_zfs_dmu, dbsn_in_flight, "DMU buf set nodes in flight");
+
+#define	DMU_CONTEXT_DISPATCH 1
+#define	DMU_NODE_ADD 2
+
 DEBUG_COUNTER_U(_vfs_zfs_dmu, dmu_ctx_total, "Total DMU contexts");
 DEBUG_COUNTER_U(_vfs_zfs_dmu, buf_set_total, "Total buffer sets");
-DEBUG_REFCOUNT(_vfs_zfs_dmu, dmu_ctx_in_flight, "DMU contexts in flight");
-DEBUG_REFCOUNT(_vfs_zfs_dmu, buf_set_in_flight, "Buffer sets in flight");
 
 #if defined(_KERNEL) && defined(__FreeBSD__)
 #define	dmu_uiomove(data, sz, dir, uio)			\
@@ -197,7 +220,7 @@ uint_t zfs_async_io_key;
 
 static void
 dmu_buf_ctx_node_add_err(list_t *list, dmu_buf_ctx_t *ctx, dmu_buf_ctx_cb_t cb,
-    int err)
+    int err, int type)
 {
 	dmu_buf_ctx_node_t *dbsn = kmem_zalloc(sizeof (dmu_buf_ctx_node_t),
 	    KM_SLEEP);
@@ -205,23 +228,36 @@ dmu_buf_ctx_node_add_err(list_t *list, dmu_buf_ctx_t *ctx, dmu_buf_ctx_cb_t cb,
 	dbsn->dbsn_ctx = ctx;
 	dbsn->dbsn_cb = cb;
 	dbsn->dbsn_err = err;
+	dbsn->dbsn_type = type;
 	list_insert_tail(list, dbsn);
+#ifdef ZFS_DEBUG
+	if (type == DMU_CONTEXT_DISPATCH)
+		DEBUG_REFCOUNT_ADD(dbsn_in_dispatch);
+	else if (type == DMU_NODE_ADD)
+		DEBUG_REFCOUNT_ADD(dbsn_in_node_add);
 	DEBUG_REFCOUNT_ADD(dbsn_in_flight);
+#endif
 }
 
 void
 dmu_buf_ctx_node_add(list_t *list, dmu_buf_ctx_t *ctx, dmu_buf_ctx_cb_t cb)
 {
-	dmu_buf_ctx_node_add_err(list, ctx, cb, 0);
+	dmu_buf_ctx_node_add_err(list, ctx, cb, 0, DMU_NODE_ADD);
 }
 
 void
-dmu_buf_ctx_node_remove(list_t *list, dmu_buf_ctx_node_t *dbsn)
+dmu_buf_ctx_node_remove(dmu_buf_ctx_node_t *dbsn)
 {
-	list_remove(list, dbsn);
-	kmem_free(dbsn, sizeof (dmu_buf_ctx_node_t));
+#ifdef ZFS_DEBUG
 	ASSERT(dbsn_in_flight > 0);
 	DEBUG_REFCOUNT_DEC(dbsn_in_flight);
+	if (dbsn->dbsn_type == DMU_CONTEXT_DISPATCH)
+		DEBUG_REFCOUNT_DEC(dbsn_in_dispatch);
+	else if (dbsn->dbsn_type == DMU_NODE_ADD)
+		DEBUG_REFCOUNT_DEC(dbsn_in_node_add);
+#endif
+	kmem_free(dbsn, sizeof (dmu_buf_ctx_node_t));
+
 }
 
 
@@ -473,10 +509,10 @@ dmu_buf_set_ready(dmu_buf_ctx_t *dbs_ctx, int err)
 }
 
 int
-dmu_thread_context_create(void)
+dmu_thread_context_create(void *context)
 {
-	int ret = 0;
 	dmu_cb_state_t *dcs;
+	int ret = 0;
 
 	/* This function should never be called more than once in a thread. */
 	ASSERT3P(tsd_get(zfs_async_io_key), ==, NULL);
@@ -484,27 +520,45 @@ dmu_thread_context_create(void)
 	dcs = kmem_zalloc(sizeof (dmu_cb_state_t), KM_SLEEP);
 	list_create(&dcs->dcs_io_list, sizeof (dmu_buf_ctx_node_t),
 	    offsetof(dmu_buf_ctx_node_t, dbsn_link));
-
+	dcs->dcs_tq = context;
+#ifdef _KERNEL
+	dcs->dcs_thread = current;
+#endif
 	ret = tsd_set(zfs_async_io_key, dcs);
+	VERIFY3B(ret, ==, 0);
+
 #ifdef ZFS_DEBUG
+	mutex_enter(&dmu_contexts_lock);
+	list_insert_tail(dmu_contexts_list, dcs);
+	mutex_exit(&dmu_contexts_lock);
 	{
 		dmu_cb_state_t *check = tsd_get(zfs_async_io_key);
 		ASSERT(check == dcs);
 	}
 #endif
+	DEBUG_REFCOUNT_ADD(dmu_thread_contexts);
 	return (ret);
 }
 
 void
-dmu_thread_context_destroy(void *context __maybe_unused)
+dmu_thread_context_destroy(void *context)
 {
 	dmu_cb_state_t *dcs;
 
-	dcs = tsd_get(zfs_async_io_key);
+
+	if (context != NULL)
+		dcs = context;
+	else
+		dcs = tsd_get(zfs_async_io_key);
 	/* This function may be called on a thread that didn't call create. */
 	if (dcs == NULL)
 		return;
 
+#ifdef ZFS_DEBUG
+	mutex_enter(&dmu_contexts_lock);
+	list_remove(dmu_contexts_list, dcs);
+	mutex_exit(&dmu_contexts_lock);
+#endif
 	/*
 	 * This function should only get called after a thread has finished
 	 * processing its queue.
@@ -512,14 +566,16 @@ dmu_thread_context_destroy(void *context __maybe_unused)
 	ASSERT(list_is_empty(&dcs->dcs_io_list));
 
 	kmem_free(dcs, sizeof (dmu_cb_state_t));
-	VERIFY(tsd_set(zfs_async_io_key, NULL) == 0);
+	if (context == NULL)
+		VERIFY(tsd_set(zfs_async_io_key, NULL) == 0);
+	DEBUG_REFCOUNT_DEC(dmu_thread_contexts);
 }
 
-void
+boolean_t
 dmu_thread_context_process(void)
 {
 	dmu_cb_state_t *dcs = tsd_get(zfs_async_io_key);
-	dmu_buf_ctx_node_t *dbsn, *next;
+	dmu_buf_ctx_node_t *dbsn;
 	dmu_buf_ctx_cb_t cb;
 	dmu_buf_ctx_t *ctx;
 	int err;
@@ -529,22 +585,22 @@ dmu_thread_context_process(void)
 	 * async I/O's.  It is probably not a zio thread.  This is needed
 	 * because zio_execute() can be called from non-zio threads.
 	 */
-	if (dcs == NULL)
-		return;
-retry:
-	for (dbsn = list_head(&dcs->dcs_io_list); dbsn != NULL; dbsn = next) {
+	if (dcs == NULL || dcs->dcs_in_process)
+		return (B_FALSE);
+	dcs->dcs_in_process = B_TRUE;
+	while ((dbsn = list_remove_head(&dcs->dcs_io_list)) != NULL) {
 		ctx = dbsn->dbsn_ctx;
 		cb = dbsn->dbsn_cb;
 		err = dbsn->dbsn_err;
-		next = list_next(&dcs->dcs_io_list, dbsn);
-		dmu_buf_ctx_node_remove(&dcs->dcs_io_list, dbsn);
+		dmu_buf_ctx_node_remove(dbsn);
 		cb(ctx, err);
 	}
-	if (!list_is_empty(&dcs->dcs_io_list))
-		goto retry;
+	dcs->dcs_in_process = B_FALSE;
+	ASSERT(list_is_empty(&dcs->dcs_io_list));
+	return (B_TRUE);
 }
 
-static void
+void
 dmu_thread_context_dispatch(dmu_buf_ctx_t *dbs_ctx, int err,
     dmu_buf_ctx_cb_t cb)
 {
@@ -553,7 +609,8 @@ dmu_thread_context_dispatch(dmu_buf_ctx_t *dbs_ctx, int err,
 	dcs = tsd_get(zfs_async_io_key);
 	if (dcs != NULL && (dbs_ctx->dbc_flags & DMU_CTX_FLAG_ASYNC)) {
 		dbs_ctx->dbc_owner = curthread;
-		dmu_buf_ctx_node_add_err(&dcs->dcs_io_list, dbs_ctx, cb, err);
+		dmu_buf_ctx_node_add_err(&dcs->dcs_io_list, dbs_ctx, cb,
+		    err, DMU_CONTEXT_DISPATCH);
 	} else {
 		/*
 		 * The current thread doesn't have anything
@@ -628,6 +685,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 	uint64_t bufoff, bufsiz;
 	int i, dbuf_flags;
 	boolean_t read, prefetch;
+	dmu_buf_ctx_cb_t done_cb = NULL;
 
 	read = dc->dc_flags & DMU_CTX_FLAG_READ;
 	prefetch = dc->dc_flags & DMU_CTX_FLAG_PREFETCH;
@@ -640,6 +698,8 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 	}
 	blkid = dbuf_whichblock(dn, 0, dbs->dbs_dn_start);
 	dbs->dbs_ctx.dbc_type = DBC_DMU_ISSUE;
+	if (read)
+		done_cb = dmu_buf_set_rele;
 
 	if (dc->dc_flags & DMU_CTX_FLAG_ASYNC)
 		async_zio = dbs->dbs_zio;
@@ -654,7 +714,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 
 		int err = dbuf_hold_level_async(dn, /* level */ 0, blkid + i,
 		    dc->dc_tag, &db, &dbs->dbs_ctx,
-		    async_zio, dmu_issue_restart_cb);
+		    async_zio, dmu_issue_restart_cb, done_cb);
 		if (err == EINPROGRESS) {
 			ASSERT(dc->dc_flags & DMU_CTX_FLAG_ASYNC);
 			return (err);
@@ -1100,6 +1160,7 @@ dmu_ctx_init(dmu_ctx_t *dmu_ctx, struct dnode *dn, objset_t *os,
 	/* All set, actually initialize the context! */
 	bzero(dmu_ctx, sizeof (dmu_ctx_t));
 	mutex_init(&dmu_ctx->dc_mtx, "context lock", MUTEX_DEFAULT, NULL);
+	dmu_ctx->dc_buf_ctx.dbc_flags = (flags & DMU_CTX_FLAG_ASYNC);
 	dmu_ctx->dc_dn = dn;
 	dmu_ctx->dc_os = os;
 	dmu_ctx->dc_object = object;
@@ -1436,7 +1497,8 @@ dmu_rm_spill(objset_t *os, uint64_t object, dmu_tx_t *tx)
  * has not yet been allocated a new bonus dbuf a will be allocated.
  * Returns ENOENT, EIO, or 0.
  */
-int dmu_bonus_hold_by_dnode(dnode_t *dn, void *tag, dmu_buf_t **dbp,
+int
+dmu_bonus_hold_by_dnode(dnode_t *dn, void *tag, dmu_buf_t **dbp,
     uint32_t flags)
 {
 	dmu_buf_impl_t *db;
@@ -3157,9 +3219,28 @@ byteswap_uint8_array(void *vbuf, size_t size)
 {
 }
 
+
+void
+dmu_contexts_init(void)
+{
+	dmu_contexts_list = kmem_alloc(sizeof (list_t), KM_SLEEP);
+	list_create(dmu_contexts_list, sizeof (dmu_cb_state_t),
+	    offsetof(dmu_cb_state_t, dcs_node));
+	mutex_init(&dmu_contexts_lock, "ctx list lock", MUTEX_DEFAULT, NULL);
+}
+
+void
+dmu_contexts_deinit(void)
+{
+	list_destroy(dmu_contexts_list);
+	kmem_free(dmu_contexts_list, sizeof (list_t));
+	mutex_destroy(&dmu_contexts_lock);
+}
+
 void
 dmu_init(void)
 {
+	zfs_rangelock_debug_init();
 	abd_init();
 	zfs_dbgmsg_init();
 	sa_cache_init();
@@ -3176,6 +3257,7 @@ dmu_init(void)
 void
 dmu_fini(void)
 {
+	zfs_rangelock_debug_fini();
 	arc_fini(); /* arc depends on l2arc, so arc must go first */
 	l2arc_fini();
 	dmu_tx_fini();
