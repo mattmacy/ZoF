@@ -52,6 +52,11 @@ typedef struct zfs_rangelock {
 	void *rl_arg;
 	list_t rl_free;
 	uint8_t rl_processing;
+#ifdef ZFS_DEBUG
+	char *rl_name;
+	list_node_t rl_node;
+#endif
+	list_t rl_ranges;
 } zfs_rangelock_t;
 
 typedef struct zfs_locked_range {
@@ -69,10 +74,15 @@ typedef struct zfs_locked_range {
 	list_t lr_cb; /* list of waiters */
 	uint8_t lr_proxy;	/* acting for original range */
 	uint8_t lr_write_wanted; /* writer wants to lock this range */
+	list_node_t lr_ranges_node;
 } zfs_locked_range_t;
 
+void zfs_rangelock_init_named(zfs_rangelock_t *, zfs_rangelock_cb_t *, void *,
+    const char *);
 void zfs_rangelock_init(zfs_rangelock_t *, zfs_rangelock_cb_t *, void *);
 void zfs_rangelock_fini(zfs_rangelock_t *);
+void zfs_rangelock_debug_init(void);
+void zfs_rangelock_debug_fini(void);
 
 zfs_locked_range_t *zfs_rangelock_enter(zfs_rangelock_t *,
     uint64_t, uint64_t, zfs_rangelock_type_t);
@@ -85,6 +95,8 @@ int zfs_rangelock_tryenter_async(zfs_rangelock_t *rl, uint64_t off,
 void zfs_rangelock_exit(zfs_locked_range_t *);
 void zfs_rangelock_reduce(zfs_locked_range_t *, uint64_t, uint64_t);
 
+extern list_t zfs_rangelocks_list;
+extern kmutex_t zfs_rangelocks_lock;
 #ifdef	__cplusplus
 }
 #endif

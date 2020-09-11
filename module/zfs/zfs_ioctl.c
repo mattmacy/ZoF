@@ -7570,10 +7570,17 @@ zfs_kmod_init(void)
 {
 	int error;
 
-	if ((error = zvol_init()) != 0)
-		return (error);
+	tsd_create(&zfs_async_io_key, dmu_thread_context_destroy);
+	ASSERT(zfs_async_io_key != 0);
 
+	dmu_contexts_init();
+	if ((error = zvol_init()) != 0) {
+		tsd_destroy(&zfs_async_io_key);
+		dmu_contexts_deinit();
+		return (error);
+	}
 	spa_init(SPA_MODE_READ | SPA_MODE_WRITE);
+	zfs_rangelock_debug_init();
 	zfs_init();
 
 	zfs_ioctl_init();
@@ -7588,11 +7595,12 @@ zfs_kmod_init(void)
 	tsd_create(&zfs_fsyncer_key, NULL);
 	tsd_create(&rrw_tsd_key, rrw_tsd_destroy);
 	tsd_create(&zfs_allow_log_key, zfs_allow_log_destroy);
-	tsd_create(&zfs_async_io_key, dmu_thread_context_destroy);
 
 	return (0);
 out:
+	tsd_destroy(&zfs_async_io_key);
 	zfs_fini();
+	zfs_rangelock_debug_fini();
 	spa_fini();
 	zvol_fini();
 
@@ -7619,6 +7627,7 @@ zfs_kmod_fini(void)
 
 	zfs_ereport_taskq_fini();	/* run before zfs_fini() on Linux */
 	zfs_fini();
+	zfs_rangelock_debug_fini();
 	spa_fini();
 	zvol_fini();
 
