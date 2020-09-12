@@ -45,15 +45,18 @@
 
 extern uint_t taskq_tsd;
 #define	kfpu_begin() {					\
+	ASSERT0(curpcb->pcb_flags & PCB_FPUNOSAVE);		\
 	if (__predict_false(!is_fpu_kern_thread(0))) {			\
-		ASSERT(osd_thread_get(curthread, taskq_tsd) == NULL);					\
+		if (curthread->td_critnest == 0)		\
+			ASSERT(osd_thread_get(curthread, taskq_tsd) == NULL);\
 		fpu_kern_enter(curthread, NULL, FPU_KERN_NOCTX);	\
-	}														\
+	}								\
 }
 
 #define	kfpu_end()	{			\
 	if (__predict_false(curpcb->pcb_flags & PCB_FPUNOSAVE))	\
 		fpu_kern_leave(curthread, NULL);	\
+	ASSERT0(curpcb->pcb_flags & PCB_FPUNOSAVE);		\
 }
 
 /*

@@ -101,8 +101,11 @@ fletcher_4_sse2_native(fletcher_4_ctx_t *ctx, const void *buf, uint64_t size)
 {
 	const uint64_t *ip = buf;
 	const uint64_t *ipend = (uint64_t *)((uint8_t *)ip + size);
+	int is_fpu = is_fpu_kern_thread(0);
 
 	kfpu_begin();
+	if (is_fpu)
+		VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
 
 	FLETCHER_4_SSE_RESTORE_CTX(ctx);
 
