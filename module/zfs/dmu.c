@@ -710,7 +710,7 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 
 		int err = dbuf_hold_level_async(dn, /* level */ 0, blkid + i,
 		    dc->dc_tag, &db, &dbs->dbs_ctx,
-		    async_zio, dmu_issue_restart_cb);
+		    async_zio, dmu_issue_restart_cb, done_cb);
 		if (err == EINPROGRESS) {
 			ASSERT(dc->dc_flags & DMU_CTX_FLAG_ASYNC);
 			return (err);
