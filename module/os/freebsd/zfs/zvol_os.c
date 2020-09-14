@@ -1442,7 +1442,7 @@ zvol_create_minor_impl(const char *name)
 	}
 	(void) strlcpy(zv->zv_name, name, MAXPATHLEN);
 	rw_init(&zv->zv_suspend_lock, NULL, RW_DEFAULT, NULL);
-	zfs_rangelock_init(&zv->zv_rangelock, NULL, NULL);
+	zfs_rangelock_init_named(&zv->zv_rangelock, NULL, NULL, name);
 
 	if (dmu_objset_is_snapshot(os) || !spa_writeable(dmu_objset_spa(os)))
 		zv->zv_flags |= ZVOL_RDONLY;

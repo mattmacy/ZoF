@@ -122,23 +122,29 @@ typedef struct zfs_rangelock_cb_entry {
 } zfs_rangelock_cb_entry_t;
 
 
+#ifdef ZFS_DEBUG
 list_t zfs_rangelocks_list;
 kmutex_t zfs_rangelocks_lock;
+#endif
 
 void
 zfs_rangelock_debug_init(void)
 {
+#ifdef ZFS_DEBUG
 	list_create(&zfs_rangelocks_list, sizeof (zfs_rangelock_t),
 	    offsetof(zfs_rangelock_t, rl_node));
 	mutex_init(&zfs_rangelocks_lock, "rangelock list lock",
 	    MUTEX_DEFAULT, NULL);
+#endif
 }
 
 void
 zfs_rangelock_debug_fini(void)
 {
+#ifdef ZFS_DEBUG
 	list_destroy(&zfs_rangelocks_list);
 	mutex_destroy(&zfs_rangelocks_lock);
+#endif
 }
 
 /*
@@ -160,7 +166,8 @@ zfs_rangelock_compare(const void *arg1, const void *arg2)
  * and may increase the range that's locked for RL_WRITER.
  */
 void
-zfs_rangelock_init(zfs_rangelock_t *rl, zfs_rangelock_cb_t *cb, void *arg)
+zfs_rangelock_init_named(zfs_rangelock_t *rl, zfs_rangelock_cb_t *cb, void *arg,
+    const char *name)
 {
 	mutex_init(&rl->rl_lock, NULL, MUTEX_DEFAULT, NULL);
 	avl_create(&rl->rl_tree, zfs_rangelock_compare,
@@ -171,6 +178,8 @@ zfs_rangelock_init(zfs_rangelock_t *rl, zfs_rangelock_cb_t *cb, void *arg)
 	list_create(&rl->rl_free, sizeof (zfs_locked_range_t),
 	    offsetof(zfs_locked_range_t, lr_node));
 #ifdef ZFS_DEBUG
+	if (name != NULL)
+		rl->rl_name = kmem_strdup(name);
 	list_create(&rl->rl_ranges,  sizeof (zfs_locked_range_t),
 	    offsetof(zfs_locked_range_t, lr_ranges_node));
 	mutex_enter(&zfs_rangelocks_lock);
@@ -180,9 +189,18 @@ zfs_rangelock_init(zfs_rangelock_t *rl, zfs_rangelock_cb_t *cb, void *arg)
 }
 
 void
+zfs_rangelock_init(zfs_rangelock_t *rl, zfs_rangelock_cb_t *cb, void *arg)
+{
+	zfs_rangelock_init_named(rl, cb, arg, NULL);
+}
+
+void
 zfs_rangelock_fini(zfs_rangelock_t *rl)
 {
 #ifdef ZFS_DEBUG
+	if (rl->rl_name != NULL)
+		kmem_strfree(rl->rl_name);
+
 	list_destroy(&rl->rl_ranges);
 	mutex_enter(&zfs_rangelocks_lock);
 	list_remove(&zfs_rangelocks_list, rl);
