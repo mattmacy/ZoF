@@ -1,0 +1,5 @@
+openzfs (2.0.0-0) UNRELEASED; urgency=medium
+
+  * Initial package for TrueNAS SCALE.
+
+ -- Ryan Moeller <ryan@ixsystems.com>  Mon, 14 Sep 2020 22:01:55 -0400
