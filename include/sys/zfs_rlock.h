@@ -95,8 +95,11 @@ int zfs_rangelock_tryenter_async(zfs_rangelock_t *rl, uint64_t off,
 void zfs_rangelock_exit(zfs_locked_range_t *);
 void zfs_rangelock_reduce(zfs_locked_range_t *, uint64_t, uint64_t);
 
+#ifdef ZFS_DEBUG
 extern list_t zfs_rangelocks_list;
 extern kmutex_t zfs_rangelocks_lock;
+#endif
+
 #ifdef	__cplusplus
 }
 #endif
