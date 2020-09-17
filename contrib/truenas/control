@@ -6,5 +6,5 @@ Build-Depends: build-essential, autoconf, automake, libtool, gawk, alien, fakero
 
 Package: openzfs
 Architecture: amd64
-Depends: zfs, ${kmod}, linux-image-amd64
+Depends: zfs, ${kmod}, zfs-initramfs, linux-image-amd64, libnvpair1, libuutil1, libzfs2, libzpool2
 Description: OpenZFS 2.0 for TrueNAS SCALE

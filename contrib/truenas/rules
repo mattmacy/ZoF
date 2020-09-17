@@ -27,4 +27,5 @@ override_dh_gencontrol:
 override_dh_builddeb:
 	$(MAKE) deb-kmod deb-utils
 	mv *.deb ../
+	mv ../openzfs-build-deps-depends_*.deb ./
 	dh_builddeb
