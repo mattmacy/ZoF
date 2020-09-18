@@ -859,7 +859,9 @@ abd_fletcher_4_iter(void *data, size_t size, void *private)
 	uint64_t asize = P2ALIGN(size, FLETCHER_MIN_SIMD_SIZE);
 
 	ASSERT(IS_P2ALIGNED(size, sizeof (uint32_t)));
-
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 	if (asize > 0) {
 		if (native)
 			ops->compute_native(ctx, data, asize);
@@ -869,13 +871,17 @@ abd_fletcher_4_iter(void *data, size_t size, void *private)
 		size -= asize;
 		data = (char *)data + asize;
 	}
-
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 	if (size > 0) {
 		ASSERT3U(size, <, FLETCHER_MIN_SIMD_SIZE);
 		/* At this point we have to switch to scalar impl */
 		abd_fletcher_4_simd2scalar(native, data, size, cdp);
 	}
-
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 	return (0);
 }
 

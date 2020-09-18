@@ -134,6 +134,9 @@ abd_fletcher_4_native(abd_t *abd, uint64_t size,
 {
 	fletcher_4_ctx_t ctx;
 
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 	zio_abd_checksum_data_t acd = {
 		.acd_byteorder	= ZIO_CHECKSUM_NATIVE,
 		.acd_zcp 	= zcp,
