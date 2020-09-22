@@ -686,6 +686,9 @@ fletcher_4_benchmark_impl(boolean_t native, char *data, uint64_t data_size)
 
 		/* temporary set an implementation */
 		fletcher_4_impl_chosen = i;
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 
 		kpreempt_disable();
 		start = gethrtime();
@@ -696,6 +699,9 @@ fletcher_4_benchmark_impl(boolean_t native, char *data, uint64_t data_size)
 			run_time_ns = gethrtime() - start;
 		} while (run_time_ns < FLETCHER_4_BENCH_NS);
 		kpreempt_enable();
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 
 		run_bw = data_size * run_count * NANOSEC;
 		run_bw /= run_time_ns;	/* B/s */
@@ -772,8 +778,15 @@ fletcher_4_benchmark(void)
 void
 fletcher_4_init(void)
 {
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
+
 	/* Determine the fastest available implementation. */
 	fletcher_4_benchmark();
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 
 #if defined(_KERNEL)
 	/* Install kstats for all implementations */

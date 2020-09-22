@@ -193,6 +193,10 @@ fletcher_4_ssse3_byteswap(fletcher_4_ctx_t *ctx, const void *buf, uint64_t size)
 	const uint64_t *ip = buf;
 	const uint64_t *ipend = (uint64_t *)((uint8_t *)ip + size);
 
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
+	
 	kfpu_begin();
 
 	FLETCHER_4_SSE_RESTORE_CTX(ctx);
@@ -219,6 +223,9 @@ fletcher_4_ssse3_byteswap(fletcher_4_ctx_t *ctx, const void *buf, uint64_t size)
 	FLETCHER_4_SSE_SAVE_CTX(ctx);
 
 	kfpu_end();
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 }
 
 static boolean_t fletcher_4_ssse3_valid(void)
