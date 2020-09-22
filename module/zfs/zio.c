@@ -2077,10 +2077,16 @@ void
 zio_execute(zio_t *zio)
 {
 	fstrans_cookie_t cookie;
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 
 	cookie = spl_fstrans_mark();
 	__zio_execute(zio);
 	spl_fstrans_unmark(cookie);
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 }
 
 /*
@@ -4212,7 +4218,9 @@ zio_checksum_verify(zio_t *zio)
 
 		ASSERT(zio->io_prop.zp_checksum == ZIO_CHECKSUM_LABEL);
 	}
-
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 	if ((error = zio_checksum_error(zio, &info)) != 0) {
 		zio->io_error = error;
 		if (error == ECKSUM &&
@@ -4228,7 +4236,9 @@ zio_checksum_verify(zio_t *zio)
 			}
 		}
 	}
-
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 	return (zio);
 }
 

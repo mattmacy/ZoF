@@ -144,7 +144,9 @@ abd_fletcher_4_native(abd_t *abd, uint64_t size,
 	};
 
 	abd_fletcher_4_impl(abd, size, &acd);
-
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 }
 
 /*ARGSUSED*/
@@ -475,9 +477,15 @@ zio_checksum_error_impl(spa_t *spa, const blkptr_t *bp,
 		abd_copy_from_buf_off(abd, &verifier, eck_offset,
 		    sizeof (zio_cksum_t));
 
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 		ci->ci_func[byteswap](abd, size,
 		    spa->spa_cksum_tmpls[checksum], &actual_cksum);
 
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 		abd_copy_from_buf_off(abd, &expected_cksum, eck_offset,
 		    sizeof (zio_cksum_t));
 
@@ -488,8 +496,14 @@ zio_checksum_error_impl(spa_t *spa, const blkptr_t *bp,
 	} else {
 		byteswap = BP_SHOULD_BYTESWAP(bp);
 		expected_cksum = bp->blk_cksum;
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 		ci->ci_func[byteswap](abd, size,
 		    spa->spa_cksum_tmpls[checksum], &actual_cksum);
+#ifdef _KERNEL
+		VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 	}
 
 	/*
@@ -540,8 +554,15 @@ zio_checksum_error(zio_t *zio, zio_bad_cksum_t *info)
 	abd_t *data = zio->io_abd;
 	spa_t *spa = zio->io_spa;
 
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 	error = zio_checksum_error_impl(spa, bp, checksum, data, size,
 	    offset, info);
+
+#ifdef _KERNEL
+	VERIFY0(curpcb->pcb_flags & PCB_FPUNOSAVE);
+#endif
 
 	if (zio_injection_enabled && error == 0 && zio->io_error == 0) {
 		error = zio_handle_fault_injection(zio, ECKSUM);
