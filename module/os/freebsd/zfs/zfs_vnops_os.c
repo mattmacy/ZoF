@@ -546,73 +546,6 @@ update_pages_async_epilogue(update_pages_async_state_t *state)
 		cb(arg);
 }
 
-int
-update_pages_async(znode_t *zp, int64_t start_, int len_, dnode_t *dn,
-    objset_t *os, uint64_t oid, callback_fn cb, void *arg)
-{
-	vm_object_t obj;
-	update_pages_async_state_t *state;
-	struct uio_bio *uio;
-	vm_page_t *ma, *map;
-	int64_t start = start_;
-	int off, pstart, pend, page_count, len = len_;
-	int error, flags, uio_flags;
-
-	ASSERT(ZTOV(zp)->v_mount != NULL);
-	obj = ZTOV(zp)->v_object;
-	ASSERT(obj != NULL);
-	pstart = start &= PAGEMASK;
-	pend = (start + len + PAGEOFFSET) & PAGEMASK;
-	page_count = OFF_TO_IDX(pend - pstart);
-	state = kmem_zalloc(sizeof (*state), KM_SLEEP);
-	state->upas_obj = obj;
-	state->upas_cb = cb;
-	state->upas_arg = arg;
-
-	uio_flags = 0;
-	uio = kmem_zalloc(sizeof (*uio), KM_SLEEP);
-	state->upas_uio = uio;
-	map = ma = kmem_zalloc(page_count*sizeof (vm_page_t),
-	    KM_SLEEP);
-	uio->uio_ma = ma;
-	uio->uio_ma_cnt = page_count;
-	uio->uio_ma_offset = off = start & PAGEOFFSET;
-	zfs_vmobject_wlock_12(obj);
-#if __FreeBSD_version >= 1300041
-	vm_object_pip_add(obj, 1);
-#endif
-	for (start &= PAGEMASK; len > 0; start += PAGESIZE, map++) {
-		int nbytes = imin(PAGESIZE - off, len);
-
-		*map = page_busy(obj, start, off, nbytes);
-		if (*map == NULL)
-			uio_flags |= UIO_BIO_SPARSE;
-		len -= nbytes;
-		off = 0;
-	}
-	zfs_vmobject_wunlock_12(obj);
-
-	flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_ASYNC |
-	    DMU_CTX_FLAG_NO_HOLD | DMU_CTX_FLAG_PREFETCH;
-	uio->uio_flags = uio_flags;
-	error = dmu_ctx_init(&state->upas_dc, dn, os, oid, start_, len_,
-	    uio, FTAG, flags);
-	if (error)
-		goto out;
-	state->upas_dc.dc_data_transfer_cb = dmu_physmove;
-	dmu_ctx_set_complete_cb(&state->upas_dc,
-	    (dmu_ctx_cb_t)update_pages_async_epilogue);
-	error = dmu_issue(&state->upas_dc);
-	dmu_ctx_rele(&state->upas_dc);
-	if (error == 0 || error == EINPROGRESS) {
-		state->upas_yielded = B_TRUE;
-		return (EINPROGRESS);
-	}
-out:
-	update_pages_async_epilogue(state);
-	return (error);
-}
-
 /*
  * Read with UIO_NOCOPY flag means that sendfile(2) requests
  * ZFS to populate a range of page cache pages with data.
@@ -753,6 +686,74 @@ mappedread(znode_t *zp, int nbytes, uio_t *uio)
 	return (error);
 }
 
+#ifdef HAVE_UBOP
+int
+update_pages_async(znode_t *zp, int64_t start_, int len_, dnode_t *dn,
+    objset_t *os, uint64_t oid, callback_fn cb, void *arg)
+{
+	vm_object_t obj;
+	update_pages_async_state_t *state;
+	struct uio_bio *uio;
+	vm_page_t *ma, *map;
+	int64_t start = start_;
+	int off, pstart, pend, page_count, len = len_;
+	int error, flags, uio_flags;
+
+	ASSERT(ZTOV(zp)->v_mount != NULL);
+	obj = ZTOV(zp)->v_object;
+	ASSERT(obj != NULL);
+	pstart = start &= PAGEMASK;
+	pend = (start + len + PAGEOFFSET) & PAGEMASK;
+	page_count = OFF_TO_IDX(pend - pstart);
+	state = kmem_zalloc(sizeof (*state), KM_SLEEP);
+	state->upas_obj = obj;
+	state->upas_cb = cb;
+	state->upas_arg = arg;
+
+	uio_flags = 0;
+	uio = kmem_zalloc(sizeof (*uio), KM_SLEEP);
+	state->upas_uio = uio;
+	map = ma = kmem_zalloc(page_count*sizeof (vm_page_t),
+	    KM_SLEEP);
+	uio->uio_ma = ma;
+	uio->uio_ma_cnt = page_count;
+	uio->uio_ma_skip = off = start & PAGEOFFSET;
+	zfs_vmobject_wlock_12(obj);
+#if __FreeBSD_version >= 1300041
+	vm_object_pip_add(obj, 1);
+#endif
+	for (start &= PAGEMASK; len > 0; start += PAGESIZE, map++) {
+		int nbytes = imin(PAGESIZE - off, len);
+
+		*map = page_busy(obj, start, off, nbytes);
+		if (*map == NULL)
+			uio_flags |= UIO_BIO_SPARSE;
+		len -= nbytes;
+		off = 0;
+	}
+	zfs_vmobject_wunlock_12(obj);
+
+	flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_ASYNC |
+	    DMU_CTX_FLAG_NO_HOLD | DMU_CTX_FLAG_PREFETCH;
+	uio->uio_flags = uio_flags;
+	error = dmu_ctx_init(&state->upas_dc, dn, os, oid, start_, len_,
+	    uio, FTAG, flags);
+	if (error)
+		goto out;
+	state->upas_dc.dc_data_transfer_cb = dmu_physmove;
+	dmu_ctx_set_complete_cb(&state->upas_dc,
+	    (dmu_ctx_cb_t)update_pages_async_epilogue);
+	error = dmu_issue(&state->upas_dc);
+	dmu_ctx_rele(&state->upas_dc);
+	if (error == 0 || error == EINPROGRESS) {
+		state->upas_yielded = B_TRUE;
+		return (EINPROGRESS);
+	}
+out:
+	update_pages_async_epilogue(state);
+	return (error);
+}
+
 boolean_t
 zp_has_cached_in_range(znode_t *zp, off_t start, ssize_t len)
 {
@@ -771,8 +772,6 @@ zp_has_cached_in_range(znode_t *zp, off_t start, ssize_t len)
 	zfs_vmobject_runlock(obj);
 	return (cached);
 }
-
-#ifdef HAVE_UBOP
 
 static void
 zfs_readholes_async_resume(void *arg)
