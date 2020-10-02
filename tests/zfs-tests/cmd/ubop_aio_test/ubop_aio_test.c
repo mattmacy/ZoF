@@ -9,7 +9,7 @@
 #include <strings.h>
 #include <assert.h>
 
-#define BUFFER_SIZE 64*1024*1024
+#define BUFFER_SIZE 32*1024*1024
 #define BUFFER_COUNT BUFFER_SIZE/4
 #define READ_WAIT_TIME 4
 
