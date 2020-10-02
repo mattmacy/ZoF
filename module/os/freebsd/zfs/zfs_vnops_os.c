@@ -717,7 +717,7 @@ update_pages_async(znode_t *zp, int64_t start_, int len_, dnode_t *dn,
 	    KM_SLEEP);
 	uio->uio_ma = ma;
 	uio->uio_ma_cnt = page_count;
-	uio->uio_ma_skip = off = start & PAGEOFFSET;
+	uio->uio_ma_offset = off = start & PAGEOFFSET;
 	zfs_vmobject_wlock_12(obj);
 #if __FreeBSD_version >= 1300041
 	vm_object_pip_add(obj, 1);
