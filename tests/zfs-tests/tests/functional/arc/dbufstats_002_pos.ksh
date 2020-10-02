@@ -61,7 +61,7 @@ log_must zpool sync
 objid=$(stat --format="%i" "$TESTDIR/file")
 log_note "Object ID for $TESTDIR/file is $objid"
 
-log_must eval "cat /proc/spl/kstat/zfs/dbufs > $DBUFS_FILE"
+log_must eval "kstat dbufs > $DBUFS_FILE"
 dbuf=$(dbufstat -bxn -i "$DBUFS_FILE" -F "object=$objid" | wc -l)
 mru=$(dbufstat -bxn -i "$DBUFS_FILE" -F "object=$objid,list=1" | wc -l)
 mfu=$(dbufstat -bxn -i "$DBUFS_FILE" -F "object=$objid,list=3" | wc -l)
@@ -70,7 +70,7 @@ verify_ne "0" "$mru" "mru count"
 verify_eq "0" "$mfu" "mfu count"
 
 log_must eval "cat $TESTDIR/file > /dev/null"
-log_must eval "cat /proc/spl/kstat/zfs/dbufs > $DBUFS_FILE"
+log_must eval "kstat dbufs > $DBUFS_FILE"
 dbuf=$(dbufstat -bxn -i "$DBUFS_FILE" -F "object=$objid" | wc -l)
 mru=$(dbufstat -bxn -i "$DBUFS_FILE" -F "object=$objid,list=1" | wc -l)
 mfu=$(dbufstat -bxn -i "$DBUFS_FILE" -F "object=$objid,list=3" | wc -l)

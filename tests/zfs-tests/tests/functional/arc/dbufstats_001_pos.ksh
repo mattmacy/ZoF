@@ -71,8 +71,8 @@ log_onexit cleanup
 log_must file_write -o create -f "$TESTDIR/file" -b 1048576 -c 20 -d R
 log_must zpool sync
 
-log_must eval "cat /proc/spl/kstat/zfs/dbufs > $DBUFS_FILE"
-log_must eval "cat /proc/spl/kstat/zfs/dbufstats > $DBUFSTATS_FILE"
+log_must eval "kstat dbufs > $DBUFS_FILE"
+log_must eval "kstat dbufstats > $DBUFSTATS_FILE"
 
 for level in {0..11}; do
 	testdbufstat "cache_level_$level" "dbc=1,level=$level"
