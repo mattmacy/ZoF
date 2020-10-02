@@ -907,7 +907,7 @@ zfs_read_async(znode_t *zp, struct uio_bio *uio, int ioflag)
 		error = zil_commit_async(zfsvfs->z_log, zp->z_id,
 		    zfs_read_async_resume, state);
 
-	if (error) {
+	if (error >= 0) {
 		ASSERT(error == EINPROGRESS);
 		return (error);
 	}
@@ -1326,6 +1326,7 @@ zfs_ubop(znode_t *zp, struct uio_bio *uio, int ioflag)
 			break;
 		case UIO_BIO_SYNC:
 			rc = zfs_sync_async(zp, uio);
+			break;
 		default:
 			rc = EOPNOTSUPP;
 	}
