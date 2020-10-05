@@ -873,6 +873,7 @@ zfs_mappedread_async(zfs_read_state_t *state)
 			continue;
 		}
 		hole_start = -1;
+		ASSERT(uio->uio_ma_offset < PAGE_SIZE);
 		dst[0] = zfs_map_page(uio->uio_ma[i], &sf_dst[0]);
 		dst[0] += uio->uio_ma_offset;
 		if (uio->uio_ma_offset && (len > PAGE_SIZE - uio->uio_ma_offset))
