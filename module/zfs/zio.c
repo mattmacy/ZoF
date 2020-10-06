@@ -292,6 +292,10 @@ zio_fini(void)
 void *
 zio_buf_alloc(size_t size)
 {
+#if defined(ZFS_DEBUG)
+	if (arc_watch)
+		size = max(size, PAGE_SIZE);
+#endif
 	size_t c = (size - 1) >> SPA_MINBLOCKSHIFT;
 
 	VERIFY3U(c, <, SPA_MAXBLOCKSIZE >> SPA_MINBLOCKSHIFT);
@@ -311,6 +315,10 @@ zio_buf_alloc(size_t size)
 void *
 zio_data_buf_alloc(size_t size)
 {
+#if defined(ZFS_DEBUG)
+	if (arc_watch)
+		size = max(size, PAGE_SIZE);
+#endif
 	size_t c = (size - 1) >> SPA_MINBLOCKSHIFT;
 
 	VERIFY3U(c, <, SPA_MAXBLOCKSIZE >> SPA_MINBLOCKSHIFT);
@@ -321,6 +329,10 @@ zio_data_buf_alloc(size_t size)
 void
 zio_buf_free(void *buf, size_t size)
 {
+#if defined(ZFS_DEBUG)
+	if (arc_watch)
+		size = max(size, PAGE_SIZE);
+#endif
 	size_t c = (size - 1) >> SPA_MINBLOCKSHIFT;
 
 	VERIFY3U(c, <, SPA_MAXBLOCKSIZE >> SPA_MINBLOCKSHIFT);
@@ -334,6 +346,10 @@ zio_buf_free(void *buf, size_t size)
 void
 zio_data_buf_free(void *buf, size_t size)
 {
+#if defined(ZFS_DEBUG)
+	if (arc_watch)
+		size = max(size, PAGE_SIZE);
+#endif
 	size_t c = (size - 1) >> SPA_MINBLOCKSHIFT;
 
 	VERIFY3U(c, <, SPA_MAXBLOCKSIZE >> SPA_MINBLOCKSHIFT);
