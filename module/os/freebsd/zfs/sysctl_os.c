@@ -39,6 +39,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/proc.h>
 #include <sys/errno.h>
 #include <sys/uio.h>
+#include <sys/arc.h>
 #include <sys/buf.h>
 #include <sys/file.h>
 #include <sys/kmem.h>
@@ -225,6 +226,10 @@ SYSCTL_UQUAD(_vfs_zfs, OID_AUTO, mfu_ghost_data_esize, CTLFLAG_RD,
 
 SYSCTL_UQUAD(_vfs_zfs, OID_AUTO, l2c_only_size, CTLFLAG_RD,
     &ARC_l2c_only.arcs_size.rc_count, 0, "size of mru state");
+
+
+SYSCTL_INT(_vfs_zfs_arc, OID_AUTO, arc_watch, CTLFLAG_RDTUN,
+    &arc_watch, 0,"map frozen buffers as read only");
 
 static int
 sysctl_vfs_zfs_arc_no_grow_shift(SYSCTL_HANDLER_ARGS)
