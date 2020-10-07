@@ -34,7 +34,6 @@ The following dependencies are required to build OpenZFS on FreeBSD:
         autoconf \
         automake \
         autotools \
-        bash \
         git \
         gmake \
     ```
