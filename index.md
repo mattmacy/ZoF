@@ -51,7 +51,7 @@ The following dependencies are required to build OpenZFS on FreeBSD:
         ksh93 \
         pamtester \
         py37-flake8 \
-	python37 \
+        python37 \
         sudo
     ```
     Your preferred python version may be substituted.
