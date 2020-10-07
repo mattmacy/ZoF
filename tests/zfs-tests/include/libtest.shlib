@@ -3394,7 +3394,7 @@ function user_run
 	shift
 
 	log_note "user:$user $@"
-	eval su - \$user -c \"$@\" > $TEST_BASE_DIR/out 2>$TEST_BASE_DIR/err
+	eval su - $user -c \"$@\" >$TEST_BASE_DIR/out 2>$TEST_BASE_DIR/err
 }
 
 #
