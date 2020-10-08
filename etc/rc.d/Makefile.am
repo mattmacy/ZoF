@@ -1,7 +1,7 @@
 include $(top_srcdir)/config/Substfiles.am
 
-EXTRA_DIST += zfsd.in
+EXTRA_DIST += zfs zfsd.in
 
-init_SCRIPTS = zfsd
+init_SCRIPTS = zfs zfsd
 
-SUBSTFILES += $(init_SCRIPTS)
+SUBSTFILES += zfsd
