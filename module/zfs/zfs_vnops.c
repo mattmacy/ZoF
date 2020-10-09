@@ -1064,7 +1064,7 @@ zfs_write_async_resume(zfs_write_state_t *state)
 		state->zws_db = db = (dmu_buf_impl_t *)sa_get_db(zp->z_sa_hdl);
 		DB_DNODE_ENTER(db);
 		state->zws_dn = dn = DB_DNODE(db);
-		dmu_tx_hold_write_by_dnode(tx, dn, woff, MIN(n, max_blksz));
+		dmu_tx_hold_write_by_dnode(tx, dn, woff, n);
 		/* XXX may do synchronous I/O if it has an external ACL */
 		zfs_sa_upgrade_txholds(tx, zp);
 		state->zws_done |= (ZWS_TX_ASSIGNED|ZWS_BLOCKED);
