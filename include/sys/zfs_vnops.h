@@ -41,7 +41,6 @@ typedef struct zfs_read_state {
 	struct uio_bio	*zrs_uio;
 	struct iovec	*zrs_holes;
 	struct uio_bio *zrs_uio_tmp;
-	uint16_t	zrs_ioflag;
 	uint16_t	zrs_done;
 	uint16_t	zrs_hole_count;
 	uint16_t	zrs_hole_index;

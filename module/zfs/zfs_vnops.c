@@ -880,7 +880,6 @@ zfs_read_async(znode_t *zp, struct uio_bio *uio, int ioflag)
 	state = kmem_zalloc(sizeof (*state), KM_SLEEP);
 	state->zrs_zp = zp;
 	state->zrs_uio = uio;
-	state->zrs_ioflag = ioflag;
 
 	state->zrs_db = sa_get_db(zp->z_sa_hdl);
 	db = (dmu_buf_impl_t *)state->zrs_db;
@@ -921,7 +920,6 @@ typedef struct zfs_write_state {
 	dmu_buf_impl_t	*zws_db;
 	zfs_locked_range_t	*zws_lr;
 	struct uio_bio	*zws_uio;
-	struct ucred *zws_cred;
 	dmu_tx_t	*zws_tx;
 	sa_bulk_attr_t	zws_bulk[4];
 	uint64_t	zws_mtime[2];
@@ -1018,7 +1016,7 @@ zfs_write_async_resume(zfs_write_state_t *state)
 	struct uio_bio *uio = state->zws_uio;
 	rlim64_t	limit = MAXOFFSET_T;
 	int		max_blksz = zfsvfs->z_max_blksz;
-	struct ucred *cr = state->zws_cred;
+	struct ucred *cr = uio->uio_td->td_ucred;
 	zilog_t		*zilog;
 	dmu_buf_impl_t *db;
 	dnode_t *dn;
