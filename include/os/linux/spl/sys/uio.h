@@ -113,6 +113,7 @@ typedef struct xuio {
 #define	uio_iovcnt(uio)			(uio)->uio_iovcnt
 #define	uio_iovlen(uio, idx)		(uio)->uio_iov[(idx)].iov_len
 #define	uio_iovbase(uio, idx)		(uio)->uio_iov[(idx)].iov_base
+#define	uio_fault_disable(uio, set)	uio->uio_fault_disable = set
 
 static inline void
 uio_iov_at_index(uio_t *uio, uint_t idx, void **base, uint64_t *len)
