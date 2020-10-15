@@ -46,7 +46,7 @@
 }
 
 #define	kfpu_end()	{			\
-	if (__predict_false(curpcb->pcb_flags & PCB_FPUNOSAVE))	\
+	if (__predict_false(!is_fpu_kern_thread(0)))		\
 		fpu_kern_leave(curthread, NULL);	\
 }
 

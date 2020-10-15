@@ -29,7 +29,7 @@
 
 #ifndef _FREEBSD_SIMD_H
 #define	_FREEBSD_SIMD_H
-#if defined(__amd64__) || defined(__i386__)
+#if defined(__amd64__)&& !defined(_STANDALONE)
 #include <sys/simd_x86.h>
 #else
 
