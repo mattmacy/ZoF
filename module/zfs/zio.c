@@ -50,6 +50,10 @@
 #include <sys/abd.h>
 #include <sys/dsl_crypt.h>
 #include <cityhash.h>
+#ifndef _KERNEL
+static __inline uint32_t max(uint32_t a, uint32_t b) { return (a > b ? a : b); }
+#endif
+
 
 /*
  * ==========================================================================
