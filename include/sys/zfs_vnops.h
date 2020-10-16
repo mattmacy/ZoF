@@ -26,7 +26,6 @@
 #define	_SYS_FS_ZFS_VNOPS_H
 #include <sys/zfs_vnops_os.h>
 
-
 typedef enum {
 	ZRS_RANGELOCK	= 1 << 1,
 	ZRS_DMU_ISSUED	= 1 << 2,
