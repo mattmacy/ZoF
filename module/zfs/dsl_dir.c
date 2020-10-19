@@ -923,6 +923,9 @@ dsl_fs_ss_count_adjust(dsl_dir_t *dd, int64_t delta, const char *prop,
 		return;
 	VERIFY0(err);
 
+	if (-delta > count)
+		PANIC("count will go negative prop: %s delta: %ll count: %llu\n", prop, delta, count);
+
 	count += delta;
 	/* Use a signed verify to make sure we're not neg. */
 	VERIFY3S(count, >=, 0);
