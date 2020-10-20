@@ -659,16 +659,17 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 			ASSERT(dc->dc_flags & DMU_CTX_FLAG_ASYNC);
 			return (err);
 		}
-		VERIFY(err == 0);
-		if (db == NULL) {
-			VERIFY(err);
+		if (err || db == NULL) {
 			/* Only include counts for the processed buffers. */
-			dbs->dbs_count = i;
 			/* initiator */
-			zfs_refcount_destroy(&dbs->dbs_holds);
-			zfs_refcount_create_untracked(&dbs->dbs_holds);
-			zfs_refcount_add_many(&dbs->dbs_holds, i + 1, NULL);
-			zio_nowait(dbs->dbs_zio);
+			if (read) {
+				int missed = dbs->dbs_count - i;
+
+				zfs_refcount_remove_many(&dbs->dbs_holds,
+				    missed, NULL);
+				dbs->dbs_count = i;
+			}
+			dmu_ctx_set_error(dc, err);
 			return (err);
 		}
 		dbs->dbs_async_holds++;
@@ -836,8 +837,7 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 {
 	dmu_buf_set_t *dbs;
 	dmu_tx_t *tx;
-	size_t set_size;
-	int err, nblks;
+	int err;
 	dnode_t *dn = dmu_ctx->dc_dn;
 	boolean_t restarted;
 
@@ -853,34 +853,10 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
 		restarted = B_TRUE;
 		rw_enter(&dn->dn_struct_rwlock, RW_READER);
 	}
-	tx = dbs->dbs_tx;
 	err = dmu_buf_set_setup_buffers(dbs, restarted);
-	if (err  == 0) {
-		*buf_set_p = dbs;
-	} else  if (err == EINPROGRESS) {
-		rw_exit(&dn->dn_struct_rwlock);
-		return (err);
-	} else {
-		/* XXX this whole error path needs revisiting */
-		nblks = dbs->dbs_count;
-		set_size = sizeof (dmu_buf_set_t) +
-		    nblks * sizeof (dmu_buf_t *);
-
-		if (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ)
-			zfs_refcount_destroy_many(&dbs->dbs_holds, nblks + 1);
-		else
-			/* For writes, dbufs never need to call us back. */
-			zfs_refcount_destroy_many(&dbs->dbs_holds, 1);
-		zfs_refcount_remove(&dmu_ctx->dc_holds, NULL);
-		zio_nowait(dbs->dbs_zio);
-		kmem_free(dbs, set_size);
-		/* Initialize a new buffer set. */
-		DEBUG_REFCOUNT_ADD(buf_set_in_flight);
-#ifdef ZFS_DEBUG
-		atomic_add_64(&buf_set_total, -1);
-#endif
-	}
-	if (err && tx != NULL)
+	*buf_set_p = dbs;
+	tx = dbs->dbs_tx;
+	if (err && err != EINPROGRESS && tx != NULL)
 		dmu_tx_abort(tx);
 	rw_exit(&dn->dn_struct_rwlock);
 	return (err);
@@ -976,7 +952,7 @@ dmu_issue(dmu_ctx_t *dc)
 		if (err == EINPROGRESS)
 			return (0);
 		/* Process the I/O requests, if the initialization passed. */
-		if (err == 0) {
+		if (dbs != NULL) {
 			err = dmu_buf_set_process_io(dbs);
 			dmu_buf_set_rele(&dbs->dbs_ctx, err);
 		}
@@ -1028,10 +1004,10 @@ dmu_issue_restart(dmu_buf_ctx_t *dbs_ctx, int err)
 		if (err == EINPROGRESS)
 			return;
 		/* Process the I/O requests, if the initialization passed. */
-		if (err == 0)
+		if (dbs != NULL) {
 			err = dmu_buf_set_process_io(dbs);
-		if (dbs != NULL)
 			dmu_buf_set_rele(&dbs->dbs_ctx, err);
+		}
 		dbs = NULL;
 	}
 
