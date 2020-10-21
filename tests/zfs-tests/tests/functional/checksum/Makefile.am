@@ -12,6 +12,7 @@ dist_pkgdata_SCRIPTS = \
 	run_edonr_test.ksh \
 	run_sha2_test.ksh \
 	run_skein_test.ksh \
+	filetest_001_pos.ksh \
 	filetest_001_pos.ksh
 
 dist_pkgdata_DATA = \
