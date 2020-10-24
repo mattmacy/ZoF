@@ -56,7 +56,7 @@
 #include <sys/zfs_znode.h>
 
 
-#define WANT_ASYNC
+#define	WANT_ASYNC
 
 static ulong_t zfs_fsync_sync_cnt = 4;
 
@@ -170,7 +170,7 @@ zfs_access(znode_t *zp, int mode, int flag, cred_t *cr)
 static int
 zfs_read_prologue(znode_t *zp, off_t offset, ssize_t resid)
 {
-	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	zfsvfs_t	*zfsvfs = ZTOZSB(zp);
 
 	ZFS_ENTER(zfsvfs);
 	ZFS_VERIFY_ZP(zp);
@@ -312,7 +312,7 @@ out:
 static int
 zfs_write_prologue(znode_t *zp, ssize_t resid, off_t offset, int ioflag)
 {
-	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	zfsvfs_t	*zfsvfs = ZTOZSB(zp);
 	offset_t	woff;
 
 	if (resid == 0)
@@ -792,7 +792,7 @@ void
 zfs_read_async_epilogue(zfs_read_state_t *state, int error)
 {
 	znode_t		*zp = state->zrs_zp;
-	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	zfsvfs_t	*zfsvfs = ZTOZSB(zp);
 	struct uio_bio *uio = state->zrs_uio;
 	dmu_buf_impl_t *db = (dmu_buf_impl_t *)state->zrs_db;
 
@@ -813,7 +813,7 @@ zfs_read_async_resume(void *arg)
 {
 	zfs_read_state_t *state = arg;
 	znode_t		*zp = state->zrs_zp;
-	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	zfsvfs_t	*zfsvfs = ZTOZSB(zp);
 	struct uio_bio *uio = state->zrs_uio;
 	dnode_t *dn = state->zrs_dn;
 	zfs_locked_range_t		*lr;
@@ -867,12 +867,16 @@ out:
 int
 zfs_read_async(znode_t *zp, struct uio_bio *uio, int ioflag)
 {
-	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	zfsvfs_t	*zfsvfs = ZTOZSB(zp);
 	int		error = 0;
 	dmu_buf_impl_t *db;
 	dnode_t *dn;
 	zfs_read_state_t		*state;
+	int frsync = 0;
 
+#ifdef FRSYNC
+	frsync = ioflag & FRSYNC;
+#endif
 	error = zfs_read_prologue(zp, uio->uio_loffset, uio->uio_resid);
 	if (error >= 0)
 		return (error);
@@ -889,7 +893,7 @@ zfs_read_async(znode_t *zp, struct uio_bio *uio, int ioflag)
 	 * If we're in FRSYNC mode, sync out this znode before reading it.
 	 */
 	if (zfsvfs->z_log &&
-	    (ioflag & FRSYNC || zfsvfs->z_os->os_sync == ZFS_SYNC_ALWAYS) &&
+	    (frsync || zfsvfs->z_os->os_sync == ZFS_SYNC_ALWAYS) &&
 	    dnode_has_dirty(dn))
 		error = zil_commit_async(zfsvfs->z_log, zp->z_id,
 		    zfs_read_async_resume, state);
@@ -917,6 +921,7 @@ typedef struct zfs_write_state {
 	dmu_ctx_t	zws_dc;
 	znode_t	*zws_zp;
 	dnode_t	*zws_dn;
+	cred_t	*zws_cr;
 	dmu_buf_impl_t	*zws_db;
 	zfs_locked_range_t	*zws_lr;
 	struct uio_bio	*zws_uio;
@@ -942,12 +947,11 @@ zfs_rangelock_write_async(zfs_write_state_t *state)
 	zfs_locked_range_t *lr;
 	znode_t *zp = state->zws_zp;
 	struct uio_bio *uio = state->zws_uio;
-	struct thread *td = uio->uio_td;
 
 	woff = state->zws_uio->uio_loffset;
 	range_len = state->zws_uio->uio_resid;
-	range_off = (state->zws_ioflag & FAPPEND) ? 0 : woff;
-	type = (state->zws_ioflag & FAPPEND) ? RL_APPEND : RL_WRITER;
+	range_off = (state->zws_ioflag & O_APPEND) ? 0 : woff;
+	type = (state->zws_ioflag & O_APPEND) ? RL_APPEND : RL_WRITER;
 
 	if ((state->zws_done & ZWS_RANGELOCK_PRE) == 0) {
 		state->zws_done |= ZWS_RANGELOCK_PRE;
@@ -960,7 +964,7 @@ zfs_rangelock_write_async(zfs_write_state_t *state)
 		}
 	}
 	lr = state->zws_lr;
-	if (state->zws_ioflag & FAPPEND) {
+	if (state->zws_ioflag & O_APPEND) {
 		woff = lr->lr_offset;
 		if (lr->lr_length == UINT64_MAX) {
 			/*
@@ -974,7 +978,8 @@ zfs_rangelock_write_async(zfs_write_state_t *state)
 	}
 	if (woff > MAXOFFSET_T)
 		return (EFBIG);
-#ifdef RLIMIT_FSIZE
+#ifdef __FreeBSD__
+	struct thread *td = uio->uio_td;
 	if (uio->uio_loffset + uio->uio_resid > lim_cur(td, RLIMIT_FSIZE)) {
 		PROC_LOCK(td->td_proc);
 		kern_psignal(td->td_proc, SIGXFSZ);
@@ -989,22 +994,23 @@ static void
 zfs_write_async_epilogue(zfs_write_state_t *state)
 {
 	int rc = state->zws_rc;
+	zfsvfs_t	*zfsvfs = ZTOZSB(state->zws_zp);
 	struct uio_bio *uio = state->zws_uio;
 
-	if ((state->zws_done & ZWS_BLOCKED) == 0)
-		return;
-
-	if (state->zws_lr)
+	if (state->zws_lr) {
+		zfs_inode_update(state->zws_zp);
 		zfs_rangelock_exit(state->zws_lr);
+	}
 	if (state->zws_dn)
 		DB_DNODE_EXIT(state->zws_db);
-	ZFS_EXIT(state->zws_zp->z_zfsvfs);
+	ZFS_EXIT(zfsvfs);
 
 	if (rc && rc != EINPROGRESS) {
 		uio->uio_flags |= UIO_BIO_ERROR;
 		uio->uio_error = rc;
 	}
-	kmem_free(state, sizeof (*state));
+	if (state->zws_done & ZWS_BLOCKED)
+		kmem_free(state, sizeof (*state));
 	uio->uio_bio_done(uio);
 }
 
@@ -1012,11 +1018,11 @@ static void
 zfs_write_async_resume(zfs_write_state_t *state)
 {
 	znode_t		*zp = state->zws_zp;
-	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	zfsvfs_t	*zfsvfs = ZTOZSB(zp);
 	struct uio_bio *uio = state->zws_uio;
 	rlim64_t	limit = MAXOFFSET_T;
 	int		max_blksz = zfsvfs->z_max_blksz;
-	struct ucred *cr = uio->uio_td->td_ucred;
+	cred_t *cr = state->zws_cr;
 	zilog_t		*zilog;
 	dmu_buf_impl_t *db;
 	dnode_t *dn;
@@ -1045,8 +1051,8 @@ zfs_write_async_resume(zfs_write_state_t *state)
 	write_eof = (woff + n > zp->z_size);
 
 	end_size = MAX(zp->z_size, woff + n);
-	uid = zp->z_uid;
-	gid = zp->z_gid;
+	uid = KUID_TO_SUID(ZTOUID(zp));
+	gid = KGID_TO_SGID(ZTOGID(zp));
 	projid = zp->z_projid;
 
 	if (zfs_id_overblockquota(zfsvfs, DMU_USERUSED_OBJECT, uid) ||
@@ -1105,8 +1111,6 @@ zfs_write_async_resume(zfs_write_state_t *state)
 	}
 	if ((state->zws_done & ZWS_DMU_ISSUED) == 0) {
 		state->zws_done |= ZWS_DMU_ISSUED;
-		if (woff + n > zp->z_size)
-			vnode_pager_setsize(ZTOV(zp), woff + n);
 		flags = DMU_CTX_FLAG_ASYNC | DMU_CTX_FLAG_NO_HOLD;
 		state->zws_tx_bytes = uio->uio_resid;
 		error = dmu_ctx_init(&state->zws_dc, dn, zfsvfs->z_os, zp->z_id,
@@ -1168,7 +1172,7 @@ zfs_write_async_resume(zfs_write_state_t *state)
 	    (S_IXUSR >> 6))) != 0 &&
 	    (zp->z_mode & (S_ISUID | S_ISGID)) != 0 &&
 	    secpolicy_vnode_setid_retain(zp, cr,
-	    (zp->z_mode & S_ISUID) != 0 && zp->z_uid == 0) != 0) {
+	    (zp->z_mode & S_ISUID) != 0 && uid == 0) != 0) {
 		uint64_t newmode;
 		zp->z_mode &= ~(S_ISUID | S_ISGID);
 		newmode = zp->z_mode;
@@ -1206,7 +1210,7 @@ zfs_write_async_resume(zfs_write_state_t *state)
 	if (error)
 		goto done;
 
-	if (state->zws_ioflag & (FSYNC | FDSYNC) ||
+	if (state->zws_ioflag & (O_SYNC | O_DSYNC) ||
 	    zfsvfs->z_os->os_sync == ZFS_SYNC_ALWAYS) {
 		error = zil_commit_async(zilog, zp->z_id,
 		    (callback_fn)zfs_write_async_epilogue, state);
@@ -1218,9 +1222,9 @@ done:
 }
 
 int
-zfs_write_async(znode_t *zp, struct uio_bio *uio, int ioflag)
+zfs_write_async(znode_t *zp, struct uio_bio *uio, int ioflag, cred_t *cr)
 {
-	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	zfsvfs_t	*zfsvfs = ZTOZSB(zp);
 	zfs_write_state_t *state;
 	sa_bulk_attr_t *bulk;
 	int rc, c;
@@ -1233,6 +1237,7 @@ zfs_write_async(znode_t *zp, struct uio_bio *uio, int ioflag)
 	state->zws_zp = zp;
 	state->zws_uio = uio;
 	state->zws_ioflag = ioflag;
+	state->zws_cr = cr;
 	bulk = (void*)&state->zws_bulk;
 	c = 0;
 	SA_ADD_BULK_ATTR(bulk, c, SA_ZPL_MTIME(zfsvfs), NULL,
@@ -1246,12 +1251,7 @@ zfs_write_async(znode_t *zp, struct uio_bio *uio, int ioflag)
 
 	zfs_write_async_resume(state);
 	rc = state->zws_rc;
-	if (rc && rc != EINPROGRESS) {
-		if (state->zws_lr)
-			zfs_rangelock_exit(state->zws_lr);
-		ZFS_EXIT(state->zws_zp->z_zfsvfs);
-		kmem_free(state, sizeof (*state));
-	}
+	kmem_free(state, sizeof (*state));
 	return (rc);
 }
 
@@ -1264,9 +1264,10 @@ static void
 zfs_sync_async_done(void *arg)
 {
 	zfs_sync_state_t *zss = arg;
+	zfsvfs_t	*zfsvfs = ZTOZSB(zss->zss_zp);
 	struct uio_bio *uio;
 
-	ZFS_EXIT(zss->zss_zp->z_zfsvfs);
+	ZFS_EXIT(zfsvfs);
 	uio = zss->zss_uio;
 	kmem_free(zss, sizeof (*zss));
 	uio->uio_bio_done(uio);
@@ -1275,7 +1276,7 @@ zfs_sync_async_done(void *arg)
 int
 zfs_sync_async(znode_t *zp, struct uio_bio *uio)
 {
-	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
+	zfsvfs_t	*zfsvfs = ZTOZSB(zp);
 	zfs_sync_state_t *zss;
 	int		rc;
 
@@ -1297,7 +1298,7 @@ zfs_sync_async(znode_t *zp, struct uio_bio *uio)
 }
 
 int
-zfs_ubop(znode_t *zp, struct uio_bio *uio, int ioflag)
+zfs_ubop(znode_t *zp, struct uio_bio *uio, int ioflag, cred_t *cr)
 {
 	uint8_t cmd;
 	int rc;
@@ -1308,7 +1309,7 @@ zfs_ubop(znode_t *zp, struct uio_bio *uio, int ioflag)
 			rc = zfs_read_async(zp, uio, ioflag);
 			break;
 		case UIO_BIO_WRITE:
-			rc = zfs_write_async(zp, uio, ioflag);
+			rc = zfs_write_async(zp, uio, ioflag, cr);
 			break;
 		case UIO_BIO_SYNC:
 			rc = zfs_sync_async(zp, uio);
