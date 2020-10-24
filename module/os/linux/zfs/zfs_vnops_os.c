@@ -241,6 +241,16 @@ zfs_close(struct inode *ip, int flag, cred_t *cr)
 }
 
 #if defined(_KERNEL)
+
+boolean_t
+zp_has_cached_in_range(znode_t *zp, off_t start, ssize_t len)
+{
+	if (len == 0 || !zn_has_cached_data(zp))
+		return (B_FALSE);
+
+	return (B_TRUE);
+}
+
 /*
  * When a file is memory mapped, we must keep the IO data synchronized
  * between the DMU cache and the memory mapped pages.  What this means:
@@ -286,6 +296,109 @@ update_pages(znode_t *zp, int64_t start, int len, objset_t *os)
 		off = 0;
 	}
 }
+
+typedef struct update_pages_async_state {
+	dmu_ctx_t	upas_dc;
+	struct uio_bio *upas_uio;
+	struct address_space *upas_as;
+	callback_fn upas_cb;
+	void *upas_arg;
+	boolean_t upas_yielded;
+} update_pages_async_state_t;
+
+static void
+update_pages_async_epilogue(update_pages_async_state_t *state)
+{
+	int page_count = state->upas_uio->uio_ma_cnt;
+	struct page *pp, **ma = state->upas_uio->uio_ma;
+	struct address_space *mp = state->upas_as;
+	callback_fn cb = state->upas_cb;
+	void *arg = state->upas_arg;
+	boolean_t yielded = state->upas_yielded;
+
+	for (int i = 0; i < page_count; i++) {
+		if ((pp = ma[i]) != NULL) {
+			if (mapping_writably_mapped(mp))
+				flush_dcache_page(pp);
+
+			mark_page_accessed(pp);
+			SetPageUptodate(pp);
+			ClearPageError(pp);
+			unlock_page(pp);
+			put_page(pp);
+		}
+	}
+	kmem_free(state->upas_uio, sizeof (struct uio_bio));
+	kmem_free(state, sizeof (*state));
+	kmem_free(ma, page_count * sizeof (struct page *));
+	if (yielded)
+		cb(arg);
+}
+
+int
+update_pages_async(znode_t *zp, int64_t start_, int len_, dnode_t *dn,
+    objset_t *os, uint64_t oid, callback_fn cb, void *arg)
+{
+	struct inode *ip = ZTOI(zp);
+	struct address_space *mp = ip->i_mapping;
+	update_pages_async_state_t *state;
+	struct uio_bio *uio;
+	struct page **ma, **map;
+	int64_t start = start_;
+	loff_t pend, pstart;
+	int off, page_count, len = len_;
+	int error, flags, uio_flags;
+
+	pstart = start &= PAGE_MASK;
+	pend = (start + len + PAGE_OFFSET) & PAGE_MASK;
+	page_count = ((pend - pstart) >> PAGE_SHIFT);
+	state = kmem_zalloc(sizeof (*state), KM_SLEEP);
+	state->upas_as = mp;
+	state->upas_cb = cb;
+	state->upas_arg = arg;
+
+	uio_flags = 0;
+	uio = kmem_zalloc(sizeof (*uio), KM_SLEEP);
+	state->upas_uio = uio;
+	map = ma = kmem_zalloc(page_count*sizeof (struct page *),
+	    KM_SLEEP);
+	uio->uio_ma = ma;
+	uio->uio_ma_cnt = page_count;
+	uio->uio_ma_offset = off = start & PAGE_OFFSET;
+	for (start &= PAGE_MASK; len > 0; start += PAGE_SIZE, map++) {
+		int nbytes = MIN(PAGESIZE - off, len);
+
+		*map = find_lock_page(mp, start >> PAGE_SHIFT);
+		if (*map) {
+			if (mapping_writably_mapped(mp))
+				flush_dcache_page(*map);
+		} else
+			uio_flags |= UIO_BIO_SPARSE;
+		len -= nbytes;
+		off = 0;
+	}
+	flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_ASYNC |
+	    DMU_CTX_FLAG_NO_HOLD | DMU_CTX_FLAG_PREFETCH;
+	uio->uio_flags = uio_flags;
+	error = dmu_ctx_init(&state->upas_dc, dn, os, oid, start_, len_,
+	    uio, FTAG, flags);
+	if (error)
+		goto out;
+	state->upas_dc.dc_data_transfer_cb = dmu_physmove;
+	dmu_ctx_set_complete_cb(&state->upas_dc,
+	    (dmu_ctx_cb_t)update_pages_async_epilogue);
+	error = dmu_issue(&state->upas_dc);
+	dmu_ctx_rele(&state->upas_dc);
+	if (error == 0 || error == EINPROGRESS) {
+		state->upas_yielded = B_TRUE;
+		return (EINPROGRESS);
+	}
+out:
+	update_pages_async_epilogue(state);
+	return (error);
+}
+
+
 
 /*
  * When a file is memory mapped, we must keep the IO data synchronized

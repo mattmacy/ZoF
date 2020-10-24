@@ -48,6 +48,31 @@ typedef enum uio_seg {
 	UIO_BVEC =		3,
 } uio_seg_t;
 
+enum uio_bio_cmd {
+	UIO_BIO_READ,
+	UIO_BIO_WRITE,
+	UIO_BIO_SYNC
+};
+
+enum uio_bio_flags {
+	UIO_BIO_ERROR = 1 << 0,
+	UIO_BIO_SPARSE = 2 << 0,
+};
+
+struct uio_bio {
+	uint8_t		uio_cmd;		/* operation */
+	uint8_t		uio_error;		/* Errno for UIO_BIO_ERROR. */
+	uint16_t	uio_ma_cnt;		/* scatter/gather list length */
+	uint16_t	uio_flags;		/* General flags */
+	off_t		uio_ma_offset;		/* offset in to page list */
+	off_t		uio_loffset;		/* offset in target object */
+	uint32_t	uio_resid;		/* remaining bytes to process */
+	struct	thread	*uio_td;		/* owner */
+	void	(*uio_bio_done)(struct uio_bio *);
+	void	*uio_arg;
+	struct	page **uio_ma;		/* user buffer's pages */
+};
+
 typedef struct uio {
 	union {
 		const struct iovec	*uio_iov;

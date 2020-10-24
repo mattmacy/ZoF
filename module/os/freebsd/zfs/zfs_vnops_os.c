@@ -696,7 +696,8 @@ update_pages_async(znode_t *zp, int64_t start_, int len_, dnode_t *dn,
 	struct uio_bio *uio;
 	vm_page_t *ma, *map;
 	int64_t start = start_;
-	int off, pstart, pend, page_count, len = len_;
+	off_t pend, pstart;
+	int off, page_count, len = len_;
 	int error, flags, uio_flags;
 
 	ASSERT(ZTOV(zp)->v_mount != NULL);
@@ -923,7 +924,8 @@ static int
 zfs_freebsd_ubop(struct vop_ubop_args *ap)
 {
 
-	return (zfs_ubop(VTOZ(ap->a_vp), ap->a_uio, ap->a_ioflag));
+	return (zfs_ubop(VTOZ(ap->a_vp), ap->a_uio, ap->a_ioflag,
+	    curthread->td_ucred));
 }
 #endif /* HAVE_UBOP */
 

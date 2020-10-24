@@ -71,7 +71,7 @@ extern void zfs_zrele_async(znode_t *zp);
 
 extern zil_get_data_t zfs_get_data;
 extern int zfs_sync_async(znode_t *, struct uio_bio *);
-extern int zfs_write_async(znode_t *, struct uio_bio *, int);
+extern int zfs_write_async(znode_t *, struct uio_bio *, int, cred_t *);
 extern int zfs_read_async(znode_t *, struct uio_bio *, int);
 extern void zfs_read_async_epilogue(zfs_read_state_t *, int);
 extern int update_pages_async(znode_t *, int64_t, int,
@@ -79,7 +79,7 @@ extern int update_pages_async(znode_t *, int64_t, int,
 extern void zfs_mappedread_async(zfs_read_state_t *);
 
 
-extern int zfs_ubop(znode_t *, struct uio_bio *, int);
+extern int zfs_ubop(znode_t *, struct uio_bio *, int, cred_t *);
 
 
 extern boolean_t zp_has_cached_in_range(znode_t *, off_t, ssize_t);

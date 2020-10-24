@@ -50,10 +50,6 @@
 #include <sys/abd.h>
 #include <sys/dsl_crypt.h>
 #include <cityhash.h>
-#ifndef _KERNEL
-static __inline uint32_t max(uint32_t a, uint32_t b) { return (a > b ? a : b); }
-#endif
-
 
 /*
  * ==========================================================================
@@ -296,7 +292,7 @@ zio_buf_alloc(size_t size)
 {
 #if defined(ZFS_DEBUG)
 	if (arc_watch)
-		size = max(size, PAGE_SIZE);
+		size = MAX(size, PAGESIZE);
 #endif
 	size_t c = (size - 1) >> SPA_MINBLOCKSHIFT;
 
@@ -319,7 +315,7 @@ zio_data_buf_alloc(size_t size)
 {
 #if defined(ZFS_DEBUG)
 	if (arc_watch)
-		size = max(size, PAGE_SIZE);
+		size = MAX(size, PAGESIZE);
 #endif
 	size_t c = (size - 1) >> SPA_MINBLOCKSHIFT;
 
@@ -333,7 +329,7 @@ zio_buf_free(void *buf, size_t size)
 {
 #if defined(ZFS_DEBUG)
 	if (arc_watch)
-		size = max(size, PAGE_SIZE);
+		size = MAX(size, PAGESIZE);
 #endif
 	size_t c = (size - 1) >> SPA_MINBLOCKSHIFT;
 
@@ -350,7 +346,7 @@ zio_data_buf_free(void *buf, size_t size)
 {
 #if defined(ZFS_DEBUG)
 	if (arc_watch)
-		size = max(size, PAGE_SIZE);
+		size = MAX(size, PAGESIZE);
 #endif
 	size_t c = (size - 1) >> SPA_MINBLOCKSHIFT;
 
