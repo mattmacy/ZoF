@@ -241,6 +241,7 @@ zfs_close(struct inode *ip, int flag, cred_t *cr)
 }
 
 #if defined(_KERNEL)
+#define		OFF_TO_IDX(off) (((loff_t)(off)) >> PAGE_SHIFT)
 
 boolean_t
 zp_has_cached_in_range(znode_t *zp, off_t start, ssize_t len)
@@ -454,6 +455,124 @@ mappedread(znode_t *zp, int nbytes, uio_t *uio)
 	}
 	return (error);
 }
+
+static void
+zfs_readholes_async_resume(void *arg)
+{
+	zfs_read_state_t *state = arg;
+	dnode_t		*dn = state->zrs_dn;
+	znode_t *zp = state->zrs_zp;
+	zfsvfs_t	*zfsvfs = ZTOZSB(zp);
+	struct uio_bio *uiotmp, *uio = state->zrs_uio;
+	struct iovec *iov;
+	loff_t offset;
+	int error, flags, index = 0;
+
+	if (state->zrs_dc.dc_err ||
+	    state->zrs_hole_index == state->zrs_hole_count) {
+		int free_size = ((uio->uio_ma_cnt + 1)/2) *
+		    sizeof (struct iovec);
+		kmem_free(state->zrs_holes, free_size);
+		kmem_free(state->zrs_uio_tmp, sizeof (*uio));
+		zfs_read_async_epilogue(state, state->zrs_dc.dc_err);
+		return;
+	}
+	uiotmp = state->zrs_uio_tmp;
+	if (uiotmp == NULL)  {
+		uiotmp = kmem_alloc(sizeof (*uio), KM_SLEEP);
+		state->zrs_uio_tmp = uiotmp;
+	}
+	memcpy(uiotmp, uio, sizeof (*uio));
+	iov = &state->zrs_holes[state->zrs_hole_index];
+	offset = (loff_t)iov->iov_base;
+	index  = OFF_TO_IDX(offset - uio->uio_loffset);
+	uiotmp->uio_ma = uio->uio_ma + index;
+	uiotmp->uio_resid = iov->iov_len;
+	if (index == 0)
+		uiotmp->uio_ma_offset = uio->uio_ma_offset;
+	flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_ASYNC |
+	    DMU_CTX_FLAG_NO_HOLD | DMU_CTX_FLAG_PREFETCH;
+	error = dmu_ctx_init(&state->zrs_dc, dn, zfsvfs->z_os, zp->z_id,
+	    offset, uiotmp->uio_resid, uiotmp, FTAG, flags);
+	if (error)
+		goto out;
+	state->zrs_dc.dc_data_transfer_cb = dmu_physmove;
+	dmu_ctx_set_complete_cb(&state->zrs_dc,
+	    (dmu_ctx_cb_t)zfs_readholes_async_resume);
+	state->zrs_hole_index++;
+	error = dmu_issue(&state->zrs_dc);
+	dmu_ctx_rele(&state->zrs_dc);
+	if (error == 0 || error == EINPROGRESS)
+		return;
+out:
+	kmem_free(state->zrs_holes, ((uio->uio_ma_cnt + 1)/2) * sizeof (*iov));
+	if (state->zrs_uio_tmp)
+		kmem_free(state->zrs_uio_tmp, sizeof (*uio));
+	zfs_read_async_epilogue(state, error);
+}
+
+void
+zfs_mappedread_async(zfs_read_state_t *state)
+{
+	znode_t		*zp = state->zrs_zp;
+	struct uio_bio *uio = state->zrs_uio;
+	struct inode *ip = ZTOI(zp);
+	struct address_space *mp = ip->i_mapping;
+	struct iovec *holes;
+	int i, len, bytes, page_count, off;
+	int error, hole_count, hole_start, holes_size;
+	int64_t start, pstart, pend;
+	caddr_t srcpb, dstpb;
+	struct page *pp;
+
+	start = uio->uio_loffset;
+	pstart = OFF_TO_IDX(start &= PAGE_MASK);
+	len = MIN(uio->uio_resid, zp->z_size - start);
+	pend = (start + len + PAGE_OFFSET) & PAGE_MASK;
+	page_count = OFF_TO_IDX(pend - pstart);
+	holes_size = ((uio->uio_ma_cnt + 1)/2) * sizeof (*holes);
+	holes = kmem_zalloc(holes_size, KM_SLEEP);
+	hole_count = i = 0;
+	off = start & PAGE_OFFSET;
+	hole_start = -1;
+	for (start &= PAGE_MASK; len > 0; start += PAGESIZE, i++) {
+		bytes = MIN(PAGESIZE - off, len);
+		pp = find_lock_page(mp, start >> PAGE_SHIFT);
+		if (pp == NULL) {
+			if (hole_start == -1) {
+				hole_start = i;
+				hole_count++;
+			}
+			holes[hole_count-1].iov_len += bytes;
+			holes[hole_count-1].iov_base = (caddr_t)(start + off);
+			len -= bytes;
+			off = 0;
+			continue;
+		}
+		hole_start = -1;
+		srcpb = kmap(pp);
+		srcpb += off;
+		dstpb = kmap(uio->uio_ma[i]);
+		dstpb += off;
+		memcpy(dstpb, srcpb, bytes);
+		kunmap(pp);
+		kunmap(uio->uio_ma[i]);
+		len -= bytes;
+		off = 0;
+	}
+	if (hole_count == 0) {
+		kmem_free(holes, holes_size);
+		error = 0;
+		goto out;
+	}
+	state->zrs_holes = holes;
+	state->zrs_hole_count = hole_count;
+	zfs_readholes_async_resume(state);
+	return;
+out:
+	zfs_read_async_epilogue(state, error);
+}
+
 #endif /* _KERNEL */
 
 unsigned long zfs_delete_blocks = DMU_MAX_DELETEBLKCNT;
