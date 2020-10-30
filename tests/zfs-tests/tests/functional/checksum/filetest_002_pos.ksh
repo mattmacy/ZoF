@@ -102,8 +102,10 @@ while [[ $j -lt ${#CHECKSUM_TYPES[*]} ]]; do
 	# Corrupt the level 1 blocks of this file
 	corrupt_blocks_at_level $TESTDIR/test_$type 1
 
-	log_must zpool scrub $TESTPOOL
-	log_must wait_scrubbed $TESTPOOL
+	log_must zpool export $TESTPOOL
+	log_must zpool import $TESTPOOL
+
+	log_mustnot cat $TESTDIR/test_$type
 
 	cksum=$(zpool status -P -v $TESTPOOL | grep "$firstvdev" | \
 	    awk '{print $5}')
