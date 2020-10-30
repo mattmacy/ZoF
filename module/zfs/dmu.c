@@ -871,10 +871,10 @@ dmu_buf_set_init(dmu_ctx_t *dmu_ctx, dmu_buf_set_t **buf_set_p,
  *          0		Success.
  */
 static int
-dmu_buf_set_process_io(dmu_buf_set_t *dbs)
+dmu_buf_set_process_io(dmu_buf_set_t *dbs, int inerr)
 {
-	int err, i;
 	dmu_ctx_t *dmu_ctx = dbs->dbs_dc;
+	int err;
 
 	/*
 	 * If the I/O is asynchronous, issue the I/O's without waiting.
@@ -883,7 +883,7 @@ dmu_buf_set_process_io(dmu_buf_set_t *dbs)
 	if ((dmu_ctx->dc_flags & DMU_CTX_FLAG_ASYNC) ||
 	    (dmu_ctx->dc_flags & DMU_CTX_FLAG_READ) == 0) {
 		zio_nowait(dbs->dbs_zio);
-		return (0);
+		return (inerr);
 	}
 
 	/* Wait for async i/o. */
@@ -897,7 +897,9 @@ dmu_buf_set_process_io(dmu_buf_set_t *dbs)
 			cv_wait(&dmu_ctx->dc_cv_done, &dmu_ctx->dc_mtx);
 		mutex_exit(&dmu_ctx->dc_mtx);
 	}
-	for (i = 0; i < dbs->dbs_count; i++) {
+	if (inerr)
+		return (inerr);
+	for (int i = 0; i < dbs->dbs_count; i++) {
 		dmu_buf_impl_t *db = (dmu_buf_impl_t *)dbs->dbs_dbp[i];
 		if (db->db_state == DB_UNCACHED)
 			err = SET_ERROR(EIO);
@@ -953,7 +955,7 @@ dmu_issue(dmu_ctx_t *dc)
 			return (0);
 		/* Process the I/O requests, if the initialization passed. */
 		if (dbs != NULL) {
-			err = dmu_buf_set_process_io(dbs);
+			err = dmu_buf_set_process_io(dbs, err);
 			dmu_buf_set_rele(&dbs->dbs_ctx, err);
 		}
 	}
@@ -1005,7 +1007,7 @@ dmu_issue_restart(dmu_buf_ctx_t *dbs_ctx, int err)
 			return;
 		/* Process the I/O requests, if the initialization passed. */
 		if (dbs != NULL) {
-			err = dmu_buf_set_process_io(dbs);
+			err = dmu_buf_set_process_io(dbs, err);
 			dmu_buf_set_rele(&dbs->dbs_ctx, err);
 		}
 		dbs = NULL;
