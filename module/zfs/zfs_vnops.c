@@ -556,28 +556,33 @@ zfs_write(znode_t *zp, uio_t *uio, int ioflag, cred_t *cr)
 			}
 			tx_bytes -= uio->uio_resid;
 		} else {
-			/*
-			 * Is this block ever reached?
-			 */
-			tx_bytes = nbytes;
-			/*
-			 * If this is not a full block write, but we are
-			 * extending the file past EOF and this data starts
-			 * block-aligned, use assign_arcbuf().  Otherwise,
-			 * write via dmu_write().
-			 */
+			/* Implied by abuf != NULL: */
+			ASSERT3S(n, >=, max_blksz);
+			ASSERT3S(woff, >=, zp->z_size);
+			ASSERT0(P2PHASE(woff, max_blksz));
+			/* By definition: */
+			ASSERT3S(nbytes, <=, max_blksz);
+			ASSERT3S(nbytes, <=, n);
+			/* Therefore: */
+			ASSERT3S(nbytes, ==, max_blksz);
+			ASSERT3S(nbytes, <=, uio->uio_resid);
 
-			if (tx_bytes == max_blksz) {
-				error = dmu_assign_arcbuf_by_dbuf(
-				    sa_get_db(zp->z_sa_hdl), woff, abuf, tx);
-				if (error != 0) {
-					dmu_return_arcbuf(abuf);
-					dmu_tx_commit(tx);
-					break;
-				}
+			/*
+			 * We are writing a full block at a block-aligned
+			 * offset and extending the file past EOF.
+			 *
+			 * dmu_assign_arcbuf_by_dbuf() will directly assign the
+			 * arc buffer to a dbuf.
+			 */
+			error = dmu_assign_arcbuf_by_dbuf(
+			    sa_get_db(zp->z_sa_hdl), woff, abuf, tx);
+			if (error != 0) {
+				dmu_return_arcbuf(abuf);
+				dmu_tx_commit(tx);
+				break;
 			}
-			ASSERT(tx_bytes <= uio->uio_resid);
-			uioskip(uio, tx_bytes);
+			uioskip(uio, nbytes);
+			tx_bytes = nbytes;
 		}
 		if (tx_bytes && zn_has_cached_data(zp) &&
 		    !(ioflag & O_DIRECT)) {
