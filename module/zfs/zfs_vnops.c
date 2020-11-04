@@ -639,7 +639,10 @@ zfs_write(znode_t *zp, uio_t *uio, int ioflag, cred_t *cr)
 		if (zfsvfs->z_replay && zfsvfs->z_replay_eof != 0)
 			zp->z_size = zfsvfs->z_replay_eof;
 
-		error = sa_bulk_update(zp->z_sa_hdl, bulk, count, tx);
+		if (error == 0)
+			error = sa_bulk_update(zp->z_sa_hdl, bulk, count, tx);
+		else
+			(void) sa_bulk_update(zp->z_sa_hdl, bulk, count, tx);
 
 		zfs_log_write(zilog, tx, TX_WRITE, zp, woff, tx_bytes, ioflag,
 		    NULL, NULL);
