@@ -544,7 +544,7 @@ zfs_write(znode_t *zp, uio_t *uio, int ioflag, cred_t *cr)
 		while ((end_size = zp->z_size) < uio->uio_loffset) {
 			(void) atomic_cas_64(&zp->z_size, end_size,
 			    uio->uio_loffset);
-			ASSERT(error == 0);
+			ASSERT(error == 0 || error == EFAULT);
 		}
 		/*
 		 * If we are replaying and eof is non zero then force
@@ -580,7 +580,7 @@ zfs_write(znode_t *zp, uio_t *uio, int ioflag, cred_t *cr)
 	 * If we're in replay mode, or we made no progress, return error.
 	 * Otherwise, it's at least a partial write, so it's successful.
 	 */
-	if (zfsvfs->z_replay || uio->uio_resid == start_resid) {
+	if (zfsvfs->z_replay || uio->uio_resid == start_resid || error == EFAULT) {
 		ZFS_EXIT(zfsvfs);
 		return (error);
 	}
