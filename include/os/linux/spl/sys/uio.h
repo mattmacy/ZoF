@@ -56,7 +56,9 @@ enum uio_bio_cmd {
 
 enum uio_bio_flags {
 	UIO_BIO_ERROR = 1 << 0,
-	UIO_BIO_SPARSE = 2 << 0,
+	UIO_BIO_SPARSE = 1 << 1,
+	UIO_BIO_USER = 1 << 2,
+	UIO_BIO_PREEMPTED = 1 << 3,
 };
 
 struct uio_bio {
@@ -67,10 +69,10 @@ struct uio_bio {
 	off_t		uio_ma_offset;		/* offset in to page list */
 	off_t		uio_loffset;		/* offset in target object */
 	uint32_t	uio_resid;		/* remaining bytes to process */
-	struct	thread	*uio_td;		/* owner */
+	struct cred *uio_cred;
 	void	(*uio_bio_done)(struct uio_bio *);
 	void	*uio_arg;
-	struct	page **uio_ma;		/* user buffer's pages */
+	struct	bio_vec *uio_bvec;		/* user buffer's pages */
 };
 
 typedef struct uio {

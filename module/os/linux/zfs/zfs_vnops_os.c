@@ -311,14 +311,15 @@ static void
 update_pages_async_epilogue(update_pages_async_state_t *state)
 {
 	int page_count = state->upas_uio->uio_ma_cnt;
-	struct page *pp, **ma = state->upas_uio->uio_ma;
+	struct page *pp;
+	struct bio_vec *bvec = state->upas_uio->uio_bvec;
 	struct address_space *mp = state->upas_as;
 	callback_fn cb = state->upas_cb;
 	void *arg = state->upas_arg;
 	boolean_t yielded = state->upas_yielded;
 
 	for (int i = 0; i < page_count; i++) {
-		if ((pp = ma[i]) != NULL) {
+		if ((pp = bvec[i].bv_page) != NULL) {
 			if (mapping_writably_mapped(mp))
 				flush_dcache_page(pp);
 
@@ -331,7 +332,7 @@ update_pages_async_epilogue(update_pages_async_state_t *state)
 	}
 	kmem_free(state->upas_uio, sizeof (struct uio_bio));
 	kmem_free(state, sizeof (*state));
-	kmem_free(ma, page_count * sizeof (struct page *));
+	kmem_free(bvec, page_count * sizeof (struct bio_vec *));
 	if (yielded)
 		cb(arg);
 }

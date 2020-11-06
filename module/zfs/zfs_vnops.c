@@ -933,7 +933,6 @@ typedef struct zfs_write_state {
 	dmu_ctx_t	zws_dc;
 	znode_t	*zws_zp;
 	dnode_t	*zws_dn;
-	cred_t	*zws_cr;
 	dmu_buf_impl_t	*zws_db;
 	zfs_locked_range_t	*zws_lr;
 	struct uio_bio	*zws_uio;
@@ -1034,7 +1033,7 @@ zfs_write_async_resume(zfs_write_state_t *state)
 	struct uio_bio *uio = state->zws_uio;
 	rlim64_t	limit = MAXOFFSET_T;
 	int		max_blksz = zfsvfs->z_max_blksz;
-	cred_t *cr = state->zws_cr;
+	cred_t *cr = uio->uio_cred;
 	zilog_t		*zilog;
 	dmu_buf_impl_t *db;
 	dnode_t *dn;
@@ -1234,7 +1233,7 @@ done:
 }
 
 int
-zfs_write_async(znode_t *zp, struct uio_bio *uio, int ioflag, cred_t *cr)
+zfs_write_async(znode_t *zp, struct uio_bio *uio, int ioflag)
 {
 	zfsvfs_t	*zfsvfs = ZTOZSB(zp);
 	zfs_write_state_t *state;
@@ -1249,7 +1248,6 @@ zfs_write_async(znode_t *zp, struct uio_bio *uio, int ioflag, cred_t *cr)
 	state->zws_zp = zp;
 	state->zws_uio = uio;
 	state->zws_ioflag = ioflag;
-	state->zws_cr = cr;
 	bulk = (void*)&state->zws_bulk;
 	c = 0;
 	SA_ADD_BULK_ATTR(bulk, c, SA_ZPL_MTIME(zfsvfs), NULL,
@@ -1310,7 +1308,7 @@ zfs_sync_async(znode_t *zp, struct uio_bio *uio)
 }
 
 int
-zfs_ubop(znode_t *zp, struct uio_bio *uio, int ioflag, cred_t *cr)
+zfs_ubop(znode_t *zp, struct uio_bio *uio, int ioflag)
 {
 	uint8_t cmd;
 	int rc;
@@ -1321,7 +1319,7 @@ zfs_ubop(znode_t *zp, struct uio_bio *uio, int ioflag, cred_t *cr)
 			rc = zfs_read_async(zp, uio, ioflag);
 			break;
 		case UIO_BIO_WRITE:
-			rc = zfs_write_async(zp, uio, ioflag, cr);
+			rc = zfs_write_async(zp, uio, ioflag);
 			break;
 		case UIO_BIO_SYNC:
 			rc = zfs_sync_async(zp, uio);

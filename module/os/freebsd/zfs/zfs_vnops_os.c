@@ -924,8 +924,7 @@ static int
 zfs_freebsd_ubop(struct vop_ubop_args *ap)
 {
 
-	return (zfs_ubop(VTOZ(ap->a_vp), ap->a_uio, ap->a_ioflag,
-	    curthread->td_ucred));
+	return (zfs_ubop(VTOZ(ap->a_vp), ap->a_uio, ap->a_ioflag));
 }
 #endif /* HAVE_UBOP */
 

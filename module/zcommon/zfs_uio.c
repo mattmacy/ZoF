@@ -175,6 +175,16 @@ uiomove(void *p, size_t n, enum uio_rw rw, struct uio *uio)
 }
 EXPORT_SYMBOL(uiomove);
 
+
+#ifdef notyet
+int
+uiobiomove(void *cp, int n, struct uio_bio *uio)
+{
+	ssize_t resid, size;
+	int pageoff, pageidx;  
+}
+#endif
+
 #define	fuword8(uptr, vptr)	get_user((*vptr), (uptr))
 
 /*
