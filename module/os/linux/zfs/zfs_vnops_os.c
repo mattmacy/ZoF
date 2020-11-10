@@ -345,14 +345,14 @@ update_pages_async(znode_t *zp, int64_t start_, int len_, dnode_t *dn,
 	struct address_space *mp = ip->i_mapping;
 	update_pages_async_state_t *state;
 	struct uio_bio *uio;
-	struct page **ma, **map;
+	struct bio_vec *bv;
 	int64_t start = start_;
 	loff_t pend, pstart;
 	int off, page_count, len = len_;
 	int error, flags, uio_flags;
 
 	pstart = start &= PAGE_MASK;
-	pend = (start + len + PAGE_OFFSET) & PAGE_MASK;
+	pend = (start + len + PAGEOFFSET) & PAGEMASK;
 	page_count = ((pend - pstart) >> PAGE_SHIFT);
 	state = kmem_zalloc(sizeof (*state), KM_SLEEP);
 	state->upas_as = mp;
@@ -362,20 +362,23 @@ update_pages_async(znode_t *zp, int64_t start_, int len_, dnode_t *dn,
 	uio_flags = 0;
 	uio = kmem_zalloc(sizeof (*uio), KM_SLEEP);
 	state->upas_uio = uio;
-	map = ma = kmem_zalloc(page_count*sizeof (struct page *),
+	bv = kmem_zalloc(page_count*sizeof (struct bio_vec *),
 	    KM_SLEEP);
-	uio->uio_ma = ma;
+	uio->uio_bvec = bv;
 	uio->uio_ma_cnt = page_count;
 	uio->uio_ma_offset = off = start & PAGE_OFFSET;
-	for (start &= PAGE_MASK; len > 0; start += PAGE_SIZE, map++) {
+	for (start &= PAGE_MASK; len > 0; start += PAGE_SIZE, bv++) {
+		struct page *pp;
 		int nbytes = MIN(PAGESIZE - off, len);
 
-		*map = find_lock_page(mp, start >> PAGE_SHIFT);
-		if (*map) {
+		pp = find_lock_page(mp, start >> PAGE_SHIFT);
+		if (pp) {
 			if (mapping_writably_mapped(mp))
-				flush_dcache_page(*map);
+				flush_dcache_page(pp);
 		} else
 			uio_flags |= UIO_BIO_SPARSE;
+		bv->bv_page = pp;
+		bv->bv_len = nbytes;
 		len -= nbytes;
 		off = 0;
 	}
@@ -486,7 +489,7 @@ zfs_readholes_async_resume(void *arg)
 	iov = &state->zrs_holes[state->zrs_hole_index];
 	offset = (loff_t)iov->iov_base;
 	index  = OFF_TO_IDX(offset - uio->uio_loffset);
-	uiotmp->uio_ma = uio->uio_ma + index;
+	uiotmp->uio_bvec = uio->uio_bvec + index;
 	uiotmp->uio_resid = iov->iov_len;
 	if (index == 0)
 		uiotmp->uio_ma_offset = uio->uio_ma_offset;
@@ -552,11 +555,11 @@ zfs_mappedread_async(zfs_read_state_t *state)
 		hole_start = -1;
 		srcpb = kmap(pp);
 		srcpb += off;
-		dstpb = kmap(uio->uio_ma[i]);
+		dstpb = kmap(uio->uio_bvec[i].bv_page);
 		dstpb += off;
 		memcpy(dstpb, srcpb, bytes);
 		kunmap(pp);
-		kunmap(uio->uio_ma[i]);
+		kunmap(uio->uio_bvec[i].bv_page);
 		len -= bytes;
 		off = 0;
 	}

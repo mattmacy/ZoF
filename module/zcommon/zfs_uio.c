@@ -176,14 +176,39 @@ uiomove(void *p, size_t n, enum uio_rw rw, struct uio *uio)
 EXPORT_SYMBOL(uiomove);
 
 
-#ifdef notyet
 int
-uiobiomove(void *cp, int n, struct uio_bio *uio)
+uiobiomove(void *p, int n, struct uio_bio *uio)
 {
-	ssize_t resid, size;
-	int pageoff, pageidx;  
+	const struct bio_vec *bv = uio->uio_bvec;
+	size_t skip = uio->uio_ma_offset;
+	uint8_t cmd = uio->uio_cmd;
+	ulong_t cnt;
+
+	bv += (skip >> PAGESHIFT);
+	while (n && uio->uio_resid) {
+		void *paddr;
+		cnt = MIN(bv->bv_len - skip, n);
+
+		if ((uio->uio_flags & UIO_BIO_SPARSE) == 0 || bv->bv_page != NULL) {
+			paddr = zfs_kmap_atomic(bv->bv_page, KM_USER1);
+			if (cmd == UIO_BIO_READ)
+				bcopy(p, paddr + bv->bv_offset + skip, cnt);
+			else
+				bcopy(paddr + bv->bv_offset + skip, p, cnt);
+			zfs_kunmap_atomic(paddr, KM_USER1);
+		}
+		skip += cnt;
+		if (skip == bv->bv_len)
+			skip = 0;
+		uio->uio_ma_offset = skip;
+		uio->uio_resid -= cnt;
+		uio->uio_loffset += cnt;
+		p = (caddr_t)p + cnt;
+		n -= cnt;
+	}
+	return (0);
 }
-#endif
+EXPORT_SYMBOL(uiobiomove);
 
 #define	fuword8(uptr, vptr)	get_user((*vptr), (uptr))
 
