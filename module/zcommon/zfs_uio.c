@@ -180,7 +180,7 @@ int
 uiobiomove(void *p, int n, struct uio_bio *uio)
 {
 	const struct bio_vec *bv = uio->uio_bvec;
-	size_t skip = uio->uio_ma_offset;
+	size_t skip = uio->uio_bv_offset;
 	uint8_t cmd = uio->uio_cmd;
 	ulong_t cnt;
 
@@ -189,7 +189,8 @@ uiobiomove(void *p, int n, struct uio_bio *uio)
 		void *paddr;
 		cnt = MIN(bv->bv_len - skip, n);
 
-		if ((uio->uio_flags & UIO_BIO_SPARSE) == 0 || bv->bv_page != NULL) {
+		if ((uio->uio_flags & UIO_BIO_SPARSE) == 0 ||
+		    bv->bv_page != NULL) {
 			paddr = zfs_kmap_atomic(bv->bv_page, KM_USER1);
 			if (cmd == UIO_BIO_READ)
 				bcopy(p, paddr + bv->bv_offset + skip, cnt);
@@ -200,7 +201,7 @@ uiobiomove(void *p, int n, struct uio_bio *uio)
 		skip += cnt;
 		if (skip == bv->bv_len)
 			skip = 0;
-		uio->uio_ma_offset = skip;
+		uio->uio_bv_offset = skip;
 		uio->uio_resid -= cnt;
 		uio->uio_loffset += cnt;
 		p = (caddr_t)p + cnt;

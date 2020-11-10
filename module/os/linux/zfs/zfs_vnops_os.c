@@ -280,7 +280,7 @@ update_pages(znode_t *zp, int64_t start, int len, objset_t *os)
 
 			pb = kmap(pp);
 			(void) dmu_read(os, zp->z_id, start + off, nbytes,
-			    pb + off, DMU_READ_PREFETCH);
+			    pb + off, DMU_CTX_FLAG_PREFETCH);
 			kunmap(pp);
 
 			if (mapping_writably_mapped(mp))
@@ -310,7 +310,7 @@ typedef struct update_pages_async_state {
 static void
 update_pages_async_epilogue(update_pages_async_state_t *state)
 {
-	int page_count = state->upas_uio->uio_ma_cnt;
+	int page_count = state->upas_uio->uio_bv_cnt;
 	struct page *pp;
 	struct bio_vec *bvec = state->upas_uio->uio_bvec;
 	struct address_space *mp = state->upas_as;
@@ -365,8 +365,8 @@ update_pages_async(znode_t *zp, int64_t start_, int len_, dnode_t *dn,
 	bv = kmem_zalloc(page_count*sizeof (struct bio_vec *),
 	    KM_SLEEP);
 	uio->uio_bvec = bv;
-	uio->uio_ma_cnt = page_count;
-	uio->uio_ma_offset = off = start & PAGE_OFFSET;
+	uio->uio_bv_cnt = page_count;
+	uio->uio_bv_offset = off = start & PAGE_OFFSET;
 	for (start &= PAGE_MASK; len > 0; start += PAGE_SIZE, bv++) {
 		struct page *pp;
 		int nbytes = MIN(PAGESIZE - off, len);
@@ -402,8 +402,6 @@ out:
 	update_pages_async_epilogue(state);
 	return (error);
 }
-
-
 
 /*
  * When a file is memory mapped, we must keep the IO data synchronized
@@ -473,7 +471,7 @@ zfs_readholes_async_resume(void *arg)
 
 	if (state->zrs_dc.dc_err ||
 	    state->zrs_hole_index == state->zrs_hole_count) {
-		int free_size = ((uio->uio_ma_cnt + 1)/2) *
+		int free_size = ((uio->uio_bv_cnt + 1)/2) *
 		    sizeof (struct iovec);
 		kmem_free(state->zrs_holes, free_size);
 		kmem_free(state->zrs_uio_tmp, sizeof (*uio));
@@ -492,7 +490,7 @@ zfs_readholes_async_resume(void *arg)
 	uiotmp->uio_bvec = uio->uio_bvec + index;
 	uiotmp->uio_resid = iov->iov_len;
 	if (index == 0)
-		uiotmp->uio_ma_offset = uio->uio_ma_offset;
+		uiotmp->uio_bv_offset = uio->uio_bv_offset;
 	flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_ASYNC |
 	    DMU_CTX_FLAG_NO_HOLD | DMU_CTX_FLAG_PREFETCH;
 	error = dmu_ctx_init(&state->zrs_dc, dn, zfsvfs->z_os, zp->z_id,
@@ -508,7 +506,7 @@ zfs_readholes_async_resume(void *arg)
 	if (error == 0 || error == EINPROGRESS)
 		return;
 out:
-	kmem_free(state->zrs_holes, ((uio->uio_ma_cnt + 1)/2) * sizeof (*iov));
+	kmem_free(state->zrs_holes, ((uio->uio_bv_cnt + 1)/2) * sizeof (*iov));
 	if (state->zrs_uio_tmp)
 		kmem_free(state->zrs_uio_tmp, sizeof (*uio));
 	zfs_read_async_epilogue(state, error);
@@ -533,7 +531,7 @@ zfs_mappedread_async(zfs_read_state_t *state)
 	len = MIN(uio->uio_resid, zp->z_size - start);
 	pend = (start + len + PAGE_OFFSET) & PAGE_MASK;
 	page_count = OFF_TO_IDX(pend - pstart);
-	holes_size = ((uio->uio_ma_cnt + 1)/2) * sizeof (*holes);
+	holes_size = ((uio->uio_bv_cnt + 1)/2) * sizeof (*holes);
 	holes = kmem_zalloc(holes_size, KM_SLEEP);
 	hole_count = i = 0;
 	off = start & PAGE_OFFSET;

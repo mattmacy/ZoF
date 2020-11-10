@@ -828,7 +828,7 @@ zfs_read_async_resume(void *arg)
 	zfsvfs_t	*zfsvfs = ZTOZSB(zp);
 	struct uio_bio *uio = state->zrs_uio;
 	dnode_t *dn = state->zrs_dn;
-	zfs_locked_range_t		*lr;
+	zfs_locked_range_t	*lr;
 	int flags, error = 0;
 
 	/*
@@ -964,6 +964,15 @@ zfs_rangelock_write_async(zfs_write_state_t *state)
 	range_off = (state->zws_ioflag & O_APPEND) ? 0 : woff;
 	type = (state->zws_ioflag & O_APPEND) ? RL_APPEND : RL_WRITER;
 
+#ifdef __FreeBSD__
+	struct thread *td = curthread;
+	if (uio->uio_loffset + uio->uio_resid > lim_cur(td, RLIMIT_FSIZE)) {
+		PROC_LOCK(td->td_proc);
+		kern_psignal(td->td_proc, SIGXFSZ);
+		PROC_UNLOCK(td->td_proc);
+	}
+#endif
+
 	if ((state->zws_done & ZWS_RANGELOCK_PRE) == 0) {
 		state->zws_done |= ZWS_RANGELOCK_PRE;
 		error = zfs_rangelock_tryenter_async(&zp->z_rangelock,
@@ -989,14 +998,6 @@ zfs_rangelock_write_async(zfs_write_state_t *state)
 	}
 	if (woff > MAXOFFSET_T)
 		return (EFBIG);
-#ifdef __FreeBSD__
-	struct thread *td = uio->uio_td;
-	if (uio->uio_loffset + uio->uio_resid > lim_cur(td, RLIMIT_FSIZE)) {
-		PROC_LOCK(td->td_proc);
-		kern_psignal(td->td_proc, SIGXFSZ);
-		PROC_UNLOCK(td->td_proc);
-	}
-#endif
 	state->zws_done |= ZWS_RANGELOCK_POST;
 	return (0);
 }

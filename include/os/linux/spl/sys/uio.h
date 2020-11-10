@@ -64,11 +64,11 @@ enum uio_bio_flags {
 struct uio_bio {
 	uint8_t		uio_cmd;		/* operation */
 	uint8_t		uio_error;		/* Errno for UIO_BIO_ERROR. */
-	uint16_t	uio_ma_cnt;		/* scatter/gather list length */
 	uint16_t	uio_flags;		/* General flags */
-	off_t		uio_ma_offset;		/* offset in to page list */
-	off_t		uio_loffset;		/* offset in target object */
-	uint32_t	uio_resid;		/* remaining bytes to process */
+	uint16_t	uio_bv_cnt;		/* scatter/gather list length */
+	off_t		uio_bv_offset;		/* offset in to page list */
+	offset_t	uio_loffset;		/* offset in target object */
+	ssize_t		uio_resid;		/* remaining bytes to process */
 	struct cred *uio_cred;
 	void	(*uio_bio_done)(struct uio_bio *);
 	void	*uio_arg;
