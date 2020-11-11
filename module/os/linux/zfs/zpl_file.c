@@ -422,7 +422,7 @@ zpl_get_kernel_bvec(struct iov_iter *to, struct zpl_page_alloc *zpa)
 }
 
 static struct bio_vec *
-iovec_to_bvec(struct iov_iter *to, int *count, int write)
+iovec_to_bvec(struct iov_iter *to, int *count, int write, int *issg)
 {
 	struct bio_vec *bvec;
 	struct zpl_page_alloc zpa;
@@ -432,6 +432,7 @@ iovec_to_bvec(struct iov_iter *to, int *count, int write)
 	switch (type) {
 		case ITER_IOVEC:
 		case ITER_KVEC:
+			*issg = (to->count > 1);
 			zpl_alloc_bvec_pages(to, &zpa, type == ITER_IOVEC);
 			break;
 		case ITER_BVEC:
@@ -497,10 +498,10 @@ zpl_iter_async(struct kiocb *kiocb, struct iov_iter *to, int write)
 	fstrans_cookie_t cookie;
 	struct uio_bio *ubio;
 	struct bio_vec *bvec;
-	int rc, f_flags, count;
+	int rc, f_flags, count, issg = 0;
 	ssize_t len;
 
-	bvec = iovec_to_bvec(to, &count, write);
+	bvec = iovec_to_bvec(to, &count, write, &issg);
 	if (bvec == NULL)
 		return (-EFAULT);
 	crhold(cr);
@@ -510,6 +511,7 @@ zpl_iter_async(struct kiocb *kiocb, struct iov_iter *to, int write)
 	ubio->uio_cmd = write ? UIO_BIO_WRITE : UIO_BIO_READ;
 	ubio->uio_bvec = bvec;
 	ubio->uio_bv_cnt = count;
+	ubio->uio_flags = issg ? UIO_BIO_SG : 0;
 	ubio->uio_loffset = kiocb->ki_pos;
 	ubio->uio_resid = len;
 	ubio->uio_bv_offset = to->iov_offset;

@@ -59,9 +59,10 @@ enum uio_bio_flags {
 	UIO_BIO_SPARSE = 1 << 1,
 	UIO_BIO_USER = 1 << 2,
 	UIO_BIO_PREEMPTED = 1 << 3,
+	UIO_BIO_SG = 1 << 4,
 };
 
-struct uio_bio {
+typedef struct uio_bio {
 	uint8_t		uio_cmd;		/* operation */
 	uint8_t		uio_error;		/* Errno for UIO_BIO_ERROR. */
 	uint16_t	uio_flags;		/* General flags */
@@ -73,7 +74,7 @@ struct uio_bio {
 	void	(*uio_bio_done)(struct uio_bio *);
 	void	*uio_arg;
 	struct	bio_vec *uio_bvec;		/* user buffer's pages */
-};
+} uio_bio_t;
 
 typedef struct uio {
 	union {
@@ -118,6 +119,19 @@ uio_index_at_offset(uio_t *uio, offset_t off, uint_t *vec_idx)
 	*vec_idx = 0;
 	while (*vec_idx < uio_iovcnt(uio) && off >= uio_iovlen(uio, *vec_idx)) {
 		off -= uio_iovlen(uio, *vec_idx);
+		(*vec_idx)++;
+	}
+
+	return (off);
+}
+
+static inline offset_t
+uio_bio_index_at_offset(uio_bio_t *ubio, offset_t off, uint_t *vec_idx)
+{
+	*vec_idx = 0;
+	while (*vec_idx < ubio->uio_bv_cnt &&
+	    off >= ubio->uio_bvec[*vec_idx].bv_len) {
+		off -= ubio->uio_bvec[*vec_idx].bv_len;
 		(*vec_idx)++;
 	}
 

@@ -366,7 +366,7 @@ update_pages_async(znode_t *zp, int64_t start_, int len_, dnode_t *dn,
 	    KM_SLEEP);
 	uio->uio_bvec = bv;
 	uio->uio_bv_cnt = page_count;
-	uio->uio_bv_offset = off = start & PAGE_OFFSET;
+	off = start & PAGE_OFFSET;
 	for (start &= PAGE_MASK; len > 0; start += PAGE_SIZE, bv++) {
 		struct page *pp;
 		int nbytes = MIN(PAGESIZE - off, len);
@@ -379,6 +379,7 @@ update_pages_async(znode_t *zp, int64_t start_, int len_, dnode_t *dn,
 			uio_flags |= UIO_BIO_SPARSE;
 		bv->bv_page = pp;
 		bv->bv_len = nbytes;
+		bv->bv_offset = off;
 		len -= nbytes;
 		off = 0;
 	}
@@ -486,11 +487,17 @@ zfs_readholes_async_resume(void *arg)
 	memcpy(uiotmp, uio, sizeof (*uio));
 	iov = &state->zrs_holes[state->zrs_hole_index];
 	offset = (loff_t)iov->iov_base;
-	index  = OFF_TO_IDX(offset - uio->uio_loffset);
-	uiotmp->uio_bvec = uio->uio_bvec + index;
+	if (uio->uio_flags & UIO_BIO_SG) {
+		loff_t boff = uio_bio_index_at_offset(uio, offset, &index);
+
+		uiotmp->uio_bvec = uio->uio_bvec + index;
+		uiotmp->uio_bv_offset = boff;
+	} else {
+		index  = OFF_TO_IDX(offset - uio->uio_loffset);
+		uiotmp->uio_bvec = uio->uio_bvec + index;
+		uiotmp->uio_bv_offset = 0;
+	}
 	uiotmp->uio_resid = iov->iov_len;
-	if (index == 0)
-		uiotmp->uio_bv_offset = uio->uio_bv_offset;
 	flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_ASYNC |
 	    DMU_CTX_FLAG_NO_HOLD | DMU_CTX_FLAG_PREFETCH;
 	error = dmu_ctx_init(&state->zrs_dc, dn, zfsvfs->z_os, zp->z_id,
