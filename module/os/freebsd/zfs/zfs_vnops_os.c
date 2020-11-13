@@ -522,8 +522,8 @@ typedef struct update_pages_async_state {
 static void
 update_pages_async_epilogue(update_pages_async_state_t *state)
 {
-	int page_count = state->upas_uio->uio_ma_cnt;
-	vm_page_t *ma = state->upas_uio->uio_ma;
+	int page_count = state->upas_uio->uio_bv_cnt;
+	struct bio_vec *bv, *bvec = state->upas_uio->uio_bvec;
 	vm_object_t obj = state->upas_obj;
 	callback_fn cb = state->upas_cb;
 	void *arg = state->upas_arg;
@@ -532,16 +532,17 @@ update_pages_async_epilogue(update_pages_async_state_t *state)
 	kmem_free(state->upas_uio, sizeof (struct uio_bio));
 	kmem_free(state, sizeof (*state));
 	zfs_vmobject_wlock_12(obj);
-	for (int i = 0; i < page_count; i++)
-		if (ma[i] != NULL)
-			page_unbusy(ma[i]);
+	bv = bvec;
+	for (int i = 0; i < page_count; i++, bv++)
+		if (bv->bv_page != NULL)
+			page_unbusy(bv->bv_page);
 #if __FreeBSD_version >= 1300041
 	vm_object_pip_wakeup(obj);
 #else
 	vm_object_pip_wakeupn(obj, 0);
 #endif
 	zfs_vmobject_wunlock_12(obj);
-	kmem_free(ma, page_count * sizeof (vm_page_t));
+	kmem_free(bvec, page_count * sizeof (*bvec));
 	if (yielded)
 		cb(arg);
 }
@@ -694,7 +695,7 @@ update_pages_async(znode_t *zp, int64_t start_, int len_, dnode_t *dn,
 	vm_object_t obj;
 	update_pages_async_state_t *state;
 	struct uio_bio *uio;
-	vm_page_t *ma, *map;
+	struct bio_vec *bv, *bvec;
 	int64_t start = start_;
 	off_t pend, pstart;
 	int off, page_count, len = len_;
@@ -714,21 +715,22 @@ update_pages_async(znode_t *zp, int64_t start_, int len_, dnode_t *dn,
 	uio_flags = 0;
 	uio = kmem_zalloc(sizeof (*uio), KM_SLEEP);
 	state->upas_uio = uio;
-	map = ma = kmem_zalloc(page_count*sizeof (vm_page_t),
+	bv = bvec = kmem_zalloc(page_count*sizeof (*bvec),
 	    KM_SLEEP);
-	uio->uio_ma = ma;
-	uio->uio_ma_cnt = page_count;
-	uio->uio_ma_offset = off = start & PAGEOFFSET;
+	uio->uio_bvec = bvec;
+	uio->uio_bv_cnt = page_count;
 	zfs_vmobject_wlock_12(obj);
 #if __FreeBSD_version >= 1300041
 	vm_object_pip_add(obj, 1);
 #endif
-	for (start &= PAGEMASK; len > 0; start += PAGESIZE, map++) {
+	for (start &= PAGEMASK; len > 0; start += PAGESIZE, bv++) {
 		int nbytes = imin(PAGESIZE - off, len);
 
-		*map = page_busy(obj, start, off, nbytes);
-		if (*map == NULL)
+		bv->bv_page = page_busy(obj, start, off, nbytes);
+		if (bv->bv_page == NULL)
 			uio_flags |= UIO_BIO_SPARSE;
+		bv->bv_len = nbytes;
+		bv->bv_offset = off;
 		len -= nbytes;
 		off = 0;
 	}
@@ -788,7 +790,7 @@ zfs_readholes_async_resume(void *arg)
 
 	if (state->zrs_dc.dc_err ||
 	    state->zrs_hole_index == state->zrs_hole_count) {
-		int free_size = ((uio->uio_ma_cnt + 1)/2) *
+		int free_size = ((uio->uio_bv_cnt + 1)/2) *
 		    sizeof (struct iovec);
 		kmem_free(state->zrs_holes, free_size);
 		kmem_free(state->zrs_uio_tmp, sizeof (*uio));
@@ -804,7 +806,7 @@ zfs_readholes_async_resume(void *arg)
 	iov = &state->zrs_holes[state->zrs_hole_index];
 	offset = (vm_offset_t)iov->iov_base;
 	index  = OFF_TO_IDX(offset - uio->uio_loffset);
-	uiotmp->uio_ma = uio->uio_ma + index;
+	uiotmp->uio_bvec = uio->uio_bvec + index;
 	uiotmp->uio_resid = iov->iov_len;
 	flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_ASYNC |
 	    DMU_CTX_FLAG_NO_HOLD | DMU_CTX_FLAG_PREFETCH;
@@ -821,7 +823,7 @@ zfs_readholes_async_resume(void *arg)
 	if (error == 0 || error == EINPROGRESS)
 		return;
 out:
-	kmem_free(state->zrs_holes, ((uio->uio_ma_cnt + 1)/2) * sizeof (*iov));
+	kmem_free(state->zrs_holes, ((uio->uio_bv_cnt + 1)/2) * sizeof (*iov));
 	if (state->zrs_uio_tmp)
 		kmem_free(state->zrs_uio_tmp, sizeof (*uio));
 	zfs_read_async_epilogue(state, error);
@@ -834,62 +836,71 @@ zfs_mappedread_async(zfs_read_state_t *state)
 	struct uio_bio *uio = state->zrs_uio;
 	vnode_t *vp = ZTOV(zp);
 	vm_object_t *obj __maybe_unused = &vp->v_object;
-	struct sf_buf	*sf_src, *sf_dst[2];
+	struct sf_buf	*sf_src, *sf_dst;
 	struct iovec *holes;
-	int i, len, bytes, page_count, off, dstbytes;
+	int i, len, bytes, page_count, dstbytes;
 	int error, hole_count, hole_start, holes_size;
+	int src_off, dst_off;
 	int64_t start, pstart, pend;
-	caddr_t src, dst[2];
+	struct bio_vec *bv;
+	caddr_t src, dst;
 	vm_page_t *ma;
 
 	ASSERT(vp->v_mount != NULL);
 
 	start = uio->uio_loffset;
-	pstart = start &= PAGEMASK;
 	len = MIN(uio->uio_resid, zp->z_size - start);
-	pend = (start + len + PAGEOFFSET) & PAGEMASK;
-	page_count = OFF_TO_IDX(pend - pstart);
+	pstart = OFF_TO_IDX(start);
+	pend = OFF_TO_IDX((start + len + PAGEOFFSET) & PAGEMASK);
+	page_count = pend - pstart;
 	ma = kmem_zalloc(page_count*sizeof (vm_page_t), KM_SLEEP);
-	holes_size = ((uio->uio_ma_cnt + 1)/2) * sizeof (*holes);
+	holes_size = ((uio->uio_bv_cnt + 1)/2) * sizeof (*holes);
 	holes = kmem_zalloc(holes_size, KM_SLEEP);
+	bv = uio->uio_bvec;
 	zfs_vmobject_wlock_12(obj);
 	for (i = 0; i < page_count; i++)
 		ma[i] = page_hold(vp, IDX_TO_OFF(pstart + i));
 	zfs_vmobject_wunlock_12(obj);
 	hole_count = i = 0;
-	off = start & PAGEOFFSET;
-	sf_dst[1] = NULL;
+	src_off = start & PAGEOFFSET;
+	dst_off = 0;
 	hole_start = -1;
 	for (start &= PAGEMASK; len > 0; start += PAGESIZE, i++) {
-		bytes = MIN(PAGESIZE - off, len);
+		bytes = MIN(PAGESIZE - src_off, len);
 		if (ma[i] == NULL) {
 			if (hole_start == -1) {
 				hole_start = i;
 				hole_count++;
 			}
 			holes[hole_count-1].iov_len += bytes;
-			holes[hole_count-1].iov_base = (caddr_t)(start + off);
+			if (hole_start == i)
+				holes[hole_count-1].iov_base = (caddr_t)start;
 			len -= bytes;
-			off = 0;
+			src_off = 0;
 			continue;
 		}
 		hole_start = -1;
-		ASSERT(uio->uio_ma_offset < PAGE_SIZE);
-		dst[0] = zfs_map_page(uio->uio_ma[i], &sf_dst[0]);
-		dst[0] += uio->uio_ma_offset;
-		if (uio->uio_ma_offset && (len > PAGE_SIZE-uio->uio_ma_offset))
-			dst[1] = zfs_map_page(uio->uio_ma[i+1], &sf_dst[1]);
-		src = zfs_map_page(ma[i], &sf_src) + off;
-		dstbytes = MIN(bytes, PAGESIZE - uio->uio_ma_offset);
-		memcpy(dst[0], src, dstbytes);
-		if (bytes > dstbytes)
-			memcpy(dst[1], src + dstbytes, bytes - dstbytes);
-		zfs_unmap_page(sf_src);
-		zfs_unmap_page(sf_dst[0]);
-		if (sf_dst[1] != NULL) {
-			zfs_unmap_page(sf_dst[1]);
-			sf_dst[1] = NULL;
+		dst = zfs_map_page(bv->bv_page, &sf_dst);
+		dst += (bv->bv_offset + dst_off);
+		src = zfs_map_page(ma[i], &sf_src) + src_off;
+		dstbytes = MIN(bytes, bv->bv_len - bv->bv_offset - dst_off);
+		ASSERT(dstbytes > 0);
+		memcpy(dst, src, dstbytes);
+		zfs_unmap_page(sf_dst);
+		if (bv->bv_offset + dst_off + dstbytes == bv->bv_len)
+			bv++;
+		dst_off = 0;
+		if (bytes > dstbytes) {
+			dst = zfs_map_page(bv->bv_page, &sf_dst);
+			dst += bv->bv_offset;
+			dst_off = bytes - dstbytes;
+			memcpy(dst, src + dstbytes, dst_off);
+			zfs_unmap_page(sf_dst);
 		}
+		zfs_unmap_page(sf_src);
+		len -= bytes;
+		src_off = 0;
+
 	}
 	zfs_vmobject_wlock_12(obj);
 	for (i = 0; i < page_count; i++) {
