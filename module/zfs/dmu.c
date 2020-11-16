@@ -728,12 +728,10 @@ dmu_buf_set_setup_buffers(dmu_buf_set_t *dbs, boolean_t restarted)
 			/* Only include counts for the processed buffers. */
 			/* initiator */
 			if (read) {
-				int missed = dbs->dbs_count - i;
-
 				zfs_refcount_remove_many(&dbs->dbs_holds,
-				    missed, NULL);
-				dbs->dbs_count = i;
+				    dbs->dbs_count - i, NULL);
 			}
+			dbs->dbs_count = i;
 			dmu_ctx_set_error(dc, err);
 			return (err);
 		}
