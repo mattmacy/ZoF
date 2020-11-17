@@ -778,15 +778,11 @@ dmu_objset_own(const char *name, dmu_objset_type_t type,
 	 * speed up pool import times and to keep this txg reserved
 	 * completely for recovery work.
 	 */
-	if (!readonly && !dp->dp_spa->spa_claiming &&
-	    (ds->ds_dir->dd_crypto_obj == 0 || decrypt)) {
-		if (dmu_objset_userobjspace_upgradable(*osp) ||
-		    dmu_objset_projectquota_upgradable(*osp)) {
-			dmu_objset_id_quota_upgrade(*osp);
-		} else if (dmu_objset_userused_enabled(*osp)) {
-			dmu_objset_userspace_upgrade(*osp);
-		}
-	}
+	if ((dmu_objset_userobjspace_upgradable(*osp) ||
+	    dmu_objset_projectquota_upgradable(*osp)) &&
+	    !readonly && !dp->dp_spa->spa_claiming &&
+	    (ds->ds_dir->dd_crypto_obj == 0 || decrypt))
+		dmu_objset_id_quota_upgrade(*osp);
 
 	dsl_pool_rele(dp, FTAG);
 	return (0);
@@ -2289,8 +2285,8 @@ dmu_objset_space_upgrade(objset_t *os)
 	return (0);
 }
 
-static int
-dmu_objset_userspace_upgrade_cb(objset_t *os)
+int
+dmu_objset_userspace_upgrade(objset_t *os)
 {
 	int err = 0;
 
@@ -2310,12 +2306,6 @@ dmu_objset_userspace_upgrade_cb(objset_t *os)
 	return (0);
 }
 
-void
-dmu_objset_userspace_upgrade(objset_t *os)
-{
-	dmu_objset_upgrade(os, dmu_objset_userspace_upgrade_cb);
-}
-
 static int
 dmu_objset_id_quota_upgrade_cb(objset_t *os)
 {
@@ -2326,15 +2316,14 @@ dmu_objset_id_quota_upgrade_cb(objset_t *os)
 		return (0);
 	if (dmu_objset_is_snapshot(os))
 		return (SET_ERROR(EINVAL));
-	if (!dmu_objset_userused_enabled(os))
+	if (!dmu_objset_userobjused_enabled(os))
 		return (SET_ERROR(ENOTSUP));
 	if (!dmu_objset_projectquota_enabled(os) &&
 	    dmu_objset_userobjspace_present(os))
 		return (SET_ERROR(ENOTSUP));
 
-	if (dmu_objset_userobjused_enabled(os))
-		dmu_objset_ds(os)->ds_feature_activation[
-		    SPA_FEATURE_USEROBJ_ACCOUNTING] = (void *)B_TRUE;
+	dmu_objset_ds(os)->ds_feature_activation[
+	    SPA_FEATURE_USEROBJ_ACCOUNTING] = (void *)B_TRUE;
 	if (dmu_objset_projectquota_enabled(os))
 		dmu_objset_ds(os)->ds_feature_activation[
 		    SPA_FEATURE_PROJECT_QUOTA] = (void *)B_TRUE;
@@ -2343,9 +2332,7 @@ dmu_objset_id_quota_upgrade_cb(objset_t *os)
 	if (err)
 		return (err);
 
-	os->os_flags |= OBJSET_FLAG_USERACCOUNTING_COMPLETE;
-	if (dmu_objset_userobjused_enabled(os))
-		os->os_flags |= OBJSET_FLAG_USEROBJACCOUNTING_COMPLETE;
+	os->os_flags |= OBJSET_FLAG_USEROBJACCOUNTING_COMPLETE;
 	if (dmu_objset_projectquota_enabled(os))
 		os->os_flags |= OBJSET_FLAG_PROJECTQUOTA_COMPLETE;
 
