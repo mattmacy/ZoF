@@ -864,7 +864,7 @@ zfs_read_async_resume(void *arg)
 		    uio->uio_loffset, uio->uio_resid, uio, FTAG, flags);
 		if (error)
 			goto out;
-		state->zrs_dc.dc_data_transfer_cb = dmu_physmove;
+		state->zrs_dc.dc_buf_transfer_cb = dmu_physmove;
 		dmu_ctx_set_complete_cb(&state->zrs_dc,
 		    (dmu_ctx_cb_t)zfs_read_async_resume);
 		error = dmu_issue(&state->zrs_dc);
