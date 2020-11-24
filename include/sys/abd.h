@@ -29,7 +29,6 @@
 #include <sys/isa_defs.h>
 #include <sys/debug.h>
 #include <sys/zfs_refcount.h>
-#include <sys/uio.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -46,6 +45,7 @@ typedef enum abd_flags {
 	ABD_FLAG_GANG_FREE	= 1 << 7, /* gang ABD is responsible for mem */
 	ABD_FLAG_ZEROS		= 1 << 8, /* ABD for zero-filled buffer */
 	ABD_FLAG_ALLOCD		= 1 << 9, /* we allocated the abd_t */
+	ABD_FLAG_FROM_PAGES	= 1 << 10, /* does not own pages */
 } abd_flags_t;
 
 typedef struct abd {
@@ -92,6 +92,13 @@ abd_t *abd_alloc_linear(size_t, boolean_t);
 abd_t *abd_alloc_gang(void);
 abd_t *abd_alloc_for_io(size_t, boolean_t);
 abd_t *abd_alloc_sametype(abd_t *, size_t);
+#if defined(_KERNEL)
+#if defined(__linux__)
+abd_t *abd_alloc_from_pages(struct page **, uint_t, unsigned long);
+#elif defined(__FreeBSD__)
+abd_t *abd_alloc_from_pages(vm_page_t *, uint_t, unsigned long);
+#endif
+#endif /* _KERNEL */
 void abd_gang_add(abd_t *, abd_t *, boolean_t);
 void abd_free(abd_t *);
 abd_t *abd_get_offset(abd_t *, size_t);
@@ -196,6 +203,12 @@ static inline uint_t
 abd_get_size(abd_t *abd)
 {
 	return (abd->abd_size);
+}
+
+static inline boolean_t
+abd_is_from_pages(abd_t *abd)
+{
+	return ((abd->abd_flags & ABD_FLAG_FROM_PAGES) != 0);
 }
 
 /*

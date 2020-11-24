@@ -92,6 +92,7 @@
 #include <sys/zio_checksum.h>
 #include <sys/zil_impl.h>
 #include <sys/filio.h>
+#include <sys/zfs_vnops.h>
 
 #include <geom/geom.h>
 #include <sys/zvol.h>
@@ -767,6 +768,10 @@ zvol_cdev_read(struct cdev *dev, struct uio *uio_s, int ioflag)
 	    (zfs_uio_offset(&uio) < 0 || zfs_uio_offset(&uio) > volsize))
 		return (SET_ERROR(EIO));
 
+	error = zfs_check_setup_directio(zv->zv_objset, &uio, UIO_READ, 0);
+	if (error && error != EAGAIN)
+		return (error);
+
 	lr = zfs_rangelock_enter(&zv->zv_rangelock, zfs_uio_offset(&uio),
 	    zfs_uio_resid(&uio), RL_READER);
 	while (zfs_uio_resid(&uio) > 0 && zfs_uio_offset(&uio) < volsize) {
@@ -785,6 +790,9 @@ zvol_cdev_read(struct cdev *dev, struct uio *uio_s, int ioflag)
 		}
 	}
 	zfs_rangelock_exit(lr);
+
+	if (uio.uio_extflg & UIO_DIRECT)
+		zfs_uio_free_dio_pages(&uio, UIO_READ);
 
 	return (error);
 }
@@ -808,6 +816,10 @@ zvol_cdev_write(struct cdev *dev, struct uio *uio_s, int ioflag)
 	if (zfs_uio_resid(&uio) > 0 &&
 	    (zfs_uio_offset(&uio) < 0 || zfs_uio_offset(&uio) > volsize))
 		return (SET_ERROR(EIO));
+
+	error = zfs_check_setup_directio(zv->zv_objset, &uio, UIO_WRITE, 0);
+	if (error && error != EAGAIN)
+		return (error);
 
 	sync = (ioflag & IO_SYNC) ||
 	    (zv->zv_objset->os_sync == ZFS_SYNC_ALWAYS);
@@ -843,6 +855,10 @@ zvol_cdev_write(struct cdev *dev, struct uio *uio_s, int ioflag)
 	if (sync)
 		zil_commit(zv->zv_zilog, ZVOL_OBJ);
 	rw_exit(&zv->zv_suspend_lock);
+
+	if (uio.uio_extflg & UIO_DIRECT)
+		zfs_uio_free_dio_pages(&uio, UIO_WRITE);
+
 	return (error);
 }
 

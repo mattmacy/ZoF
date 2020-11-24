@@ -35,6 +35,10 @@
 #include <sys/dnode.h>
 #include <sys/zfs_context.h>
 #include <sys/zfs_ioctl.h>
+#include <sys/uio.h>
+#include <sys/abd.h>
+#include <sys/arc.h>
+#include <sys/dbuf.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -234,8 +238,9 @@ extern "C" {
  *	dnode_new_blkid
  */
 
-struct objset;
 struct dmu_pool;
+struct dmu_buf;
+struct zgd;
 
 typedef struct dmu_sendstatus {
 	list_node_t dss_link;
@@ -245,10 +250,31 @@ typedef struct dmu_sendstatus {
 	uint64_t dss_blocks; /* blocks visited during the sending process */
 } dmu_sendstatus_t;
 
+/*
+ * dmu_sync_{ready/done} args
+ */
+typedef struct {
+	dbuf_dirty_record_t	*dsa_dr;
+	void (*dsa_done)(struct zgd *, int);
+	struct zgd		*dsa_zgd;
+	dmu_tx_t		*dsa_tx;
+} dmu_sync_arg_t;
+
 void dmu_object_zapify(objset_t *, uint64_t, dmu_object_type_t, dmu_tx_t *);
 void dmu_object_free_zapified(objset_t *, uint64_t, dmu_tx_t *);
 int dmu_buf_hold_noread(objset_t *, uint64_t, uint64_t,
     void *, dmu_buf_t **);
+int dmu_check_direct_valid(dnode_t *, uint64_t, uint64_t, boolean_t);
+int dmu_write_direct(dmu_buf_impl_t *, abd_t *, dmu_tx_t *);
+int dmu_read_abd(dnode_t *, uint64_t, uint64_t, abd_t *, uint32_t flags);
+int dmu_write_abd(dnode_t *, uint64_t, uint64_t, abd_t *, uint32_t, dmu_tx_t *);
+void dmu_write_impl(dmu_buf_t **dbp, int numbufs, uint64_t offset,
+    uint64_t size, const void *buf, dmu_tx_t *tx);
+void dmu_sync_done(zio_t *, arc_buf_t *buf, void *varg);
+void dmu_sync_ready(zio_t *, arc_buf_t *buf, void *varg);
+#if defined(_KERNEL)
+int dmu_rw_uio_direct(dnode_t *, zfs_uio_t *, uint64_t, dmu_tx_t *, boolean_t);
+#endif
 
 #ifdef	__cplusplus
 }

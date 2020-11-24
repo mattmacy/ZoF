@@ -37,6 +37,8 @@
 #include <sys/spa_impl.h>
 #include <sys/zvol.h>
 #include <sys/zvol_impl.h>
+#include <sys/zfs_znode.h>
+#include <sys/zfs_vnops.h>
 
 #include <linux/blkdev_compat.h>
 #include <linux/task_io_accounting_ops.h>
@@ -87,12 +89,24 @@ zvol_write(void *arg)
 	int error = 0;
 	zfs_uio_t uio;
 
+#if defined(HAVE_IOV_ITER_BVEC)
+	struct iov_iter iter;
+	zfs_uio_iov_iter_bio_init(&uio, UIO_WRITE, &iter, bio);
+#else
 	zfs_uio_bvec_init(&uio, bio);
+#endif
 
 	zvol_state_t *zv = zvr->zv;
 	ASSERT3P(zv, !=, NULL);
 	ASSERT3U(zv->zv_open_count, >, 0);
 	ASSERT3P(zv->zv_zilog, !=, NULL);
+
+	error = zfs_check_setup_directio(zv->zv_objset, &uio, UIO_WRITE, 0);
+	if (error && error != EAGAIN) {
+		BIO_END_IO(bio, error);
+		kmem_free(zvr, sizeof (zv_request_t));
+		return;
+	}
 
 	/* bio marked as FLUSH need to flush before write */
 	if (bio_is_flush(bio))
@@ -160,6 +174,9 @@ zvol_write(void *arg)
 
 	if (acct)
 		blk_generic_end_io_acct(q, disk, WRITE, bio, start_time);
+
+	if (uio.uio_extflg & UIO_DIRECT)
+		zfs_uio_free_dio_pages(&uio, UIO_WRITE);
 
 	BIO_END_IO(bio, -error);
 	kmem_free(zvr, sizeof (zv_request_t));
@@ -249,11 +266,23 @@ zvol_read(void *arg)
 	int error = 0;
 	zfs_uio_t uio;
 
+#if defined(HAVE_IOV_ITER_BVEC)
+	struct iov_iter iter;
+	zfs_uio_iov_iter_bio_init(&uio, UIO_READ, &iter, bio);
+#else
 	zfs_uio_bvec_init(&uio, bio);
+#endif
 
 	zvol_state_t *zv = zvr->zv;
 	ASSERT3P(zv, !=, NULL);
 	ASSERT3U(zv->zv_open_count, >, 0);
+
+	error = zfs_check_setup_directio(zv->zv_objset, &uio, UIO_READ, 0);
+	if (error && error != EAGAIN) {
+		BIO_END_IO(bio, error);
+		kmem_free(zvr, sizeof (zv_request_t));
+		return;
+	}
 
 	struct request_queue *q = zv->zv_zso->zvo_queue;
 	struct gendisk *disk = zv->zv_zso->zvo_disk;
@@ -293,6 +322,9 @@ zvol_read(void *arg)
 
 	if (acct)
 		blk_generic_end_io_acct(q, disk, READ, bio, start_time);
+
+	if (uio.uio_extflg & UIO_DIRECT)
+		zfs_uio_free_dio_pages(&uio, UIO_READ);
 
 	BIO_END_IO(bio, -error);
 	kmem_free(zvr, sizeof (zv_request_t));

@@ -169,6 +169,7 @@ int zfs_abd_scatter_min_size = 512 * 3;
 abd_t *abd_zero_scatter = NULL;
 
 struct page;
+
 /*
  * abd_zero_page we will be an allocated zero'd PAGESIZE buffer, which is
  * assigned to set each of the pages of abd_zero_scatter.
@@ -741,6 +742,78 @@ abd_free_linear_page(abd_t *abd)
 
 	abd_update_scatter_stats(abd, ABDSTAT_DECR);
 }
+
+#ifdef _KERNEL
+/*
+ * Allocate a scatter ABD structure from user pages. This must be freed
+ * with abd_free().
+ */
+abd_t *
+abd_alloc_from_pages(struct page **pages, uint_t n_pages, unsigned long offset)
+{
+	abd_t *abd = abd_alloc_struct(0);
+	struct sg_table table;
+	gfp_t gfp = __GFP_NOWARN | GFP_NOIO;
+	size_t size = n_pages * PAGE_SIZE;
+	int err;
+
+	VERIFY3U(size, <=, SPA_MAXBLOCKSIZE);
+	ASSERT3P(pages, !=, NULL);
+
+	/*
+	 * Even if this buf is filesystem metadata, we only track that if we
+	 * own the underlying data buffer, which is not true in this case.
+	 * Therefore, we don't ever use ABD_FLAG_META here.
+	 */
+	abd->abd_flags |= ABD_FLAG_FROM_PAGES | ABD_FLAG_OWNER;
+	abd->abd_size = size;
+
+	while ((err = sg_alloc_table_from_pages(&table, pages, n_pages, offset,
+	    size, gfp))) {
+		ABDSTAT_BUMP(abdstat_scatter_sg_table_retry);
+		schedule_timeout_interruptible(1);
+		ASSERT3U(err, ==, 0);
+	}
+
+	ABD_SCATTER(abd).abd_offset = offset;
+	ABD_SCATTER(abd).abd_sgl = table.sgl;
+	ABD_SCATTER(abd).abd_nents = table.nents;
+
+	/*
+	 * XXX - if nents == 1 (happens often), should we convert
+	 * to LINEAR_PAGE?
+	 */
+	if (table.nents > 1) {
+		ABDSTAT_BUMP(abdstat_scatter_page_multi_chunk);
+		abd->abd_flags |= ABD_FLAG_MULTI_CHUNK;
+	}
+
+	ABDSTAT_BUMP(abdstat_scatter_cnt);
+
+	abd_verify(abd);
+	return (abd);
+}
+
+abd_t *
+abd_get_offset_from_pages(abd_t *abd, abd_t *sabd, size_t off)
+{
+	ASSERT(abd_is_from_pages(sabd));
+	return (abd_get_offset_scatter(abd, sabd, off));
+}
+
+void
+abd_free_from_pages(abd_t *abd)
+{
+	if (abd->abd_flags & ABD_FLAG_MULTI_ZONE)
+		ABDSTAT_BUMPDOWN(abdstat_scatter_page_multi_zone);
+
+	/* pages are not owned, just free the table */
+	abd_free_sg_table(abd);
+
+	ABDSTAT_BUMPDOWN(abdstat_scatter_cnt);
+}
+
+#endif /* _KERNEL */
 
 /*
  * If we're going to use this ABD for doing I/O using the block layer, the

@@ -33,6 +33,7 @@
 #include <sys/zfs_vfsops.h>
 #include <sys/zfs_vnops.h>
 #include <sys/zfs_project.h>
+#include <sys/dbuf.h>
 
 /*
  * When using fallocate(2) to preallocate space, inflate the requested
@@ -262,17 +263,27 @@ zpl_iter_read(struct kiocb *kiocb, struct iov_iter *to)
 	struct file *filp = kiocb->ki_filp;
 	ssize_t count = iov_iter_count(to);
 	zfs_uio_t uio;
+	znode_t *zp = ITOZ(filp->f_mapping->host);
+	int error;
+	int ioflag = filp->f_flags | zfs_io_flags(kiocb);
 
 	zpl_uio_init(&uio, kiocb, to, kiocb->ki_pos, count, 0);
+
+	error = -zfs_check_setup_directio(zfs_znode_get_dbuf_objset(zp), &uio,
+	    UIO_READ, ioflag);
+	if (error < 0 && error != -EAGAIN)
+		return (error);
 
 	crhold(cr);
 	cookie = spl_fstrans_mark();
 
-	int error = -zfs_read(ITOZ(filp->f_mapping->host), &uio,
-	    filp->f_flags | zfs_io_flags(kiocb), cr);
+	error = -zfs_read(zp, &uio, ioflag, cr);
 
 	spl_fstrans_unmark(cookie);
 	crfree(cr);
+
+	if (uio.uio_extflg & UIO_DIRECT)
+		zfs_uio_free_dio_pages(&uio, UIO_READ);
 
 	if (error < 0)
 		return (error);
@@ -320,6 +331,9 @@ zpl_iter_write(struct kiocb *kiocb, struct iov_iter *from)
 	zfs_uio_t uio;
 	size_t count = 0;
 	ssize_t ret;
+	znode_t *zp = ITOZ(ip);
+	int error;
+	int ioflag = filp->f_flags | zfs_io_flags(kiocb);
 
 	ret = zpl_generic_write_checks(kiocb, from, &count);
 	if (ret)
@@ -327,14 +341,21 @@ zpl_iter_write(struct kiocb *kiocb, struct iov_iter *from)
 
 	zpl_uio_init(&uio, kiocb, from, kiocb->ki_pos, count, from->iov_offset);
 
+	error = -zfs_check_setup_directio(zfs_znode_get_dbuf_objset(zp), &uio,
+	    UIO_WRITE, ioflag);
+	if (error < 0 && error != -EAGAIN)
+		return (error);
+
 	crhold(cr);
 	cookie = spl_fstrans_mark();
 
-	int error = -zfs_write(ITOZ(ip), &uio,
-	    filp->f_flags | zfs_io_flags(kiocb), cr);
+	error = -zfs_write(zp, &uio, ioflag, cr);
 
 	spl_fstrans_unmark(cookie);
 	crfree(cr);
+
+	if (uio.uio_extflg & UIO_DIRECT)
+		zfs_uio_free_dio_pages(&uio, UIO_WRITE);
 
 	if (error < 0)
 		return (error);
@@ -359,6 +380,9 @@ zpl_aio_read(struct kiocb *kiocb, const struct iovec *iov,
 	struct file *filp = kiocb->ki_filp;
 	size_t count;
 	ssize_t ret;
+	int error;
+	znode_t *zp = ITOZ(filp->f_mapping->host);
+	int ioflag = filp->f_flags | zfs_io_flags(kiocb);
 
 	ret = generic_segment_checks(iov, &nr_segs, &count, VERIFY_WRITE);
 	if (ret)
@@ -368,14 +392,21 @@ zpl_aio_read(struct kiocb *kiocb, const struct iovec *iov,
 	zfs_uio_iovec_init(&uio, iov, nr_segs, kiocb->ki_pos, UIO_USERSPACE,
 	    count, 0);
 
+	error = -zfs_check_setup_directio(zfs_znode_get_dbuf_objset(zp), &uio,
+	    UIO_READ, ioflag);
+	if (error < 0 && error != -EAGAIN)
+		return (error);
+
 	crhold(cr);
 	cookie = spl_fstrans_mark();
 
-	int error = -zfs_read(ITOZ(filp->f_mapping->host), &uio,
-	    filp->f_flags | zfs_io_flags(kiocb), cr);
+	error = -zfs_read(zp, &uio, ioflag, cr);
 
 	spl_fstrans_unmark(cookie);
 	crfree(cr);
+
+	if (uio.uio_extflg & UIO_DIRECT)
+		zfs_uio_free_dio_pages(&uio, UIO_READ);
 
 	if (error < 0)
 		return (error);
@@ -398,6 +429,9 @@ zpl_aio_write(struct kiocb *kiocb, const struct iovec *iov,
 	struct inode *ip = filp->f_mapping->host;
 	size_t count;
 	ssize_t ret;
+	znode_t *zp = ITOZ(ip);
+	int ioflag = filp->f_flags | zfs_io_flags(kiocb);
+	int error;
 
 	ret = generic_segment_checks(iov, &nr_segs, &count, VERIFY_READ);
 	if (ret)
@@ -411,14 +445,21 @@ zpl_aio_write(struct kiocb *kiocb, const struct iovec *iov,
 	zfs_uio_iovec_init(&uio, iov, nr_segs, kiocb->ki_pos, UIO_USERSPACE,
 	    count, 0);
 
+	error = -zfs_check_setup_directio(zfs_znode_get_dbuf_objset(zp), &uio,
+	    UIO_WRITE, ioflag);
+	if (error < 0 && error != -EAGAIN)
+		return (error);
+
 	crhold(cr);
 	cookie = spl_fstrans_mark();
 
-	int error = -zfs_write(ITOZ(ip), &uio,
-	    filp->f_flags | zfs_io_flags(kiocb), cr);
+	error = -zfs_write(zp, &uio, ioflag, cr);
 
 	spl_fstrans_unmark(cookie);
 	crfree(cr);
+
+	if (uio.uio_extflg & UIO_DIRECT)
+		zfs_uio_free_dio_pages(&uio, UIO_WRITE);
 
 	if (error < 0)
 		return (error);

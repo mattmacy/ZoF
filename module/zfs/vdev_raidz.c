@@ -248,8 +248,9 @@ vdev_raidz_cksum_finish(zio_cksum_report_t *zcr, const abd_t *good_data)
 			vdev_raidz_generate_parity_row(rm, rr);
 
 			/* restore everything back to its original state */
-			for (x = 0; x < rr->rr_firstdatacol; x++)
+			for (x = 0; x < rr->rr_firstdatacol; x++) {
 				rr->rr_col[x].rc_abd = bad_parity[x];
+			}
 
 			offset = 0;
 			for (x = rr->rr_firstdatacol; x < rr->rr_cols; x++) {

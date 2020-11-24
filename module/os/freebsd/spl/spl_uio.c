@@ -44,6 +44,10 @@
 #include <sys/uio.h>
 #include <sys/vnode.h>
 #include <sys/zfs_znode.h>
+#include <sys/byteorder.h>
+#include <sys/lock.h>
+#include <sys/vm.h>
+#include <vm/vm_map.h>
 
 /*
  * same as zfs_uiomove() but doesn't modify uio structure.
@@ -97,4 +101,233 @@ zfs_uio_fault_move(void *p, size_t n, zfs_uio_rw_t dir, zfs_uio_t *uio)
 {
 	ASSERT(zfs_uio_rw(uio) == dir);
 	return (vn_io_fault_uiomove(p, n, GET_UIO_STRUCT(uio)));
+}
+
+static void
+zfs_uio_set_pages_to_stable(zfs_uio_t *uio)
+{
+	vm_object_t obj;
+
+	ASSERT3P(uio->uio_dio.pages, !=, NULL);
+	ASSERT3U(uio->uio_dio.num_pages, >, 0);
+
+	obj = uio->uio_dio.pages[0]->object;
+	zfs_vmobject_wlock(obj);
+	for (int i = 0; i < uio->uio_dio.num_pages; i++) {
+		vm_page_t page = uio->uio_dio.pages[i];
+
+		ASSERT3P(page, !=, NULL);
+		vm_page_sbusy(page);
+		if (page->object != obj) {
+			zfs_vmobject_wunlock(obj);
+			obj = page->object;
+			zfs_vmobject_wlock(obj);
+		}
+		pmap_remove_write(page);
+	}
+	zfs_vmobject_wunlock(obj);
+}
+
+static void
+zfs_uio_release_stable_pages(zfs_uio_t *uio)
+{
+	struct mtx *mtx;
+
+	mtx = NULL;
+	ASSERT3P(uio->uio_dio.pages, !=, NULL);
+	for (int i = 0; i < uio->uio_dio.num_pages; i++) {
+		vm_page_t page = uio->uio_dio.pages[i];
+		ASSERT3P(page, !=, NULL);
+		ASSERT(vm_page_sbusied(page));
+		vm_page_sunbusy(page);
+		vm_page_change_lock(page, &mtx);
+		vm_page_unhold(page);
+	}
+	if (mtx != NULL)
+		mtx_unlock(mtx);
+}
+
+/*
+ * If the operation is marked as read, then we are stating the pages will be
+ * written to and must be given write access.
+ */
+static int
+zfs_uio_hold_pages(unsigned long start, unsigned long nr_pages, zfs_uio_rw_t rw,
+    vm_page_t *pages)
+{
+	vm_map_t map;
+	vm_prot_t prot;
+	size_t len;
+	int count;
+
+	map = &curthread->td_proc->p_vmspace->vm_map;
+
+	prot = rw == UIO_READ ? (VM_PROT_READ | VM_PROT_WRITE) : VM_PROT_READ;
+	len = ((size_t)nr_pages) << PAGE_SHIFT;
+	count = vm_fault_quick_hold_pages(map, start, len, prot, pages,
+	    nr_pages);
+
+	return (count);
+}
+
+void
+zfs_uio_free_dio_pages(zfs_uio_t *uio, zfs_uio_rw_t rw)
+{
+	long count;
+
+	ASSERT3P(uio->uio_dio.pages, !=, NULL);
+	ASSERT(zfs_uio_rw(uio) == rw);
+
+	if (rw == UIO_WRITE)
+		zfs_uio_release_stable_pages(uio);
+
+	count = zfs_uio_hold_pages((unsigned long)uio->uio_dio.pages[0],
+	    uio->uio_dio.num_pages, zfs_uio_rw(uio), uio->uio_dio.pages);
+
+	if (count != uio->uio_dio.num_pages) {
+		return;
+	}
+
+#if __FreeBSD_version < 1300000
+	for (int i = 0; i < uio->uio_dio.num_pages; i++) {
+		vm_page_t page = uio->uio_dio.pages[i];
+		ASSERT3P(page, !=, NULL);
+		vm_page_lock(page);
+		if (zfs_uio_rw(uio) == UIO_READ)
+			vm_page_dirty(page);
+		vm_page_unwire_noq(page);
+		vm_page_unhold(page);
+		vm_page_unlock(page);
+	}
+#endif
+
+	kmem_free(uio->uio_dio.pages,
+	    uio->uio_dio.num_pages * sizeof (vm_page_t));
+}
+
+static long
+zfs_uio_get_user_pages(unsigned long start, unsigned long nr_pages,
+    zfs_uio_rw_t rw, vm_page_t *pages)
+{
+	int count;
+
+	count = zfs_uio_hold_pages(start, nr_pages, rw, pages);
+
+	if (count != nr_pages)
+		return (count);
+
+	ASSERT3U(count, ==, nr_pages);
+
+#if __FreeBSD_version < 1300000
+	for (int i = 0; i < nr_pages; i++) {
+		vm_page_t page = pages[i];
+		vm_page_lock(page);
+		vm_page_wire(page);
+		vm_page_unhold(page);
+		vm_page_unlock(page);
+	}
+#endif
+
+	return (count);
+}
+
+static size_t
+zfs_uio_iov_step(struct iovec v, zfs_uio_t *uio, int *numpages)
+{
+	vm_page_t *pages;
+	unsigned long addr = (unsigned long)(v.iov_base);
+	size_t len = v.iov_len +
+	    (uio->uio_dio.start = addr & (PAGE_SIZE - 1));
+	int n;
+	int res;
+
+	addr &= ~(PAGE_SIZE - 1);
+	n = DIV_ROUND_UP(len, PAGE_SIZE);
+	pages = kmem_alloc(n * sizeof (vm_page_t), KM_SLEEP);
+	if (!pages) {
+		*numpages = -1;
+		return (SET_ERROR(ENOMEM));
+	}
+	res = zfs_uio_get_user_pages(addr, n, zfs_uio_rw(uio), pages);
+	if (res != n) {
+		kmem_free(pages, n * sizeof (vm_page_t));
+		*numpages = -1;
+		return (SET_ERROR(EFAULT));
+	}
+	uio->uio_dio.pages = pages;
+	*numpages += res;
+	return ((res == n ? len : res * PAGE_SIZE) - uio->uio_dio.start);
+}
+
+static int
+zfs_uio_get_dio_pages_alloc_impl(zfs_uio_t *uio)
+{
+	size_t left = 0;
+	struct iovec __v;
+	size_t wanted;
+	const struct iovec *__p = GET_UIO_STRUCT(uio)->uio_iov;
+	size_t maxsize = zfs_uio_resid(uio);
+	int numpages = 0;
+
+	wanted = maxsize;
+
+	while (!left && maxsize) {
+		__v.iov_len = MIN(maxsize, __p->iov_len);
+		if (!__v.iov_len) {
+			__p++;
+			continue;
+		}
+		__v.iov_base = __p->iov_base;
+		left = zfs_uio_iov_step(__v, uio, &numpages);
+		if (numpages == -1)
+			return (left);
+		__v.iov_len -= left;
+		maxsize -= __v.iov_len;
+		__p++;
+	}
+
+	ASSERT0(wanted - maxsize);
+	uio->uio_dio.num_pages = numpages;
+	return (0);
+}
+
+/*
+ * This function allocates kernel pages and pins user pages into them.
+ * In the event that the user pages were not pinned successfully an error
+ * value is reutrned.
+ *
+ * On success, 0 is returned.
+ */
+int
+zfs_uio_get_dio_pages_alloc(zfs_uio_t *uio, zfs_uio_rw_t rw)
+{
+	int error = 0;
+
+	ASSERT(zfs_uio_rw(uio) == rw);
+	error = zfs_uio_get_dio_pages_alloc_impl(uio);
+
+	if (error)
+		return (error);
+
+	/*
+	 * Since we will be writing the user pages we must make sure that they
+	 * are stable. That way the contents of the pages can not cahnge in the
+	 * event we are doing any of the following:
+	 * Compression
+	 * Checksum
+	 * Encryption
+	 * Parity
+	 * Dedup
+	 */
+	if (zfs_uio_rw(uio) == UIO_WRITE)
+		zfs_uio_set_pages_to_stable(uio);
+	return (0);
+}
+
+boolean_t
+zfs_uio_page_aligned(zfs_uio_t *uio)
+{
+	if (IO_PAGE_ALIGNED(zfs_uio_offset(uio), zfs_uio_resid(uio)))
+		return (B_TRUE);
+	return (B_FALSE);
 }

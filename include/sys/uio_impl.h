@@ -45,5 +45,8 @@ extern int zfs_uiomove(void *, size_t, zfs_uio_rw_t, zfs_uio_t *);
 extern int zfs_uio_prefaultpages(ssize_t, zfs_uio_t *);
 extern int zfs_uiocopy(void *, size_t, zfs_uio_rw_t, zfs_uio_t *, size_t *);
 extern void zfs_uioskip(zfs_uio_t *, size_t);
+extern void zfs_uio_free_dio_pages(zfs_uio_t *, zfs_uio_rw_t);
+extern int zfs_uio_get_dio_pages_alloc(zfs_uio_t *, zfs_uio_rw_t);
+extern boolean_t zfs_uio_page_aligned(zfs_uio_t *);
 
 #endif	/* _SYS_UIO_IMPL_H */

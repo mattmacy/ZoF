@@ -617,6 +617,9 @@ extern void delay(clock_t ticks);
 
 #define	max_ncpus	64
 #define	boot_ncpus	(sysconf(_SC_NPROCESSORS_ONLN))
+#define	IO_ALIGNED(o, s, a) \
+	(((o) % (a) == 0) && ((s) % (a) == 0))
+#define	IO_PAGE_ALIGNED(o, s)	IO_ALIGNED(o, s, PAGESIZE)
 
 /*
  * Process priorities as defined by setpriority(2) and getpriority(2).

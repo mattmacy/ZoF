@@ -1010,6 +1010,36 @@ Unless necessary, deduplication should NOT be enabled on a system. See the
 section of
 .Xr zfsconcepts 8 .
 .It Xo
+.Sy direct Ns = Ns Sy disabled Ns | Ns Sy standard Ns | Ns Sy always
+.Xc
+Sets the policy for Direct IO when an IO request uses the
+.Sx O_DIRECT
+flag. The default value is
+.Sy standard.
+.Pp
+All Direct IO requests must be page-aligned or EINVAL is returned.
+.Pp
+If this property is set to
+.Sy disabled
+all Direct IO requests will be silently ignored and all read and write
+requests being directed though the ARC.
+.Pp
+If this property is set to
+.Sy standard
+all IO requests requesting Direct IO will attempt to bypass the ARC
+based on the
+.Sx alignment
+of the request. For write requests, the offset and size of the requeset must
+be recordsize aligned or the write will be silently directed through the ARC.
+For read requests there is no restriction on the request size or offset.
+.Pp
+If this parameter is set to
+.Sy always
+all IO requests will be treated as though the O_DIRECT flag was passed and
+follow the same alignment restrictions as the
+.Sy standard
+property value.
+.It Xo
 .Sy dnodesize Ns = Ns Sy legacy Ns | Ns Sy auto Ns | Ns Sy 1k Ns | Ns
 .Sy 2k Ns | Ns Sy 4k Ns | Ns Sy 8k Ns | Ns Sy 16k
 .Xc

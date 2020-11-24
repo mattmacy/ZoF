@@ -265,7 +265,7 @@ zfs_read(struct znode *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 			error = mappedread_sf(zp, nbytes, uio);
 		else
 #endif
-		if (zn_has_cached_data(zp) && !(ioflag & O_DIRECT)) {
+		if (zn_has_cached_data(zp) && !(uio->uio_extflg & UIO_DIRECT)) {
 			error = mappedread(zp, nbytes, uio);
 		} else {
 			error = dmu_read_uio_dbuf(sa_get_db(zp->z_sa_hdl),
@@ -434,6 +434,21 @@ zfs_write(znode_t *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 	const uint64_t projid = zp->z_projid;
 
 	/*
+	 * In the event we are increasing the file block size
+	 * (lr_length == UINT64_MAX), we will direct the write to the ARC.
+	 * Because zfs_grow_blocksize() will read from the ARC in order to
+	 * grow the dbuf, we avoid doing Direct IO here as that would cause
+	 * data written to disk to be overwritten by data in the ARC during
+	 * the sync phase. Besides writing data twice to disk, we also
+	 * want to avoid consistency concerns between data in the the ARC and
+	 * on disk while growing the file's block size.
+	 */
+	if (uio->uio_extflg & UIO_DIRECT && lr->lr_length == UINT64_MAX) {
+		zfs_uio_free_dio_pages(uio, UIO_WRITE);
+		uio->uio_extflg &= ~UIO_DIRECT;
+	}
+
+	/*
 	 * Write the file in reasonable size chunks.  Each chunk is written
 	 * in a separate transaction; this keeps the intent log records small
 	 * and allows us to do more fine-grained space accounting.
@@ -453,7 +468,8 @@ zfs_write(znode_t *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 		arc_buf_t *abuf = NULL;
 		if (n >= max_blksz && woff >= zp->z_size &&
 		    P2PHASE(woff, max_blksz) == 0 &&
-		    zp->z_blksz == max_blksz) {
+		    zp->z_blksz == max_blksz &&
+		    !(uio->uio_extflg & UIO_DIRECT)) {
 			/*
 			 * This write covers a full block.  "Borrow" a buffer
 			 * from the dmu so that we can fill it before we enter
@@ -523,8 +539,7 @@ zfs_write(znode_t *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 		 * XXX - should we really limit each write to z_max_blksz?
 		 * Perhaps we should use SPA_MAXBLOCKSIZE chunks?
 		 */
-		const ssize_t nbytes =
-		    MIN(n, max_blksz - P2PHASE(woff, max_blksz));
+		ssize_t nbytes = MIN(n, max_blksz - P2PHASE(woff, max_blksz));
 
 		ssize_t tx_bytes;
 		if (abuf == NULL) {
@@ -562,7 +577,7 @@ zfs_write(znode_t *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 			ASSERT3S(n, >=, max_blksz);
 			ASSERT0(P2PHASE(woff, max_blksz));
 			/*
-			 * We can simplify nbytes to MIN(n, max_blksz) since
+			 * We can simplify nbytes to MIN(n, maxblksz) since
 			 * P2PHASE(woff, max_blksz) is 0, and knowing
 			 * n >= max_blksz lets us simplify further:
 			 */
@@ -586,7 +601,7 @@ zfs_write(znode_t *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 			tx_bytes = nbytes;
 		}
 		if (tx_bytes && zn_has_cached_data(zp) &&
-		    !(ioflag & O_DIRECT)) {
+		    !(uio->uio_extflg & UIO_DIRECT)) {
 			update_pages(zp, woff, tx_bytes, zfsvfs->z_os);
 		}
 
@@ -884,6 +899,42 @@ zfs_get_done(zgd_t *zgd, int error)
 	kmem_free(zgd, sizeof (zgd_t));
 }
 
+/*
+ * If this a none Direct IO request, EAGAIN is returned. If the Direct
+ * IO request is invalid due to alignment restrictions EINVAL is returned.
+ *
+ * If this is a Direct IO request and the user pages are successufully
+ * pinnned into kernel pages, then 0 is returned.
+ */
+/* ARGSUSED */
+int
+zfs_check_setup_directio(objset_t *obj, zfs_uio_t *uio, zfs_uio_rw_t rw,
+    int ioflag)
+{
+	int error = EAGAIN;
+
+	if (obj->os_direct == ZFS_DIRECT_DISABLED) {
+		/*
+		 * In the event Direct IO is disabled, we simple will
+		 * just pass the IO through the ARC.
+		 */
+		return (error);
+	} else if (ioflag & O_DIRECT ||
+	    obj->os_direct == ZFS_DIRECT_ALWAYS) {
+		/*
+		 * At a minimum all Direct IO request must be page aligned.
+		 */
+		if (!zfs_uio_page_aligned(uio)) {
+			return (SET_ERROR(EINVAL));
+		} else {
+			error = zfs_uio_get_dio_pages_alloc(uio, rw);
+			if (!error)
+				uio->uio_extflg |= UIO_DIRECT;
+		}
+	}
+	return (error);
+}
+
 EXPORT_SYMBOL(zfs_access);
 EXPORT_SYMBOL(zfs_fsync);
 EXPORT_SYMBOL(zfs_holey);
@@ -891,6 +942,7 @@ EXPORT_SYMBOL(zfs_read);
 EXPORT_SYMBOL(zfs_write);
 EXPORT_SYMBOL(zfs_getsecattr);
 EXPORT_SYMBOL(zfs_setsecattr);
+EXPORT_SYMBOL(zfs_check_setup_directio);
 
 ZFS_MODULE_PARAM(zfs_vnops, zfs_vnops_, read_chunk_size, ULONG, ZMOD_RW,
 	"Bytes to read per chunk");

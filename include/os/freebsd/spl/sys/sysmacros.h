@@ -282,6 +282,13 @@ extern unsigned char bcd_to_byte[256];
 #define	DECR_COUNT(var, mutex) mutex_enter(mutex), (*(var))--, mutex_exit(mutex)
 
 /*
+ * Macros to check page/block alignment.
+ */
+#define	IO_ALIGNED(o, s, a) \
+	(((o) % (a) == 0) && ((s) % (a) == 0))
+#define	IO_PAGE_ALIGNED(o, s)	IO_ALIGNED(o, s, PAGE_SIZE)
+
+/*
  * Macros to declare bitfields - the order in the parameter list is
  * Low to High - that is, declare bit 0 first.  We only support 8-bit bitfields
  * because if a field crosses a byte boundary it's not likely to be meaningful

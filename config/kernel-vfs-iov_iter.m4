@@ -74,10 +74,42 @@ AC_DEFUN([ZFS_AC_KERNEL_SRC_VFS_IOV_ITER], [
 
 		bytes = copy_from_iter((void *)&buf, size, &iter);
 	])
+
+	ZFS_LINUX_TEST_SRC([iov_iter_get_pages_alloc], [
+		#include <linux/uio.h>
+	], [
+		struct iov_iter iter = { 0 };
+		struct page **pages = NULL;
+		size_t maxsize = LONG_MAX;
+		size_t start = 0;
+		size_t ret __attribute__ ((unused));
+		ret = iov_iter_get_pages_alloc(&iter, &pages, maxsize, &start);
+	])
+
+	ZFS_LINUX_TEST_SRC([iov_iter_type], [
+		#include <linux/uio.h>
+	], [
+		const struct iov_iter *iter = NULL;
+		enum iter_type ret __attribute__ ((unused));
+		ret = iov_iter_type(iter);
+	])
+
+	ZFS_LINUX_TEST_SRC([iov_iter_bvec], [
+		#include <linux/uio.h>
+		#include <linux/bvec.h>
+	], [
+		struct iov_iter iter = { 0 };
+		unsigned int direction = READ;
+		const struct bio_vec *bvec = NULL;
+		unsigned long nr_segs = 1;
+		size_t count = 4096;
+		iov_iter_bvec(&iter, direction, bvec, nr_segs, count);
+	])
 ])
 
 AC_DEFUN([ZFS_AC_KERNEL_VFS_IOV_ITER], [
 	enable_vfs_iov_iter="yes"
+	pass_iter_type_to_iov_iter_bvec="no"
 
 	AC_MSG_CHECKING([whether iov_iter types are available])
 	ZFS_LINUX_TEST_RESULT([iov_iter_types], [
@@ -158,5 +190,54 @@ AC_DEFUN([ZFS_AC_KERNEL_VFS_IOV_ITER], [
 	AS_IF([test "x$enable_vfs_iov_iter" = "xyes"], [
 		AC_DEFINE(HAVE_VFS_IOV_ITER, 1,
 		    [All required iov_iter interfaces are available])
+		dnl #
+		dnl # iov_iter_get_pages_alloc() was not available till 3.16. If it
+		dnl # is available we use it map in user pages.
+		dnl #
+		AC_MSG_CHECKING([whether iov_iter_get_pages_alloc() is available])
+		ZFS_LINUX_TEST_RESULT([iov_iter_get_pages_alloc], [
+			AC_MSG_RESULT(yes)
+			AC_DEFINE(HAVE_IOV_ITER_GET_PAGES_ALLOC, 1,
+			    [iov_iter_get_pages_alloc() is available])
+		], [
+			AC_MSG_RESULT(no)
+		])
+
+		dnl #
+		dnl # iov_iter_type() was not available till 4.20.
+		dnl #
+		AC_MSG_CHECKING([whether iov_iter_type() is available])
+		ZFS_LINUX_TEST_RESULT([iov_iter_type], [
+			AC_MSG_RESULT(yes)
+			AC_DEFINE(HAVE_IOV_ITER_TYPE, 1,
+			    [iov_iter_type() is available])
+		], [
+			AC_MSG_RESULT(no)
+			pass_iter_type_to_iov_iter_bvec="yes"
+		])
+
+		dnl #
+		dnl # iov_iter_bvec() was not available till 4.0.
+		dnl #
+		AC_MSG_CHECKING([whether iov_iter_bvec() is available])
+		ZFS_LINUX_TEST_RESULT([iov_iter_bvec], [
+			AC_MSG_RESULT(yes)
+			AC_DEFINE(HAVE_IOV_ITER_BVEC, 1,
+			    [iov_iter_bvec() is available])
+			dnl #
+			dnl # Before 4.20, it was required to pass ITER_BVEC
+			dnl # with the direction arg to iov_iter_bvec(). However,
+			dnl # in kernels >= 4.20 iov_iter_type() was added and
+			dnl # passing the iter type will cause kernel WARNING
+			dnl # as it sets ITER_BVEC automatically on a call to
+			dnl iov_iter_bvec().
+			dnl #
+			AS_IF([test "x$pass_iter_type_to_iov_iter_bvec" = "xyes"], [
+				AC_DEFINE(IOV_ITER_BVEC_PASS_TYPE, 1,
+				    [Must pass iov iter type to iov_iter_bvec()])
+			])
+		], [
+			AC_MSG_RESULT(no)
+		])
 	])
 ])

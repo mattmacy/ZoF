@@ -30,6 +30,7 @@
 #include <sys/zfs_acl.h>
 #include <sys/zil.h>
 #include <sys/zfs_project.h>
+#include <sys/dbuf.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -228,6 +229,13 @@ zfs_inherit_projid(znode_t *dzp)
 {
 	return ((dzp->z_pflags & ZFS_PROJINHERIT) ? dzp->z_projid :
 	    ZFS_DEFAULT_PROJID);
+}
+
+static inline objset_t *
+zfs_znode_get_dbuf_objset(znode_t *zp)
+{
+	dmu_buf_impl_t *db = (dmu_buf_impl_t *)sa_get_db(zp->z_sa_hdl);
+	return (DB_DNODE(db)->dn_objset);
 }
 
 /*

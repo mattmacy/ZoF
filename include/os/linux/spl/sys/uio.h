@@ -33,6 +33,12 @@
 #include <linux/bio.h>
 #include <asm/uaccess.h>
 #include <sys/types.h>
+#include <sys/strings.h>
+
+/*
+ * uio_extflg: extended flags
+ */
+#define	UIO_DIRECT	0x0001 /* Direct IO request */
 
 typedef struct iovec iovec_t;
 
@@ -50,6 +56,15 @@ typedef enum zfs_uio_seg {
 #endif
 } zfs_uio_seg_t;
 
+/*
+ * This structure is used when doing Direct IO.
+ */
+typedef struct {
+	struct page	**pages;
+	int		num_pages;
+	size_t		start;
+} zfs_uio_dio_t;
+
 typedef struct zfs_uio {
 	union {
 		const struct iovec	*uio_iov;
@@ -66,6 +81,7 @@ typedef struct zfs_uio {
 	uint16_t	uio_extflg;
 	ssize_t		uio_resid;
 	size_t		uio_skip;
+	zfs_uio_dio_t	uio_dio;
 } zfs_uio_t;
 
 #define	zfs_uio_segflg(u)		(u)->uio_segflg
@@ -127,6 +143,7 @@ zfs_uio_iovec_init(zfs_uio_t *uio, const struct iovec *iov,
 	uio->uio_extflg = 0;
 	uio->uio_resid = resid;
 	uio->uio_skip = skip;
+	bzero(&uio->uio_dio, sizeof (zfs_uio_dio_t));
 }
 
 static inline void
@@ -141,6 +158,7 @@ zfs_uio_bvec_init(zfs_uio_t *uio, struct bio *bio)
 	uio->uio_extflg = 0;
 	uio->uio_resid = BIO_BI_SIZE(bio);
 	uio->uio_skip = BIO_BI_SKIP(bio);
+	bzero(&uio->uio_dio, sizeof (zfs_uio_dio_t));
 }
 
 #if defined(HAVE_VFS_IOV_ITER)
@@ -157,7 +175,33 @@ zfs_uio_iov_iter_init(zfs_uio_t *uio, struct iov_iter *iter, offset_t offset,
 	uio->uio_extflg = 0;
 	uio->uio_resid = resid;
 	uio->uio_skip = skip;
+	bzero(&uio->uio_dio, sizeof (zfs_uio_dio_t));
+}
+
+#if defined(HAVE_IOV_ITER_BVEC)
+static inline void
+zfs_uio_iov_iter_bio_init(zfs_uio_t *uio, zfs_uio_rw_t rw,
+    struct iov_iter *iter, struct bio *bio)
+{
+	unsigned int direction = (rw == UIO_READ ? READ : WRITE);
+#if defined(IOV_ITER_BVEC_PASS_TYPE)
+	direction |= ITER_BVEC;
+#endif
+	iov_iter_bvec(iter, direction, &bio->bi_io_vec[BIO_BI_IDX(bio)],
+	    bio->bi_vcnt - BIO_BI_IDX(bio), BIO_BI_SIZE(bio));
+	uio->uio_iter = iter;
+	uio->uio_iovcnt = bio->bi_vcnt - BIO_BI_IDX(bio);
+	uio->uio_loffset = BIO_BI_SECTOR(bio) << 9;
+	uio->uio_segflg = UIO_ITER;
+	uio->uio_fault_disable = B_FALSE;
+	uio->uio_fmode = 0;
+	uio->uio_extflg = 0;
+	uio->uio_resid = BIO_BI_SIZE(bio);
+	uio->uio_skip = BIO_BI_SKIP(bio);
+	bzero(&uio->uio_dio, sizeof (zfs_uio_dio_t));
 }
 #endif
+
+#endif /* HAVE_VFS_IOV_ITER */
 
 #endif /* SPL_UIO_H */

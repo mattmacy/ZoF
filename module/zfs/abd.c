@@ -89,8 +89,8 @@
  * functions.
  *
  * As an additional feature, linear and scatter ABD's can be stitched together
- * by using the gang ABD type (abd_alloc_gang_abd()). This allows for
- * multiple ABDs to be viewed as a singular ABD.
+ * by using the gang ABD type (abd_alloc_gang()). This allows for multiple ABDs
+ * to be viewed as a singular ABD.
  *
  * It is possible to make all ABDs linear by setting zfs_abd_scatter_enabled to
  * B_FALSE.
@@ -113,7 +113,8 @@ abd_verify(abd_t *abd)
 	ASSERT3U(abd->abd_flags, ==, abd->abd_flags & (ABD_FLAG_LINEAR |
 	    ABD_FLAG_OWNER | ABD_FLAG_META | ABD_FLAG_MULTI_ZONE |
 	    ABD_FLAG_MULTI_CHUNK | ABD_FLAG_LINEAR_PAGE | ABD_FLAG_GANG |
-	    ABD_FLAG_GANG_FREE | ABD_FLAG_ZEROS | ABD_FLAG_ALLOCD));
+	    ABD_FLAG_GANG_FREE | ABD_FLAG_ZEROS | ABD_FLAG_ALLOCD |
+	    ABD_FLAG_FROM_PAGES));
 #ifdef ZFS_DEBUG
 	IMPLY(abd->abd_parent != NULL, !(abd->abd_flags & ABD_FLAG_OWNER));
 #endif
@@ -135,7 +136,7 @@ abd_verify(abd_t *abd)
 	}
 }
 
-static void
+void
 abd_init_struct(abd_t *abd)
 {
 	list_link_init(&abd->abd_gang_link);
@@ -303,6 +304,11 @@ abd_free(abd_t *abd)
 	} else if (abd_is_linear(abd)) {
 		if (abd->abd_flags & ABD_FLAG_OWNER)
 			abd_free_linear(abd);
+#if defined(_KERNEL)
+	} else if (abd_is_from_pages(abd)) {
+		if (abd->abd_flags & ABD_FLAG_OWNER)
+			abd_free_from_pages(abd);
+#endif
 	} else {
 		if (abd->abd_flags & ABD_FLAG_OWNER)
 			abd_free_scatter(abd);
@@ -530,6 +536,11 @@ abd_get_offset_impl(abd_t *abd, abd_t *sabd, size_t off, size_t size)
 			off = 0;
 		}
 		ASSERT3U(left, ==, 0);
+#if defined(_KERNEL)
+	} else if (abd_is_from_pages(sabd)) {
+		abd = abd_get_offset_from_pages(abd, sabd, off);
+		abd->abd_flags |= ABD_FLAG_FROM_PAGES;
+#endif
 	} else {
 		abd = abd_get_offset_scatter(abd, sabd, off);
 	}

@@ -50,7 +50,6 @@
 #include <sys/zio_compress.h>
 #include <sys/sa.h>
 #include <sys/zfeature.h>
-#include <sys/abd.h>
 #include <sys/trace_zfs.h>
 #include <sys/zfs_rlock.h>
 #ifdef _KERNEL
@@ -173,6 +172,7 @@ dmu_buf_hold_noread_by_dnode(dnode_t *dn, uint64_t offset,
 	*dbp = &db->db;
 	return (0);
 }
+
 int
 dmu_buf_hold_noread(objset_t *os, uint64_t object, uint64_t offset,
     void *tag, dmu_buf_t **dbp)
@@ -713,7 +713,7 @@ dmu_prefetch(objset_t *os, uint64_t object, int64_t level, uint64_t offset,
 
 /*
  * Get the next "chunk" of file data to free.  We traverse the file from
- * the end so that the file gets shorter over time (if we crashes in the
+ * the end so that the file gets shorter over time (if we crash in the
  * middle, this will leave us in a better state).  We find allocated file
  * data by simply searching the allocated level 1 indirects.
  *
@@ -978,7 +978,7 @@ dmu_read_impl(dnode_t *dn, uint64_t offset, uint64_t size,
 
 	/*
 	 * Deal with odd block sizes, where there can't be data past the first
-	 * block.  If we ever do the tail block optimization, we will need to
+	 * block. If we ever do the tail block optimization, we will need to
 	 * handle that here as well.
 	 */
 	if (dn->dn_maxblkid == 0) {
@@ -986,6 +986,16 @@ dmu_read_impl(dnode_t *dn, uint64_t offset, uint64_t size,
 		    MIN(size, dn->dn_datablksz - offset);
 		bzero((char *)buf + newsz, size - newsz);
 		size = newsz;
+	}
+
+	if (size == 0)
+		return (0);
+
+	if (flags & DMU_DIRECTIO) {
+		abd_t *data = abd_get_from_buf(buf, size);
+		err = dmu_read_abd(dn, offset, size, data, flags);
+		abd_free(data);
+		return (err);
 	}
 
 	while (size > 0) {
@@ -1045,7 +1055,7 @@ dmu_read_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size, void *buf,
 	return (dmu_read_impl(dn, offset, size, buf, flags));
 }
 
-static void
+void
 dmu_write_impl(dmu_buf_t **dbp, int numbufs, uint64_t offset, uint64_t size,
     const void *buf, dmu_tx_t *tx)
 {
@@ -1098,20 +1108,34 @@ dmu_write(objset_t *os, uint64_t object, uint64_t offset, uint64_t size,
 /*
  * Note: Lustre is an external consumer of this interface.
  */
-void
+int
 dmu_write_by_dnode(dnode_t *dn, uint64_t offset, uint64_t size,
-    const void *buf, dmu_tx_t *tx)
+    void *buf, dmu_tx_t *tx)
 {
 	dmu_buf_t **dbp;
 	int numbufs;
+	int error;
 
 	if (size == 0)
-		return;
+		return (0);
+
+	error = dmu_check_direct_valid(dn, offset, size, B_TRUE);
+
+	if (error == EINVAL) {
+		return (error);
+	} else if (!error) {
+		abd_t *data = abd_get_from_buf(buf, size);
+		VERIFY0(dmu_write_abd(dn, offset, size, data,
+		    DMU_DIRECTIO, tx));
+		abd_free(data);
+		return (0);
+	}
 
 	VERIFY0(dmu_buf_hold_array_by_dnode(dn, offset, size,
 	    FALSE, FTAG, &numbufs, &dbp, DMU_READ_PREFETCH));
 	dmu_write_impl(dbp, numbufs, offset, size, buf, tx);
 	dmu_buf_rele_array(dbp, numbufs, FTAG);
+	return (0);
 }
 
 void
@@ -1174,6 +1198,10 @@ dmu_read_uio_dnode(dnode_t *dn, zfs_uio_t *uio, uint64_t size)
 {
 	dmu_buf_t **dbp;
 	int numbufs, i, err;
+
+	if (uio->uio_extflg & UIO_DIRECT) {
+		return (dmu_rw_uio_direct(dn, uio,  size, NULL, B_TRUE));
+	}
 
 	/*
 	 * NB: we could do this block-at-a-time, but it's nice
@@ -1265,14 +1293,18 @@ dmu_write_uio_dnode(dnode_t *dn, zfs_uio_t *uio, uint64_t size, dmu_tx_t *tx)
 	dmu_buf_t **dbp;
 	int numbufs;
 	int err = 0;
-	int i;
+
+	if (uio->uio_extflg & UIO_DIRECT) {
+		if (IO_ALIGNED(zfs_uio_offset(uio), size, dn->dn_datablksz))
+			return (dmu_rw_uio_direct(dn, uio, size, tx, B_FALSE));
+	}
 
 	err = dmu_buf_hold_array_by_dnode(dn, zfs_uio_offset(uio), size,
 	    FALSE, FTAG, &numbufs, &dbp, DMU_READ_PREFETCH);
 	if (err)
 		return (err);
 
-	for (i = 0; i < numbufs; i++) {
+	for (int i = 0; i < numbufs; i++) {
 		uint64_t tocpy;
 		int64_t bufoff;
 		dmu_buf_t *db = dbp[i];
@@ -1437,7 +1469,7 @@ dmu_assign_arcbuf_by_dnode(dnode_t *dn, uint64_t offset, arc_buf_t *buf,
 
 	/*
 	 * We can only assign if the offset is aligned and the arc buf is the
-	 * same size as the dbuf.
+	 * same size as the dbuf, and the dbuf is not metadata.
 	 */
 	if (offset == db->db.db_offset && blksz == db->db.db_size) {
 		dbuf_assign_arcbuf(db, buf, tx);
@@ -1469,23 +1501,22 @@ dmu_assign_arcbuf_by_dbuf(dmu_buf_t *handle, uint64_t offset, arc_buf_t *buf,
 	return (err);
 }
 
-typedef struct {
-	dbuf_dirty_record_t	*dsa_dr;
-	dmu_sync_cb_t		*dsa_done;
-	zgd_t			*dsa_zgd;
-	dmu_tx_t		*dsa_tx;
-} dmu_sync_arg_t;
-
 /* ARGSUSED */
-static void
+void
 dmu_sync_ready(zio_t *zio, arc_buf_t *buf, void *varg)
 {
 	dmu_sync_arg_t *dsa = varg;
-	dmu_buf_t *db = dsa->dsa_zgd->zgd_db;
-	blkptr_t *bp = zio->io_bp;
 
 	if (zio->io_error == 0) {
+		dbuf_dirty_record_t *dr = dsa->dsa_dr;
+		blkptr_t *bp = zio->io_bp;
+
 		if (BP_IS_HOLE(bp)) {
+			dmu_buf_t *db = NULL;
+			if (dr)
+				db = &(dr->dr_dbuf->db);
+			else
+				db = dsa->dsa_zgd->zgd_db;
 			/*
 			 * A block of zeros may compress to a hole, but the
 			 * block size still needs to be known for replay.
@@ -1505,7 +1536,7 @@ dmu_sync_late_arrival_ready(zio_t *zio)
 }
 
 /* ARGSUSED */
-static void
+void
 dmu_sync_done(zio_t *zio, arc_buf_t *buf, void *varg)
 {
 	dmu_sync_arg_t *dsa = varg;
@@ -1517,7 +1548,7 @@ dmu_sync_done(zio_t *zio, arc_buf_t *buf, void *varg)
 	 * Record the vdev(s) backing this blkptr so they can be flushed after
 	 * the writes for the lwb have completed.
 	 */
-	if (zio->io_error == 0) {
+	if (zgd && zio->io_error == 0) {
 		zil_lwb_add_block(zgd->zgd_lwb, zgd->zgd_bp);
 	}
 
@@ -1556,10 +1587,12 @@ dmu_sync_done(zio_t *zio, arc_buf_t *buf, void *varg)
 	} else {
 		dr->dt.dl.dr_override_state = DR_NOT_OVERRIDDEN;
 	}
+
 	cv_broadcast(&db->db_changed);
 	mutex_exit(&db->db_mtx);
 
-	dsa->dsa_done(dsa->dsa_zgd, zio->io_error);
+	if (dsa->dsa_done)
+		dsa->dsa_done(dsa->dsa_zgd, zio->io_error);
 
 	kmem_free(dsa, sizeof (*dsa));
 }
@@ -2036,6 +2069,11 @@ dmu_write_policy(objset_t *os, dnode_t *dn, int level, int wp, zio_prop_t *zp)
 			compress = ZIO_COMPRESS_EMPTY;
 		}
 	}
+
+	if (wp & WP_DIRECT_WR)
+		zp->zp_directio_write = B_TRUE;
+	else
+		zp->zp_directio_write = B_FALSE;
 
 	zp->zp_compress = compress;
 	zp->zp_complevel = complevel;

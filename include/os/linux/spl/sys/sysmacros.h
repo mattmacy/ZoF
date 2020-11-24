@@ -161,6 +161,13 @@ extern void spl_cleanup(void);
 				(((off) ^ ((off) + (len) - 1)) > (align) - 1)
 
 /*
+ * Macros to check page/block alignment.
+ */
+#define	IO_ALIGNED(o, s, a) \
+	(((o) % (a) == 0) && ((s) % (a) == 0))
+#define	IO_PAGE_ALIGNED(o, s)	IO_ALIGNED(o, s, PAGE_SIZE)
+
+/*
  * Typed version of the P2* macros.  These macros should be used to ensure
  * that the result is correctly calculated based on the data type of (x),
  * which is passed in as the last argument, regardless of the data
