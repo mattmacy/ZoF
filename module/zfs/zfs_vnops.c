@@ -172,6 +172,18 @@ zfs_read_prologue(znode_t *zp, off_t offset, ssize_t resid)
 {
 	zfsvfs_t	*zfsvfs = ZTOZSB(zp);
 
+	/*
+	 * Fasttrack empty reads
+	 */
+	if (resid == 0)
+		return (0);
+
+	/*
+	 * Validate file offset
+	 */
+	if (offset < (offset_t)0)
+		return (SET_ERROR(EINVAL));
+
 	ZFS_ENTER(zfsvfs);
 	ZFS_VERIFY_ZP(zp);
 
@@ -184,22 +196,6 @@ zfs_read_prologue(znode_t *zp, off_t offset, ssize_t resid)
 	if (zp->z_pflags & ZFS_AV_QUARANTINED) {
 		ZFS_EXIT(zfsvfs);
 		return (SET_ERROR(EACCES));
-	}
-
-	/*
-	 * Validate file offset
-	 */
-	if (offset < (offset_t)0) {
-		ZFS_EXIT(zfsvfs);
-		return (SET_ERROR(EINVAL));
-	}
-
-	/*
-	 * Fasttrack empty reads
-	 */
-	if (resid == 0) {
-		ZFS_EXIT(zfsvfs);
-		return (0);
 	}
 
 	return (-1);
