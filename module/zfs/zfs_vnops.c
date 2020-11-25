@@ -228,9 +228,10 @@ zfs_read(struct znode *zp, uio_t *uio, int ioflag, cred_t *cr)
 	boolean_t frsync = B_FALSE;
 
 	zfsvfs_t *zfsvfs = ZTOZSB(zp);
-	ZFS_ENTER(zfsvfs);
-	ZFS_VERIFY_ZP(zp);
 
+	/*
+	 * Calls ZFS_ENTER for us, and will exit on failure
+	 */
 	error = zfs_read_prologue(zp, uio->uio_loffset, uio->uio_resid);
 	if (error >= 0)
 		return (error);
@@ -385,9 +386,6 @@ zfs_write(znode_t *zp, uio_t *uio, int ioflag, cred_t *cr)
 
 
 	zfsvfs_t *zfsvfs = ZTOZSB(zp);
-	ZFS_ENTER(zfsvfs);
-	ZFS_VERIFY_ZP(zp);
-
 	sa_bulk_attr_t bulk[4];
 	int count = 0;
 	uint64_t mtime[2], ctime[2];
@@ -400,11 +398,6 @@ zfs_write(znode_t *zp, uio_t *uio, int ioflag, cred_t *cr)
 
 
 	offset_t woff = ioflag & O_APPEND ? zp->z_size : uio->uio_loffset;
-	if (woff < 0) {
-		ZFS_EXIT(zfsvfs);
-		return (SET_ERROR(EINVAL));
-	}
-
 	const uint64_t max_blksz = zfsvfs->z_max_blksz;
 
 	/*
