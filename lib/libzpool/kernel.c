@@ -44,6 +44,7 @@
 #include <sys/zfs_vfsops.h>
 #include <sys/zstd/zstd.h>
 #include <sys/zvol.h>
+#include <sys/zfs_rlock.h>
 #include <zfs_fletcher.h>
 #include <zlib.h>
 
@@ -837,13 +838,18 @@ kernel_init(int mode)
 
 	VERIFY0(uname(&hw_utsname));
 
+	tsd_create(&zfs_async_io_key, dmu_thread_context_destroy);
+	ASSERT(zfs_async_io_key != 0);
+
+	dmu_contexts_init();
+
 	system_taskq_init();
 	icp_init();
 
 	zstd_init();
 
 	spa_init((spa_mode_t)mode);
-
+	zfs_rangelock_debug_init();
 	fletcher_4_init();
 
 	tsd_create(&rrw_tsd_key, rrw_tsd_destroy);
