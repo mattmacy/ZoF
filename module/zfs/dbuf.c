@@ -1212,8 +1212,8 @@ dbuf_clone_arcbuf(dmu_buf_impl_t *db)
 {
 	arc_buf_t *buf;
 
-	buf = dbuf_alloc_arcbuf(db);
-	bcopy(db->db.db_data, buf->b_data, db->db.db_size);
+	buf = dbuf_alloc_arcbuf_from_arcbuf(db, db->db_buf);
+	bcopy(db->db.db_data, buf->b_data, arc_buf_size(buf));
 	return (buf);
 }
 
@@ -1799,6 +1799,9 @@ dbuf_read_hole(dmu_buf_impl_t *db, dnode_t *dn, uint32_t flags)
 
 	if (!is_hole)
 		return (ENOENT);
+	/*
+	 * dbuf_alloc_arcbuf in master
+	 */
 	dbuf_set_data(db, dbuf_alloc_arcbuf(db));
 	bzero(db->db.db_data, db->db.db_size);
 
@@ -2049,9 +2052,7 @@ dbuf_fix_old_data(dmu_buf_impl_t *db, uint64_t txg)
 		arc_space_consume(bonuslen, ARC_SPACE_BONUS);
 		bcopy(db->db.db_data, dr->dt.dl.dr_data, bonuslen);
 	} else if (zfs_refcount_count(&db->db_holds) > db->db_dirtycnt) {
-		arc_buf_t *buf = dbuf_alloc_arcbuf_from_arcbuf(db, db->db_buf);
-		dr->dt.dl.dr_data = buf;
-		bcopy(db->db.db_data, buf->b_data, arc_buf_size(buf));
+		dr->dt.dl.dr_data = dbuf_clone_arcbuf(db);
 	} else {
 		db->db_buf = NULL;
 		dbuf_clear_data(db);
@@ -2316,7 +2317,7 @@ dbuf_free_range_disassociate_frontend(dmu_buf_impl_t *db, dnode_t *dn,
 		if (dr->dt.dl.dr_data == db->db_buf) {
 			arc_buf_t *buf;
 
-			buf = dbuf_alloc_arcbuf(db);
+			buf = dbuf_alloc_arcbuf_from_arcbuf(db, db->db_buf);
 			if (zfs_refcount_count(&db->db_holds) >
 			    db->db_dirtycnt) {
 				/*
@@ -2465,13 +2466,22 @@ dbuf_free_range(dnode_t *dn, uint64_t start_blkid, uint64_t end_blkid,
 		    dbuf_clear_successful(db))
 			continue; /* db_mtx already exited */
 
-		/* The dbuf is referenced */
-		if (!list_is_empty(&db->db_dirty_records))
+		/*
+		 * Is referenced
+		 */
+		if (!list_is_empty(&db->db_dirty_records)) {
+			/*
+			 * The goal is to make the data that is visible in the
+			 * current transaction group all zeros, while preserving
+			 * the data as seen in any earlier transaction groups.
+			 */
 			dbuf_free_range_disassociate_frontend(db, dn, tx);
-
-		/* clear the contents if its cached */
+		}
 		if (db->db_buf == NULL) {
 			ASSERT(db->db_state == DB_READ);
+			/*
+			 * No existing arc_buf state to copy
+			 */
 			dbuf_set_data(db, dbuf_alloc_arcbuf(db));
 		} else {
 			ASSERT(db->db.db_data != NULL);
@@ -3200,7 +3210,8 @@ dbuf_dirty_leaf_with_existing_frontend(dbuf_dirty_state_t *dds)
 			ASSERT3U(db->db_dirtycnt, ==, 1);
 			dbuf_dirty_set_data(dds);
 		} else {
-			newest->dt.dl.dr_data = dbuf_alloc_arcbuf(db);
+			newest->dt.dl.dr_data =
+			    dbuf_alloc_arcbuf_from_arcbuf(db, db->db_buf);
 			bcopy(db->db.db_data, newest->dt.dl.dr_data->b_data,
 			    size);
 			arc_release(db->db_buf, db);
@@ -3247,7 +3258,8 @@ dbuf_dirty_record_create_leaf(dbuf_dirty_state_t *dds)
 	 * change.  Note that db_freed_in_flight may have already been
 	 * processed, so it can't be checked here.
 	 */
-	if (db->db_blkid != DMU_SPILL_BLKID) {
+	if (db->db_blkid != DMU_SPILL_BLKID &&
+	    db->db_blkid != DMU_BONUS_BLKID) {
 		mutex_enter(&dds->dds_dn->dn_mtx);
 		if (dn->dn_free_ranges[txgoff] != NULL) {
 			range_tree_clear(dn->dn_free_ranges[txgoff],
@@ -3508,10 +3520,18 @@ dbuf_dirty_with_arcbuf(dmu_buf_impl_t *db, dmu_tx_t *tx, arc_buf_t *fill_buf)
 	dbuf_dirty_leaf_enter(&dds, db, tx, 0, db->db.db_size);
 	dds.dds_fill_buf = fill_buf;
 
-	if (db->db_state != DB_CACHED) {
-		db->db_state = DB_FILL;
-		DTRACE_SET_STATE(db, "assigning filled buffer");
+	if (db->db_state == DB_CACHED &&
+	    zfs_refcount_count(&db->db_holds) - 1 <= db->db_dirtycnt) {
+		dbuf_dirty_record_t *dr = list_head(&db->db_dirty_records);
+
+		if (dr == NULL || dr->dt.dl.dr_data != db->db_buf) {
+			arc_release(db->db_buf, db);
+			arc_buf_destroy(db->db_buf, db);
+			db->db_buf = NULL;
+		}
 	}
+	db->db_state = DB_FILL;
+	DTRACE_SET_STATE(db, "assigning filled buffer");
 	dbuf_dirty_leaf_common(&dds);
 
 	dbuf_dirty_exit(&dds);
@@ -4089,6 +4109,7 @@ dbuf_assign_arcbuf(dmu_buf_impl_t *db, arc_buf_t *buf, dmu_tx_t *tx)
 
 	arc_return_buf(buf, db);
 	ASSERT(arc_released(buf));
+
 	(void) dbuf_dirty_with_arcbuf(db, tx, buf);
 	dbuf_fill_done(db, tx);
 }
@@ -4231,10 +4252,10 @@ dbuf_findbp(dnode_t *dn, int level, uint64_t blkid, int fail_sparse,
 	if (blkid == DMU_SPILL_BLKID) {
 		mutex_enter(&dn->dn_mtx);
 		if (dn->dn_have_spill &&
-		    (dn->dn_phys->dn_flags & DNODE_FLAG_SPILL_BLKPTR))
+		    (dn->dn_phys->dn_flags & DNODE_FLAG_SPILL_BLKPTR) &&
+		    zfs_blkptr_verify(dn->dn_objset->os_spa,
+		    DN_SPILL_BLKPTR(dn->dn_phys), B_FALSE, BLK_VERIFY_ONLY))
 			*bpp = DN_SPILL_BLKPTR(dn->dn_phys);
-		else
-			*bpp = NULL;
 		dbuf_add_ref(dn->dn_dbuf, NULL);
 		*parentp = dn->dn_dbuf;
 		mutex_exit(&dn->dn_mtx);
@@ -4754,7 +4775,7 @@ dbuf_prefetch(dnode_t *dn, int64_t level, uint64_t blkid, zio_priority_t prio,
  * NOTE: Declared noinline to avoid stack bloat in dbuf_hold_impl().
  */
 noinline static void
-dbuf_hold_copy(dnode_t *dn, dmu_buf_impl_t *db)
+dbuf_hold_copy(dmu_buf_impl_t *db)
 {
 	dbuf_dirty_record_t *dr = db->db_data_pending;
 	arc_buf_t *newdata, *data = dr->dt.dl.dr_data;
@@ -4867,7 +4888,7 @@ dbuf_hold_impl_(dnode_t *dn, uint8_t level, uint64_t blkid,
 	    db->db_state == DB_CACHED && db->db_data_pending) {
 		dbuf_dirty_record_t *dr = db->db_data_pending;
 		if (dr->dt.dl.dr_data == db->db_buf)
-			dbuf_hold_copy(dn, db);
+			dbuf_hold_copy(db);
 	}
 
 	if (multilist_link_active(&db->db_cache_link)) {
@@ -5408,18 +5429,14 @@ dbuf_resolve_still_pending(dbuf_dirty_record_t *dr, zio_t **dr_zio, zio_t *zio)
 {
 	/* Resolve race with dbuf_read_complete()/dbuf_free_range() */
 	boolean_t resolve_pending;
+
 	mutex_enter(&dr->dr_dbuf->db_mtx);
 	resolve_pending = !list_is_empty(&dr->dt.dl.write_ranges);
 	if (resolve_pending) {
 		ASSERT(*dr_zio == NULL);
 		*dr_zio = zio;
-#ifdef ZFS_DEBUG
-		if (dr_zio == &dr->dr_zio)
-			/* DEBUG_COUNTER_INC(syncer_deferred_resolves) */;
-		else
-			ASSERT(!"unexpected zio_t **dr_zio!");
-#endif
-}
+		ASSERT(dr_zio == &dr->dr_zio);
+	}
 	mutex_exit(&dr->dr_dbuf->db_mtx);
 	return (resolve_pending);
 }
@@ -5551,7 +5568,7 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 	if (db->db_state == DB_UNCACHED) {
 		/* This buffer has been freed since it was dirtied */
 		ASSERT(db->db.db_data == NULL);
-	} else if (db->db_state == DB_FILL) {
+	} else if (db->db_state & DB_FILL) {
 		/*
 		 * This buffer is being modified.  Those modifications
 		 * should be in a newer transaction group and not
@@ -5644,7 +5661,10 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 	zio = dbuf_write(dr, *datap, tx);
 	if (resolve_pending &&
 	    dbuf_resolve_still_pending(dr, &dr->dr_zio, zio)) {
-		/* XXX */
+		/*
+		 * XXX this doesn't seem to be the right actual
+		 * solution as we appear to be leaking a zio.
+		 */
 		DB_DNODE_EXIT(db);
 		return;
 	}
