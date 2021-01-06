@@ -343,9 +343,22 @@ dbuf_hash(void *os, uint64_t obj, uint8_t lvl, uint64_t blkid)
 	return (cityhash4((uintptr_t)os, obj, (uint64_t)lvl, blkid));
 }
 
-#define	DTRACE_SET_STATE(db, why) \
+#ifdef ZFS_DEBUG
+#define	DTRACE_SET_STATE(db, why) do {				\
+	DTRACE_PROBE2(dbuf__state_change, dmu_buf_impl_t *, db,	\
+	    const char *, why);						\
+	if ((db)->db_rip_count < 8)	{				\
+		(db)->db_state_stack[(db)->db_rip_count] =	\
+			(db)->db_state;					\
+		(db)->db_rip_stack[(db)->db_rip_count++] =	\
+		    __builtin_return_address(0);			\
+	}								\
+	} while (0)
+#else
+#define	DTRACE_SET_STATE(db, why)				\
 	DTRACE_PROBE2(dbuf__state_change, dmu_buf_impl_t *, db,	\
 	    const char *, why)
+#endif
 
 #define	DBUF_EQUAL(dbuf, os, obj, level, blkid)		\
 	((dbuf)->db.db_object == (obj) &&		\
@@ -3196,6 +3209,17 @@ dbuf_dirty_leaf_with_existing_frontend(dbuf_dirty_state_t *dds)
 			 * scheduled its write with its buffer, we must
 			 * disassociate by replacing the frontend.
 			 */
+#if defined(ZFS_DEBUG) && (defined(__FreeBSD__) || !defined(_KERNEL))
+			if ((db->db_state & (DB_READ|DB_PARTIAL)) == 0) {
+				for (int i = 0; i < db->db_rip_count; i++) {
+					printf("<transition:%d> %p -> %x \n",
+					    i, db->db_rip_stack[i],
+					    db->db_state_stack[i]);
+				}
+				PANIC("bad db_state, expected (DB_READ|DB_PARTIAL) %x got %x",
+					  (DB_READ|DB_PARTIAL), db->db_state);
+			}
+#endif
 			ASSERT(db->db_state & (DB_READ|DB_PARTIAL));
 			ASSERT3U(db->db_dirtycnt, ==, 1);
 			dbuf_dirty_set_data(dds);
@@ -4346,6 +4370,7 @@ dbuf_create(dnode_t *dn, uint8_t level, uint64_t blkid,
 	db->db_user_immediate_evict = FALSE;
 	db->db_freed_in_flight = FALSE;
 	db->db_pending_evict = FALSE;
+	db->db_rip_count = 0;
 
 	if (blkid == DMU_BONUS_BLKID) {
 		ASSERT3P(parent, ==, dn->dn_dbuf);

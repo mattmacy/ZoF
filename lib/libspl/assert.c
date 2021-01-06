@@ -24,6 +24,9 @@
  */
 
 #include <assert.h>
+#include <sys/debug.h>
+
+#define	MAXMSGLEN	256
 
 int aok = 0;
 
@@ -43,4 +46,19 @@ libspl_assertf(const char *file, const char *func, int line,
 		return;
 	}
 	abort();
+}
+
+int
+spl_panic(const char *file, const char *func, int line, const char *fmt, ...)
+{
+	char msg[MAXMSGLEN];
+	va_list ap;
+
+
+	va_start(ap, fmt);
+	(void) vsnprintf(msg, sizeof (msg), fmt, ap);
+	va_end(ap);
+
+	printf("PANIC: %s:%d:%s() %s\n", file, line, func, msg);
+	return (0);
 }

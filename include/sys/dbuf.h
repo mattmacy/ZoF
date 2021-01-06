@@ -430,6 +430,14 @@ typedef struct dmu_buf_impl {
 	 */
 	dbuf_states_t db_state;
 
+#ifdef ZFS_DEBUG
+	int db_rip_count;
+
+	void *db_rip_stack[8];
+
+	dbuf_states_t db_state_stack[8];
+#endif
+
 	/*
 	 * Refcount accessed by dmu_buf_{hold,rele}.
 	 * If nonzero, the buffer can't be destroyed.

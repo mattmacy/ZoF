@@ -37,4 +37,9 @@
 #define	__maybe_unused __attribute__((unused))
 #endif
 
+int spl_panic(const char *file, const char *func, int line,
+    const char *fmt, ...);
+
+#define	PANIC(fmt, a...)			\
+	spl_panic(__FILE__, __FUNCTION__, __LINE__, fmt, ## a)
 #endif
