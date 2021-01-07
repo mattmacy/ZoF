@@ -5639,6 +5639,7 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 		dbuf_syncer_split(db, dr, /* deferred_split */ B_FALSE);
 	db->db_data_pending = dr;
 	ASSERT(list_next(&db->db_dirty_records, dr) == NULL);
+	dbuf_add_ref(db, FTAG);
 	mutex_exit(&db->db_mtx);
 
 	zio = dbuf_write(dr, *datap, tx);
@@ -5646,6 +5647,7 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 	    dbuf_resolve_still_pending(dr, &dr->dr_zio, zio)) {
 		/* XXX */
 		DB_DNODE_EXIT(db);
+		dbuf_rele(db, FTAG);
 		return;
 	}
 
@@ -5654,6 +5656,7 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 	if (dn->dn_object == DMU_META_DNODE_OBJECT) {
 		list_insert_tail(&dn->dn_dirty_records[txg & TXG_MASK], dr);
 		DB_DNODE_EXIT(db);
+		dbuf_rele(db, FTAG);
 	} else {
 		/*
 		 * Although zio_nowait() does not "wait for an IO", it does
@@ -5663,6 +5666,7 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 		 * zio_nowait() invalidates the dbuf.
 		 */
 		DB_DNODE_EXIT(db);
+		dbuf_rele(db, FTAG);
 		zio_nowait(zio);
 	}
 }
