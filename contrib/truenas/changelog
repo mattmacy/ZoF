@@ -1,5 +1,11 @@
-openzfs (2.0.0-0) UNRELEASED; urgency=medium
+openzfs (2.0.1-0) unstable; urgency=medium
 
-  * Initial package for TrueNAS SCALE.
+  * Rebased to OpenZFS 2.0.1
+
+ -- Ryan Moeller <ryan@ixsystems.com>  Thu, 07 Jan 2021 17:34:28 -0500
+
+openzfs (2.0.0-0) unstable; urgency=medium
+
+  * Initial package for TrueNAS SCALE based on OpenZFS 2.0.0
 
  -- Ryan Moeller <ryan@ixsystems.com>  Mon, 14 Sep 2020 22:01:55 -0400
