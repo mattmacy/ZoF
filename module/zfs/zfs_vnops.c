@@ -56,8 +56,6 @@
 #include <sys/zfs_znode.h>
 
 
-#define	WANT_ASYNC
-
 static ulong_t zfs_fsync_sync_cnt = 4;
 
 int
@@ -755,7 +753,6 @@ zfs_setsecattr(znode_t *zp, vsecattr_t *vsecp, int flag, cred_t *cr)
 	ZFS_EXIT(zfsvfs);
 	return (error);
 }
-#ifdef WANT_ASYNC
 
 uint64_t
 dmu_physmove(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off, uint64_t sz)
@@ -844,10 +841,14 @@ zfs_read_async_resume(void *arg)
 		error = 0;
 		goto out;
 	}
+#if defined(WANT_ASYNC_MAPPED)
 	if (zp_has_cached_in_range(zp, uio->uio_loffset, uio->uio_resid)) {
 		zfs_mappedread_async(state);
 		return;
 	}
+#else
+	VERIFY0(zp_has_cached_in_range(zp, uio->uio_loffset, uio->uio_resid));
+#endif
 	flags = DMU_CTX_FLAG_READ | DMU_CTX_FLAG_ASYNC |
 	    DMU_CTX_FLAG_NO_HOLD | DMU_CTX_FLAG_PREFETCH;
 	if ((state->zrs_done & ZRS_DMU_ISSUED) == 0) {
@@ -1158,6 +1159,7 @@ zfs_write_async_resume(zfs_write_state_t *state)
 		ASSERT(error != 0);
 		goto done;
 	}
+#if defined(WANT_ASYNC_MAPPED)
 	if (zp_has_cached_in_range(zp, uio->uio_loffset, tx_bytes) &&
 	    ((state->zws_done & ZWS_UPDATED_PAGES) == 0)) {
 		state->zws_done |= ZWS_UPDATED_PAGES;
@@ -1169,7 +1171,9 @@ zfs_write_async_resume(zfs_write_state_t *state)
 			return;
 		}
 	}
-
+#else
+	VERIFY0(zp_has_cached_in_range(zp, uio->uio_loffset, tx_bytes));
+#endif
 	/*
 	 * Clear Set-UID/Set-GID bits on successful write if not
 	 * privileged and at least one of the excute bits is set.
@@ -1337,11 +1341,6 @@ zfs_ubop(znode_t *zp, struct uio_bio *uio, int ioflag)
 	}
 	return (rc);
 }
-
-
-
-#endif
-
 
 #ifdef ZFS_DEBUG
 static int zil_fault_io = 0;
