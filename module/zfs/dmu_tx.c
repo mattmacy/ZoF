@@ -1083,7 +1083,7 @@ dmu_tx_assign_callback(void *arg)
 	dmu_tx_assign_state_t *dtas = arg;
 	dmu_tx_t *tx = dtas->dtas_tx;
 	callback_fn cb = dtas->dtas_cb;
-	void *cb_arg = dtas->dtas_arg;;
+	void *cb_arg = dtas->dtas_arg;
 	int rc;
 
 	kmem_free(dtas, sizeof (*dtas));

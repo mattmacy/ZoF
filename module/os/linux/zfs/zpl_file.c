@@ -491,7 +491,8 @@ iovec_to_bvec(struct iov_iter *iter, int *count, int write, int *issg)
 		case ITER_BVEC:
 			bvec = zpl_zalloc(sizeof (*bvec) * iter->nr_segs,
 			    KM_SLEEP);
-			memcpy(bvec, iter->bvec, sizeof (*bvec) * iter->nr_segs);
+			memcpy(bvec, iter->bvec,
+			    sizeof (*bvec) * iter->nr_segs);
 			*count = iter->nr_segs;
 			return (bvec);
 			break;

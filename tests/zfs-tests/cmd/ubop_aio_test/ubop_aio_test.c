@@ -11,9 +11,9 @@
 #include <strings.h>
 #include <assert.h>
 
-#define BUFFER_SIZE 32*1024*1024
-#define BUFFER_COUNT BUFFER_SIZE/4
-#define READ_WAIT_TIME 4
+#define	BUFFER_SIZE 32*1024*1024
+#define	BUFFER_COUNT BUFFER_SIZE/4
+#define	READ_WAIT_TIME 4
 
 
 #ifndef __FreeBSD__
@@ -83,10 +83,10 @@ main(int argc, char **argv)
 	snprintf(template, 256, "%s/ubop_aio_test.XXXXXX", argv[1]);
 	write_buffer = malloc(64*1024*1024);
 	read_buffer = malloc(64*1024*1024);
-	
+
 	for (int i = 0; i < BUFFER_COUNT; i++)
 		write_buffer[i] = i;
-	
+
 	fd = mkstemp(template);
 	write(fd, write_buffer, BUFFER_SIZE);
 	fsync(fd);
