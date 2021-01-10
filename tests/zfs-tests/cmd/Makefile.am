@@ -30,7 +30,12 @@ SUBDIRS = \
 
 if BUILD_LINUX
 SUBDIRS += \
+	ubop_io_uring_test \
 	randfree_file \
 	user_ns_exec \
 	xattrtest
+endif
+if BUILD_FREEBSD
+SUBDIRS += \
+	ubop_aio_test
 endif

@@ -84,7 +84,8 @@ main(int argc, char **argv)
 		write_buffer[i] = i;
 	
 	fd = mkstemp(template);
-	write(fd, write_buffer, BUFFER_SIZE);
+	if (write(fd, write_buffer, BUFFER_SIZE) < BUFFER_SIZE)
+		errx(1, "write failed");
 	fsync(fd);
 	io_data_init(&io_data_read, &ring, fd, read_buffer, BUFFER_SIZE, 0, 1 /* read */);
 	queue_op(&io_data_read);
