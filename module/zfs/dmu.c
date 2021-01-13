@@ -2356,9 +2356,9 @@ typedef struct {
 
 /* ARGSUSED */
 static void
-dmu_sync_ready(zio_t *zio, arc_buf_t *buf, void *varg)
+dmu_sync_ready(zio_t *zio)
 {
-	dmu_sync_arg_t *dsa = varg;
+	dmu_sync_arg_t *dsa = zio->io_private;
 	dmu_buf_t *db = dsa->dsa_zgd->zgd_db;
 	blkptr_t *bp = zio->io_bp;
 
@@ -2379,14 +2379,14 @@ dmu_sync_ready(zio_t *zio, arc_buf_t *buf, void *varg)
 static void
 dmu_sync_late_arrival_ready(zio_t *zio)
 {
-	dmu_sync_ready(zio, NULL, zio->io_private);
+	dmu_sync_ready(zio);
 }
 
 /* ARGSUSED */
 static void
-dmu_sync_done(zio_t *zio, arc_buf_t *buf, void *varg)
+dmu_sync_done(zio_t *zio)
 {
-	dmu_sync_arg_t *dsa = varg;
+	dmu_sync_arg_t *dsa = zio->io_private;
 	dbuf_dirty_record_t *dr = dsa->dsa_dr;
 	dmu_buf_impl_t *db = dr->dr_dbuf;
 	zgd_t *zgd = dsa->dsa_zgd;
@@ -2682,6 +2682,7 @@ dmu_sync(zio_t *pio, uint64_t txg, dmu_sync_cb_t *done, zgd_t *zgd)
 		return (SET_ERROR(EALREADY));
 	}
 
+	ASSERT(db->db_state == DB_CACHED);
 	ASSERT(dr->dt.dl.dr_override_state == DR_NOT_OVERRIDDEN);
 	dr->dt.dl.dr_override_state = DR_IN_DMU_SYNC;
 	mutex_exit(&db->db_mtx);
@@ -2692,8 +2693,9 @@ dmu_sync(zio_t *pio, uint64_t txg, dmu_sync_cb_t *done, zgd_t *zgd)
 	dsa->dsa_zgd = zgd;
 	dsa->dsa_tx = NULL;
 
-	zio_nowait(arc_write(pio, os->os_spa, txg,
-	    zgd->zgd_bp, dr->dt.dl.dr_data, DBUF_IS_L2CACHEABLE(db),
+	zio_nowait(zio_write(pio, os->os_spa, txg,
+	    zgd->zgd_bp, dr->dt.dl.dr_data->b_data,
+	    arc_buf_size(dr->dt.dl.dr_data),  arc_buf_size(dr->dt.dl.dr_data),
 	    &zp, dmu_sync_ready, NULL, NULL, dmu_sync_done, dsa,
 	    ZIO_PRIORITY_SYNC_WRITE, ZIO_FLAG_CANFAIL, &zb));
 
