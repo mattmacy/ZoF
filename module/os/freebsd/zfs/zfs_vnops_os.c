@@ -508,45 +508,6 @@ update_pages(znode_t *zp, int64_t start, int len, objset_t *os)
 #endif
 	zfs_vmobject_wunlock_12(obj);
 }
-
-typedef struct update_pages_async_state {
-	dmu_ctx_t	upas_dc;
-	struct uio_bio *upas_uio;
-	vm_object_t upas_obj;
-	callback_fn upas_cb;
-	void *upas_arg;
-	boolean_t upas_yielded;
-} update_pages_async_state_t;
-
-
-static void
-update_pages_async_epilogue(update_pages_async_state_t *state)
-{
-	int page_count = state->upas_uio->uio_bv_cnt;
-	struct bio_vec *bv, *bvec = state->upas_uio->uio_bvec;
-	vm_object_t obj = state->upas_obj;
-	callback_fn cb = state->upas_cb;
-	void *arg = state->upas_arg;
-	boolean_t yielded = state->upas_yielded;
-
-	kmem_free(state->upas_uio, sizeof (struct uio_bio));
-	kmem_free(state, sizeof (*state));
-	zfs_vmobject_wlock_12(obj);
-	bv = bvec;
-	for (int i = 0; i < page_count; i++, bv++)
-		if (bv->bv_page != NULL)
-			page_unbusy(bv->bv_page);
-#if __FreeBSD_version >= 1300041
-	vm_object_pip_wakeup(obj);
-#else
-	vm_object_pip_wakeupn(obj, 0);
-#endif
-	zfs_vmobject_wunlock_12(obj);
-	kmem_free(bvec, page_count * sizeof (*bvec));
-	if (yielded)
-		cb(arg);
-}
-
 /*
  * Read with UIO_NOCOPY flag means that sendfile(2) requests
  * ZFS to populate a range of page cache pages with data.
