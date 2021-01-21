@@ -764,6 +764,8 @@ zfs_setsecattr(znode_t *zp, vsecattr_t *vsecp, int flag, cred_t *cr)
 	return (error);
 }
 
+#ifdef WANT_ASYNC
+
 uint64_t
 dmu_physmove(dmu_buf_set_t *dbs, dmu_buf_t *db, uint64_t off, uint64_t sz)
 {
@@ -1358,6 +1360,8 @@ zfs_ubop(znode_t *zp, struct uio_bio *uio, int ioflag)
 	}
 	return (rc);
 }
+
+#endif
 
 #ifdef ZFS_DEBUG
 static int zil_fault_io = 0;
