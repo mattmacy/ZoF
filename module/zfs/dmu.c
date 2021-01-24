@@ -548,12 +548,9 @@ dmu_thread_context_create(void *context)
 void
 dmu_thread_context_destroy(void *context)
 {
-	dmu_cb_state_t *dcs;
+	dmu_cb_state_t *dcs = context;
 
-	dcs = tsd_get(zfs_async_io_key);
-	/* This function may be called on a thread that didn't call create. */
-	if (dcs == NULL)
-		return;
+	VERIFY(context != NULL);
 
 #ifdef ZFS_DEBUG
 	mutex_enter(&dmu_contexts_lock);
@@ -567,7 +564,6 @@ dmu_thread_context_destroy(void *context)
 	ASSERT(list_is_empty(&dcs->dcs_io_list));
 
 	kmem_free(dcs, sizeof (dmu_cb_state_t));
-	VERIFY(tsd_set(zfs_async_io_key, NULL) == 0);
 	DEBUG_REFCOUNT_DEC(dmu_thread_contexts);
 }
 
