@@ -6,7 +6,7 @@ jobs:
   build-deb:
     runs-on: ubuntu-20.04
     container:
-      image: debian:testing
+      image: debian:stable
     steps:
       - name: Installing Dependencies
         run: |
