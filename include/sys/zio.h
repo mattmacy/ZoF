@@ -700,6 +700,8 @@ boolean_t zbookmark_subtree_completed(const struct dnode_phys *dnp,
 int zbookmark_compare(uint16_t dbss1, uint8_t ibs1, uint16_t dbss2,
     uint8_t ibs2, const zbookmark_phys_t *zb1, const zbookmark_phys_t *zb2);
 
+extern int zio_deadman_log_all;
+
 #ifdef	__cplusplus
 }
 #endif

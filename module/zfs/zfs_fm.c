@@ -410,7 +410,8 @@ zfs_is_ratelimiting_event(const char *subclass, vdev_t *vd)
 	 */
 	if (strcmp(subclass, FM_EREPORT_ZFS_DELAY) == 0) {
 		rc = !zfs_ratelimit(&vd->vdev_delay_rl);
-	} else if (strcmp(subclass, FM_EREPORT_ZFS_DEADMAN) == 0) {
+	} else if (zio_deadman_log_all == B_FALSE &&
+	    strcmp(subclass, FM_EREPORT_ZFS_DEADMAN) == 0) {
 		rc = !zfs_ratelimit(&vd->vdev_deadman_rl);
 	} else if (strcmp(subclass, FM_EREPORT_ZFS_CHECKSUM) == 0) {
 		rc = !zfs_ratelimit(&vd->vdev_checksum_rl);
